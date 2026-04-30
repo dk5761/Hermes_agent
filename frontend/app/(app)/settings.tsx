@@ -1,11 +1,11 @@
-import { StyleSheet, Text, View } from "react-native";
+import { Pressable, StyleSheet, Text, View } from "react-native";
 import Constants from "expo-constants";
 import { useRouter } from "expo-router";
 import { Screen } from "@/components/Screen";
 import { Button } from "@/components/Button";
 import { useAuthStore } from "@/auth/store";
 import { logout as apiLogout } from "@/api/auth";
-import { API_URL, MUTED, TEXT, WS_URL } from "@/config";
+import { ACCENT, API_URL, MUTED, TEXT, WS_URL } from "@/config";
 
 export default function SettingsScreen() {
   const router = useRouter();
@@ -39,6 +39,18 @@ export default function SettingsScreen() {
           <Text style={styles.label}>version</Text>
           <Text style={styles.value}>{version}</Text>
         </View>
+
+        <Pressable
+          onPress={() => router.push("/settings/vision")}
+          style={({ pressed }) => [styles.linkRow, pressed && { opacity: 0.6 }]}
+        >
+          <View style={{ flex: 1 }}>
+            <Text style={styles.linkLabel}>Vision (auxiliary model)</Text>
+            <Text style={styles.linkHint}>Configure the model used for images when main is text-only</Text>
+          </View>
+          <Text style={styles.chev}>›</Text>
+        </Pressable>
+
         <View style={styles.spacer} />
         <Button label="Log out" variant="danger" onPress={onLogout} />
       </View>
@@ -58,5 +70,20 @@ const styles = StyleSheet.create({
   },
   value: { color: TEXT, fontSize: 15 },
   valueMono: { color: TEXT, fontSize: 13, fontFamily: "Menlo" },
+  linkRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 14,
+    paddingHorizontal: 14,
+    backgroundColor: "#0C1015",
+    borderRadius: 10,
+    gap: 12,
+    borderWidth: 1,
+    borderColor: "#1E242C",
+    marginTop: 4,
+  },
+  linkLabel: { color: TEXT, fontSize: 15 },
+  linkHint: { color: MUTED, fontSize: 11, marginTop: 2 },
+  chev: { color: ACCENT, fontSize: 22, fontWeight: "300" },
   spacer: { flex: 1 },
 });

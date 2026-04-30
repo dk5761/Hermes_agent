@@ -167,6 +167,17 @@ export class HermesHttpClient {
     return this.getJson("/api/analytics/usage", { query });
   }
 
+  // ---- Config (full Hermes config dict) ----
+  async getConfig(): Promise<Record<string, unknown>> {
+    const raw = await this.getJson<Record<string, unknown>>("/api/config");
+    return raw;
+  }
+  async putConfig(config: Record<string, unknown>): Promise<unknown> {
+    // Hermes' PUT /api/config accepts {config:{...}} or {...} — mirror the
+    // SPA's payload shape (wrapped) which is what /api/config.update expects.
+    return this.putJson("/api/config", { config });
+  }
+
   private async callWithRetry(
     path: string,
     opts: HermesRequestOpts,

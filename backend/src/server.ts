@@ -15,6 +15,7 @@ import { registerCronRoutes } from "./routes/cron.js";
 import { registerCronPrefsRoutes } from "./routes/cron-prefs.js";
 import { registerDevicesRoutes } from "./routes/devices.js";
 import { registerProxyRoutes } from "./routes/proxy.js";
+import { registerSettingsRoutes } from "./routes/settings.js";
 import { registerUploadsRoutes } from "./routes/uploads.js";
 import { registerBlobsRoutes } from "./routes/blobs.js";
 import { registerGatewayWsRoute } from "./ws/gateway-ws.js";
@@ -161,6 +162,11 @@ export async function buildServer(deps: BuildServerDeps): Promise<FastifyInstanc
     requireAuth,
   });
   await registerProxyRoutes(app, { requireAuth, hermesHttp: deps.hermesHttp });
+  await registerSettingsRoutes(app, {
+    requireAuth,
+    hermesHttp: deps.hermesHttp,
+    logger: deps.logger,
+  });
 
   await registerUploadsRoutes(app, {
     db: deps.dbHandle.db,
