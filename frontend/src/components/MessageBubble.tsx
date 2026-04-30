@@ -5,6 +5,7 @@ import type { Message } from "../state/chat-store";
 import type { AttachmentDTO } from "../api/types";
 import { AttachmentThumbnail } from "./AttachmentThumbnail";
 import { PdfAttachmentRow } from "./PdfAttachmentRow";
+import { useAttachmentsByIds } from "../hooks/useAttachments";
 
 interface Props {
   message: Message;
@@ -55,17 +56,24 @@ function AttachmentList({ items }: { items: AttachmentDTO[] }) {
 function UserBubble({
   text,
   attachments,
+  attachmentRefs,
 }: {
   text: string;
   attachments?: AttachmentDTO[];
+  attachmentRefs?: string[];
 }) {
-  const hasAttachments = (attachments?.length ?? 0) > 0;
+  // Live messages carry full DTOs; cold-load history only has IDs and resolves
+  // through TanStack-cached getAttachment(id) calls. We always call the hook to
+  // keep hook order stable, but skip the network when refs are absent or the
+  // live attachments have already been provided.
+  const refs = attachments ? undefined : attachmentRefs;
+  const resolved = useAttachmentsByIds(refs);
+  const items = attachments ?? resolved;
+  const hasAttachments = items.length > 0;
   return (
     <View style={[styles.row, styles.rowRight]}>
       <View style={[styles.bubble, styles.user]}>
-        {hasAttachments && attachments ? (
-          <AttachmentList items={attachments} />
-        ) : null}
+        {hasAttachments ? <AttachmentList items={[...items]} /> : null}
         {text.length > 0 ? <Text style={styles.userText}>{text}</Text> : null}
       </View>
     </View>
@@ -110,7 +118,13 @@ function ErrorBubble({ message }: { message: string }) {
 
 function MessageBubbleInner({ message, streaming, reasoning }: Props) {
   if (message.kind === "user")
-    return <UserBubble text={message.text} attachments={message.attachments} />;
+    return (
+      <UserBubble
+        text={message.text}
+        attachments={message.attachments}
+        attachmentRefs={message.attachmentRefs}
+      />
+    );
   if (message.kind === "assistant") {
     return (
       <AssistantBubble

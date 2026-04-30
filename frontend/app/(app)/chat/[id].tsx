@@ -36,7 +36,7 @@ import type {
 } from "@/state/chat-store";
 import { getMessages } from "@/api/sessions";
 import { ACCENT, BG, BORDER, MUTED, PANEL, TEXT } from "@/config";
-import type { HermesMessage } from "@/api/types";
+import type { HistoryRow } from "@/api/types";
 
 // FlatList items are a discriminated union. Streaming bubble + tool calls live
 // at the tail (rendered as inverted=false bottom-of-list); we keep a single
@@ -77,22 +77,121 @@ function buildRows(state: ChatSessionState | undefined): Row[] {
 // when no attachments exist for the session.
 const EMPTY_PENDING: never[] = [];
 
-// Hermes returns messages whose `content` may be string or structured array.
-// We only render flat text bubbles in Phase 3; structured content shows a [...].
-function hermesContentToText(c: unknown): string {
-  if (typeof c === "string") return c;
-  if (Array.isArray(c)) {
-    const parts: string[] = [];
-    for (const item of c) {
-      if (typeof item === "string") parts.push(item);
-      else if (item && typeof item === "object") {
-        const t = (item as Record<string, unknown>)["text"];
-        if (typeof t === "string") parts.push(t);
-      }
+function pickString(p: Record<string, unknown>, key: string): string {
+  const v = p[key];
+  return typeof v === "string" ? v : "";
+}
+
+// Convert a permanent chat_history row into a UI Row. Returns null when the
+// row is empty/uninteresting (e.g. assistant message with no text or reasoning).
+function historyRowToUiRow(r: HistoryRow): Row | null {
+  const iso = new Date(r.createdAt * 1000).toISOString();
+  const p = r.payload;
+  switch (r.kind) {
+    case "user.message": {
+      const text = pickString(p, "text");
+      const attachmentIdsRaw = p["attachmentIds"];
+      const attachmentRefs = Array.isArray(attachmentIdsRaw)
+        ? attachmentIdsRaw.filter((v): v is string => typeof v === "string")
+        : undefined;
+      if (!text && (!attachmentRefs || attachmentRefs.length === 0)) return null;
+      return {
+        rowKind: "msg",
+        data: {
+          kind: "user",
+          id: `hist-u-${r.id}`,
+          text,
+          createdAt: iso,
+          ...(attachmentRefs && attachmentRefs.length > 0 ? { attachmentRefs } : {}),
+        },
+      };
     }
-    return parts.join("\n");
+    case "assistant.message": {
+      const text = pickString(p, "text");
+      const reasoning = pickString(p, "reasoning") || pickString(p, "reasoning_content");
+      const warning = pickString(p, "warning");
+      if (!text && !reasoning) return null;
+      return {
+        rowKind: "msg",
+        data: {
+          kind: "assistant",
+          id: `hist-a-${r.id}`,
+          text,
+          ...(reasoning ? { reasoning } : {}),
+          ...(warning ? { warning } : {}),
+          createdAt: iso,
+        },
+      };
+    }
+    case "tool.call": {
+      const name = pickString(p, "name") || "tool";
+      return {
+        rowKind: "msg",
+        data: {
+          kind: "tool",
+          id: `hist-t-${r.id}`,
+          name,
+          status: "complete",
+          detail: p,
+          createdAt: iso,
+        },
+      };
+    }
+    case "reasoning": {
+      const text = pickString(p, "text");
+      if (!text) return null;
+      return {
+        rowKind: "msg",
+        data: {
+          kind: "assistant",
+          id: `hist-r-${r.id}`,
+          text: "",
+          reasoning: text,
+          createdAt: iso,
+        },
+      };
+    }
+    case "approval.request":
+    case "clarify.request":
+    case "sudo.request":
+    case "secret.request": {
+      const requestId = pickString(p, "request_id") || `hist-${r.id}`;
+      const prompt =
+        pickString(p, "question") ||
+        pickString(p, "prompt") ||
+        pickString(p, "command") ||
+        r.kind;
+      const apiKind: ApprovalRequest["kind"] = r.kind.startsWith("approval")
+        ? "approval"
+        : r.kind.startsWith("clarify")
+          ? "clarify"
+          : r.kind.startsWith("sudo")
+            ? "sudo"
+            : "secret";
+      return {
+        rowKind: "approval",
+        data: {
+          kind: apiKind,
+          requestId,
+          prompt,
+          raw: p,
+          createdAt: iso,
+        },
+      };
+    }
+    case "error": {
+      const msg = pickString(p, "message") || pickString(p, "error") || "Error";
+      return {
+        rowKind: "msg",
+        data: {
+          kind: "error",
+          id: `hist-e-${r.id}`,
+          message: msg,
+          createdAt: iso,
+        },
+      };
+    }
   }
-  return "";
 }
 
 export default function ChatScreen() {
@@ -108,36 +207,23 @@ export default function ChatScreen() {
   const addPending = usePendingAttachments((s) => s.add);
   const clearPending = usePendingAttachments((s) => s.clearSession);
 
-  // Initial REST history load — only meaningful once we have a Hermes session.
-  // Backend returns {messages: []} when no Hermes session is mapped yet.
+  // Cold-load history from the gateway's permanent chat_history table.
+  // Returns rich rows (user, assistant, tool, reasoning, approvals, errors).
   const messagesQuery = useQuery({
     queryKey: ["session-messages", sessionId],
-    queryFn: () => (sessionId ? getMessages(sessionId) : Promise.resolve({ messages: [] })),
+    queryFn: () => (sessionId ? getMessages(sessionId) : Promise.resolve({ rows: [] })),
     enabled: !!sessionId,
   });
 
   const historyRows = useMemo<Row[]>(() => {
-    const apiMsgs: HermesMessage[] = messagesQuery.data?.messages ?? [];
-    if (!apiMsgs.length) return [];
-    return apiMsgs.map<Row>((m, idx) => {
-      const text = hermesContentToText(m.content);
-      const role = (m.role as string) ?? "assistant";
-      const data: Message =
-        role === "user"
-          ? {
-              kind: "user",
-              id: `hist-u-${idx}`,
-              text,
-              createdAt: new Date().toISOString(),
-            }
-          : {
-              kind: "assistant",
-              id: `hist-a-${idx}`,
-              text,
-              createdAt: new Date().toISOString(),
-            };
-      return { rowKind: "msg", data };
-    });
+    const apiRows: HistoryRow[] = messagesQuery.data?.rows ?? [];
+    if (!apiRows.length) return [];
+    const out: Row[] = [];
+    for (const r of apiRows) {
+      const ui = historyRowToUiRow(r);
+      if (ui) out.push(ui);
+    }
+    return out;
   }, [messagesQuery.data]);
 
   // Combined list: stored history first, then in-memory chat-store messages.

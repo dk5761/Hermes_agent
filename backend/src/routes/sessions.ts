@@ -5,8 +5,8 @@ import { z } from "zod";
 import type { Db } from "../db/client.js";
 import { appSessions, wsEvents } from "../db/schema.js";
 import type { HermesHttpClient } from "../hermes/http-client.js";
-import { HermesUpstreamError } from "../hermes/types.js";
 import type { AppLogger } from "../logger.js";
+import { loadHistory } from "../ws/chat-history.js";
 
 const PREVIEW_EVENT_TYPES = ["message.complete", "message.delta"] as const;
 const PREVIEW_MAX_CHARS = 120;
@@ -183,24 +183,24 @@ export async function registerSessionsRoutes(
       const params = idParams.safeParse(request.params);
       if (!params.success) return reply.code(400).send({ error: "invalid_params" });
 
-      const rows = await db
-        .select()
+      const ownership = await db
+        .select({ id: appSessions.id })
         .from(appSessions)
         .where(and(eq(appSessions.id, params.data.id), eq(appSessions.userId, user.id)))
         .limit(1);
-      const row = rows[0];
-      if (!row) return reply.code(404).send({ error: "not_found" });
-      if (!row.hermesSessionId) return reply.send({ messages: [] });
+      if (!ownership[0]) return reply.code(404).send({ error: "not_found" });
 
-      try {
-        const data = await hermesHttp.getSessionMessages(row.hermesSessionId);
-        return reply.send(data);
-      } catch (err) {
-        if (err instanceof HermesUpstreamError && err.status === 404) {
-          return reply.send({ messages: [] });
-        }
-        throw err;
-      }
+      // Cold-load full narrative from chat_history (permanent, never swept).
+      // Returns rich rows (user, assistant, tool, reasoning, approval, etc.).
+      const rows = await loadHistory(db, params.data.id);
+      return reply.send({
+        rows: rows.map((r) => ({
+          id: r.id,
+          kind: r.kind,
+          createdAt: r.createdAt,
+          payload: r.payload,
+        })),
+      });
     },
   );
 }

@@ -1,0 +1,431 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Hermes — Mobile Screens</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Inter+Tight:wght@500;600;700&family=JetBrains+Mono:wght@400;500&family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600;6..72,700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  html, body { margin: 0; padding: 0; background: #f0eee9; font-family: -apple-system, system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+  * { box-sizing: border-box; }
+  /* iA Writer Quattro fallback approximation via IBM Plex Mono — keeps the
+     "monospace-ish" texture for the Paper variant without a real download. */
+  .var-paper { font-feature-settings: "ss01"; }
+  ::-webkit-scrollbar { width: 0; height: 0; }
+  /* Top toolbar */
+  .toolbar { position: fixed; top: 12px; left: 12px; right: 12px; z-index: 200;
+    display: flex; gap: 8px; align-items: center; padding: 8px 12px;
+    background: rgba(255,255,255,0.92); backdrop-filter: blur(20px);
+    border: 1px solid rgba(0,0,0,0.08); border-radius: 14px;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.04), 0 6px 24px rgba(0,0,0,0.06);
+    font-family: -apple-system, system-ui, sans-serif; font-size: 13px; color: #1c1a17;
+  }
+  .toolbar .sep { width: 1px; height: 18px; background: rgba(0,0,0,0.08); margin: 0 4px; }
+  .toolbar button { border: none; background: transparent; cursor: pointer; padding: 6px 10px; border-radius: 8px; font: inherit; color: inherit; }
+  .toolbar button.active { background: #1c1a17; color: #fff; }
+  .toolbar button:not(.active):hover { background: rgba(0,0,0,0.06); }
+  .toolbar select { border: 1px solid rgba(0,0,0,0.1); border-radius: 8px; padding: 4px 8px; background: #fff; font: inherit; }
+</style>
+</head>
+<body>
+
+<div id="root"></div>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<!-- Component scripts -->
+<script type="text/babel" src="ios-frame.jsx"></script>
+<script type="text/babel" src="design-canvas.jsx"></script>
+<script type="text/babel" src="tweaks-panel.jsx"></script>
+<script type="text/babel" src="tokens.jsx"></script>
+<script type="text/babel" src="ui.jsx"></script>
+<script type="text/babel" src="screens-1.jsx"></script>
+<script type="text/babel" src="screens-2.jsx"></script>
+<script type="text/babel" src="screens-3.jsx"></script>
+<script type="text/babel" src="screens-4.jsx"></script>
+<script type="text/babel" src="app.jsx"></script>
+
+<script type="text/babel" data-presets="env,react">
+const { useState, useEffect, useMemo } = React;
+
+const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+  "variant": "plot",
+  "mode": "dark",
+  "fontKey": "graphite",
+  "density": "compact",
+  "view": "canvas"
+}/*EDITMODE-END*/;
+
+function Root() {
+  const [tw, setTw] = useTweaks(TWEAK_DEFAULTS);
+  const variant = tw.variant;
+  const mode = tw.mode;
+  const fontKey = tw.fontKey || variant;
+  const density = tw.density;
+
+  // Apply theme on first render so initial tree has window.__theme
+  useMemo(() => {
+    const theme = window.resolveTheme(variant, mode, fontKey);
+    window.applyTheme(theme);
+  }, [variant, mode, fontKey]);
+
+  return (
+    <>
+      <Toolbar tw={tw} setTw={setTw} />
+      {tw.view === 'canvas' && <CanvasView variant={variant} mode={mode} fontKey={fontKey} density={density} />}
+      {tw.view === 'hero' && <HeroView variant={variant} mode={mode} fontKey={fontKey} density={density} />}
+      {tw.view === 'system' && <SystemView variant={variant} mode={mode} fontKey={fontKey} density={density} />}
+
+      <TweaksPanel title="Tweaks">
+        <TweakSection title="View">
+          <TweakRadio value={tw.view} onChange={v => setTw('view', v)}
+            options={[{value:'canvas',label:'Canvas'},{value:'hero',label:'Device'},{value:'system',label:'System'}]} />
+        </TweakSection>
+        <TweakSection title="Variant">
+          <TweakRadio value={tw.variant} onChange={v => setTw('variant', v)}
+            options={[{value:'paper',label:'Paper'},{value:'graphite',label:'Graphite'},{value:'plot',label:'Plot'}]} />
+        </TweakSection>
+        <TweakSection title="Mode">
+          <TweakRadio value={tw.mode} onChange={v => setTw('mode', v)}
+            options={[{value:'light',label:'Light'},{value:'dark',label:'Dark'}]} />
+        </TweakSection>
+        <TweakSection title="Font pairing">
+          <TweakRadio value={tw.fontKey || ''} onChange={v => setTw('fontKey', v)}
+            options={[{value:'',label:'Match'},{value:'paper',label:'Mono'},{value:'graphite',label:'Sans'},{value:'plot',label:'Serif'}]} />
+        </TweakSection>
+        <TweakSection title="Density">
+          <TweakRadio value={tw.density} onChange={v => setTw('density', v)}
+            options={[{value:'comfortable',label:'Comfortable'},{value:'compact',label:'Compact'}]} />
+        </TweakSection>
+      </TweaksPanel>
+    </>
+  );
+}
+
+function Toolbar({ tw, setTw }) {
+  return (
+    <div className="toolbar">
+      <span style={{ fontWeight: 600, marginRight: 4 }}>Hermes</span>
+      <span style={{ opacity: 0.5 }}>· Mobile</span>
+      <div className="sep" />
+      <button className={tw.view === 'canvas' ? 'active' : ''} onClick={() => setTw('view', 'canvas')}>Canvas</button>
+      <button className={tw.view === 'hero' ? 'active' : ''} onClick={() => setTw('view', 'hero')}>Device</button>
+      <button className={tw.view === 'system' ? 'active' : ''} onClick={() => setTw('view', 'system')}>System</button>
+      <div className="sep" />
+      <select value={tw.variant} onChange={e => setTw('variant', e.target.value)}>
+        <option value="paper">Paper</option>
+        <option value="graphite">Graphite</option>
+        <option value="plot">Plot</option>
+      </select>
+      <select value={tw.mode} onChange={e => setTw('mode', e.target.value)}>
+        <option value="light">Light</option>
+        <option value="dark">Dark</option>
+      </select>
+      <span style={{ marginLeft: 'auto', opacity: 0.5, fontFamily: 'JetBrains Mono, ui-monospace', fontSize: 11 }}>v0.18.5 · 1842</span>
+    </div>
+  );
+}
+
+// ─── Canvas overview ─────────────────────────────────────────────
+function CanvasView({ variant, mode, fontKey, density }) {
+  const props = { variant, mode, fontKey, density };
+  return (
+    <DesignCanvas>
+      <DCSection id="auth-onb" title="Auth & onboarding" subtitle="First contact with the gateway">
+        <DCArtboard id="login" label="Login" width={402} height={874}>
+          <Card {...props} route="login" />
+        </DCArtboard>
+        <DCArtboard id="ob-welcome" label="Onboarding · welcome" width={402} height={874}>
+          <Card {...props} route="onboarding" />
+        </DCArtboard>
+      </DCSection>
+
+      <DCSection id="chats" title="Chats" subtitle="Sessions, chat, search, image lightbox">
+        <DCArtboard id="sessions" label="Session list" width={402} height={874}>
+          <Card {...props} route="sessions" />
+        </DCArtboard>
+        <DCArtboard id="chat" label="Chat" width={402} height={874}>
+          <Card {...props} route="chat" />
+        </DCArtboard>
+        <DCArtboard id="search" label="Search" width={402} height={874}>
+          <Card {...props} route="search" />
+        </DCArtboard>
+        <DCArtboard id="lightbox" label="Image lightbox" width={402} height={874}>
+          <Card {...props} route="lightbox" />
+        </DCArtboard>
+        <DCArtboard id="tool" label="Tool call detail" width={402} height={874}>
+          <Card {...props} route="tool" />
+        </DCArtboard>
+        <DCArtboard id="approval" label="Approval modal" width={402} height={874}>
+          <Card {...props} route="approval" />
+        </DCArtboard>
+      </DCSection>
+
+      <DCSection id="cron" title="Cron" subtitle="Scheduled jobs end-to-end">
+        <DCArtboard id="cron-list" label="Cron list" width={402} height={874}>
+          <Card {...props} route="cron" />
+        </DCArtboard>
+        <DCArtboard id="cron-detail" label="Job detail" width={402} height={874}>
+          <Card {...props} route="cronJob" />
+        </DCArtboard>
+        <DCArtboard id="cron-output" label="Output" width={402} height={874}>
+          <Card {...props} route="cronOut" />
+        </DCArtboard>
+        <DCArtboard id="cron-edit" label="New / edit job" width={402} height={874}>
+          <Card {...props} route="cronEdit" />
+        </DCArtboard>
+      </DCSection>
+
+      <DCSection id="settings" title="Settings" subtitle="Hub + every sub-screen">
+        <DCArtboard id="settings-idx" label="Settings" width={402} height={874}>
+          <Card {...props} route="settings" />
+        </DCArtboard>
+        <DCArtboard id="model" label="Main model picker" width={402} height={874}>
+          <Card {...props} route="model" />
+        </DCArtboard>
+        <DCArtboard id="vision" label="Vision" width={402} height={874}>
+          <Card {...props} route="vision" />
+        </DCArtboard>
+        <DCArtboard id="aux" label="Aux models" width={402} height={874}>
+          <Card {...props} route="aux" />
+        </DCArtboard>
+        <DCArtboard id="keys" label="API keys" width={402} height={874}>
+          <Card {...props} route="keys" />
+        </DCArtboard>
+        <DCArtboard id="key-edit" label="Key editor" width={402} height={874}>
+          <Card {...props} route="keyEdit" />
+        </DCArtboard>
+        <DCArtboard id="notif" label="Notifications" width={402} height={874}>
+          <Card {...props} route="notifications" />
+        </DCArtboard>
+        <DCArtboard id="storage" label="Storage" width={402} height={874}>
+          <Card {...props} route="storage" />
+        </DCArtboard>
+        <DCArtboard id="diag" label="Logs & diagnostics" width={402} height={874}>
+          <Card {...props} route="diag" />
+        </DCArtboard>
+        <DCArtboard id="account" label="Account & security" width={402} height={874}>
+          <Card {...props} route="account" />
+        </DCArtboard>
+        <DCArtboard id="usage" label="Usage" width={402} height={874}>
+          <Card {...props} route="usage" />
+        </DCArtboard>
+        <DCArtboard id="tools" label="Toolsets" width={402} height={874}>
+          <Card {...props} route="tools" />
+        </DCArtboard>
+        <DCArtboard id="skills" label="Skills" width={402} height={874}>
+          <Card {...props} route="skills" />
+        </DCArtboard>
+        <DCArtboard id="about" label="About" width={402} height={874}>
+          <Card {...props} route="about" />
+        </DCArtboard>
+      </DCSection>
+    </DesignCanvas>
+  );
+}
+
+// ─── Hero device — single phone, tappable across full nav ───────
+function HeroView({ variant, mode, fontKey, density }) {
+  const [route, setRoute] = useState('sessions');
+  return (
+    <div style={{
+      width: '100vw', height: '100vh', background: 'radial-gradient(circle at 30% 20%, #f5f1e8, #e8e3d6)',
+      display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 60, paddingTop: 80,
+    }}>
+      <div style={{ display: 'flex', gap: 60, alignItems: 'center' }}>
+        <NavList route={route} setRoute={setRoute} />
+        <div key={route + variant + mode + fontKey + density} style={{
+          width: 402, height: 874, borderRadius: 48, overflow: 'hidden', position: 'relative',
+          boxShadow: '0 60px 100px rgba(0,0,0,0.2), 0 0 0 1px rgba(0,0,0,0.12)',
+        }}>
+          <div style={{ position: 'absolute', top: 11, left: '50%', transform: 'translateX(-50%)', width: 126, height: 37, borderRadius: 24, background: '#000', zIndex: 80 }} />
+          <Prototype variant={variant} mode={mode} fontKey={fontKey} density={density} initialRoute={route} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function NavList({ route, setRoute }) {
+  const groups = [
+    { title: 'Auth & onboarding', items: [['login','Login'],['onboarding','Onboarding']] },
+    { title: 'Chats', items: [['sessions','Session list'],['chat','Chat'],['search','Search'],['lightbox','Image lightbox'],['tool','Tool detail'],['approval','Approval']] },
+    { title: 'Cron', items: [['cron','Cron list'],['cronJob','Job detail'],['cronOut','Output'],['cronEdit','New / edit']] },
+    { title: 'Settings', items: [['settings','Settings'],['model','Main model'],['vision','Vision'],['aux','Aux models'],['keys','API keys'],['keyEdit','Key editor'],['notifications','Notifications'],['storage','Storage'],['diag','Diagnostics'],['account','Account'],['usage','Usage'],['tools','Toolsets'],['skills','Skills'],['about','About']] },
+  ];
+  return (
+    <div style={{ width: 220, color: '#1c1a17', maxHeight: '78vh', overflowY: 'auto', paddingRight: 8 }}>
+      {groups.map(g => (
+        <div key={g.title} style={{ marginBottom: 18 }}>
+          <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 1, opacity: 0.5, marginBottom: 6, fontWeight: 600 }}>{g.title}</div>
+          {g.items.map(([k, lbl]) => (
+            <div key={k} onClick={() => setRoute(k)} style={{
+              padding: '6px 10px', cursor: 'pointer', borderRadius: 6,
+              fontSize: 13, fontWeight: route === k ? 600 : 400,
+              background: route === k ? '#1c1a17' : 'transparent',
+              color: route === k ? '#fff' : '#1c1a17',
+              marginBottom: 1,
+            }}>{lbl}</div>
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ─── Design system reference ────────────────────────────────────
+function SystemView({ variant, mode, fontKey, density }) {
+  const theme = useMemo(() => window.resolveTheme(variant, mode, fontKey), [variant, mode, fontKey]);
+  window.applyTheme(theme);
+  const sw = (label, val) => (
+    <div key={label} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <div style={{ width: 80, height: 80, borderRadius: 12, background: val, border: `1px solid ${theme.line}` }} />
+      <div style={{ fontFamily: theme.fonts.mono, fontSize: 11, color: theme.ink2 }}>{label}</div>
+      <div style={{ fontFamily: theme.fonts.mono, fontSize: 11, color: theme.ink3 }}>{val}</div>
+    </div>
+  );
+  return (
+    <div style={{ minHeight: '100vh', background: theme.bg, color: theme.ink, padding: '80px 40px 80px', fontFamily: theme.fonts.body }}>
+      <div style={{ maxWidth: 1100, margin: '0 auto' }}>
+        <div style={{ marginBottom: 40 }}>
+          <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: 1.4, color: theme.ink3, marginBottom: 8, fontFamily: theme.fonts.mono }}>Hermes design system · {theme.name} · {theme.mode}</div>
+          <div style={{ fontFamily: theme.fonts.display, fontSize: 48, fontWeight: 600, letterSpacing: -0.8, lineHeight: '52px' }}>A modern utility kit for an agent in your pocket.</div>
+          <div style={{ fontSize: 16, color: theme.ink3, marginTop: 12, maxWidth: 640 }}>
+            Three variants share the same primitives — only color and type swap.
+            Built for React Native + NativeWind: every token below maps to a Tailwind theme key.
+          </div>
+        </div>
+
+        <Section2 title="Color" sub="Surfaces, ink, accents, semantic">
+          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+            {sw('bg', theme.bg)}{sw('surface', theme.surface)}{sw('sunken', theme.sunken)}
+            {sw('line', theme.line)}{sw('chip', theme.chip)}
+            {sw('ink', theme.ink)}{sw('ink-2', theme.ink2)}{sw('ink-3', theme.ink3)}
+            {sw('accent', theme.accent)}{sw('accent-bg', theme.accentBg)}
+            {sw('positive', theme.positive)}{sw('warning', theme.warning)}{sw('danger', theme.danger)}
+          </div>
+        </Section2>
+
+        <Section2 title="Type" sub={`Display: ${theme.fonts.display.split(',')[0]} · Body: ${theme.fonts.body.split(',')[0]} · Mono: ${theme.fonts.mono.split(',')[0]}`}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            {Object.entries(window.HERMES.type).map(([k, v]) => (
+              <div key={k} style={{ display: 'flex', gap: 24, alignItems: 'baseline', borderBottom: `1px solid ${theme.lineSoft}`, paddingBottom: 14 }}>
+                <div style={{ width: 90, fontFamily: theme.fonts.mono, fontSize: 11, color: theme.ink3 }}>{k} · {v.size}/{v.lh}</div>
+                <div style={{ fontFamily: k === 'mono' ? theme.fonts.mono : (k === 'display' || k === 'h1' ? theme.fonts.display : theme.fonts.body), fontSize: v.size, lineHeight: `${v.lh}px`, fontWeight: v.weight, letterSpacing: v.tracking }}>The flock awaits new instructions.</div>
+              </div>
+            ))}
+          </div>
+        </Section2>
+
+        <Section2 title="Spacing" sub="Tailwind-aligned scale">
+          <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end' }}>
+            {Object.entries(window.HERMES.space).map(([k, v]) => (
+              <div key={k} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
+                <div style={{ width: 16, height: v + 2, background: theme.ink2, borderRadius: 2 }} />
+                <div style={{ fontFamily: theme.fonts.mono, fontSize: 10, color: theme.ink3 }}>{k}</div>
+              </div>
+            ))}
+          </div>
+        </Section2>
+
+        <Section2 title="Radii">
+          <div style={{ display: 'flex', gap: 16, alignItems: 'flex-end' }}>
+            {Object.entries(window.HERMES.radius).filter(([k]) => k !== 'full').map(([k, v]) => (
+              <div key={k} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
+                <div style={{ width: 64, height: 64, background: theme.surface, border: `1px solid ${theme.line}`, borderRadius: v }} />
+                <div style={{ fontFamily: theme.fonts.mono, fontSize: 10, color: theme.ink3 }}>{k} · {v}</div>
+              </div>
+            ))}
+          </div>
+        </Section2>
+
+        <Section2 title="Components" sub="Buttons, chips, toggles, inputs, list rows">
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24 }}>
+            <div style={{ padding: 20, background: theme.surface, borderRadius: 14, border: `1px solid ${theme.line}` }}>
+              <div style={{ fontFamily: theme.fonts.mono, fontSize: 11, color: theme.ink3, marginBottom: 10, textTransform: 'uppercase' }}>Buttons</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <Button kind="primary" leftIcon="plus">New chat</Button>
+                <Button kind="accent" leftIcon="bolt">Run now</Button>
+                <Button kind="secondary" leftIcon="refresh">Test</Button>
+                <Button kind="danger" leftIcon="trash">Delete</Button>
+                <Button kind="ghost">Cancel</Button>
+              </div>
+            </div>
+            <div style={{ padding: 20, background: theme.surface, borderRadius: 14, border: `1px solid ${theme.line}` }}>
+              <div style={{ fontFamily: theme.fonts.mono, fontSize: 11, color: theme.ink3, marginBottom: 10, textTransform: 'uppercase' }}>Chips & status</div>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 12 }}>
+                <Chip>All</Chip><Chip active>Running</Chip><Chip>Paused</Chip><Chip>Vision</Chip>
+              </div>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <StatusPill kind="online" label="online" />
+                <StatusPill kind="connecting" label="running · 4s" />
+                <StatusPill kind="paused" label="paused" />
+                <StatusPill kind="offline" label="offline" />
+              </div>
+            </div>
+            <div style={{ padding: 20, background: theme.surface, borderRadius: 14, border: `1px solid ${theme.line}` }}>
+              <div style={{ fontFamily: theme.fonts.mono, fontSize: 11, color: theme.ink3, marginBottom: 10, textTransform: 'uppercase' }}>Inputs & toggles</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <Input value="alex" icon="user" onChange={() => {}} />
+                <Input value="" placeholder="Search models" icon="search" onChange={() => {}} />
+                <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}><Toggle on={true} onChange={() => {}} /><Toggle on={false} onChange={() => {}} /></div>
+              </div>
+            </div>
+            <div style={{ padding: 20, background: theme.surface, borderRadius: 14, border: `1px solid ${theme.line}`, overflow: 'hidden' }}>
+              <div style={{ fontFamily: theme.fonts.mono, fontSize: 11, color: theme.ink3, marginBottom: 10, textTransform: 'uppercase' }}>List rows</div>
+              <div style={{ borderRadius: 10, border: `1px solid ${theme.lineSoft}`, overflow: 'hidden' }}>
+                <ListRow icon="key" iconColor={theme.accentBg} title="OpenAI" subtitle="OPENAI_API_KEY" detail="set" chevron />
+                <div style={{ height: 1, background: theme.lineSoft }} />
+                <ListRow icon="bell" title="Cron completions" right={<Toggle on={true} onChange={() => {}} />} chevron={false} />
+              </div>
+            </div>
+          </div>
+        </Section2>
+
+        <Section2 title="NativeWind contract" sub="Engineer-facing — these tokens map straight into tailwind.config.js">
+          <pre style={{ margin: 0, padding: 16, background: theme.sunken, borderRadius: 10, border: `1px solid ${theme.lineSoft}`, fontFamily: theme.fonts.mono, fontSize: 12, lineHeight: '18px', color: theme.ink2, overflow: 'auto' }}>{`theme: {
+  extend: {
+    colors: {
+      bg: 'var(--bg)', surface: 'var(--surface)', sunken: 'var(--sunken)',
+      line: 'var(--line)', chip: 'var(--chip)',
+      ink: { DEFAULT: 'var(--ink)', 2: 'var(--ink2)', 3: 'var(--ink3)' },
+      accent: { DEFAULT: 'var(--accent)', bg: 'var(--accentBg)' },
+      positive: 'var(--positive)', warning: 'var(--warning)', danger: 'var(--danger)',
+    },
+    fontFamily: {
+      display: 'var(--font-display)',
+      body: 'var(--font-body)',
+      mono: 'var(--font-mono)',
+    },
+    borderRadius: { sm: 4, md: 8, lg: 12, xl: 16, '2xl': 20, '3xl': 28 },
+    spacing: { 0.5: 2, 1: 4, 1.5: 6, 2: 8, 2.5: 10, 3: 12, 4: 16, 5: 20, 6: 24, 8: 32, 10: 40, 12: 48 },
+  },
+}`}</pre>
+        </Section2>
+      </div>
+    </div>
+  );
+}
+
+function Section2({ title, sub, children }) {
+  const theme = window.__theme;
+  return (
+    <div style={{ marginBottom: 56 }}>
+      <div style={{ borderTop: `1px solid ${theme.line}`, paddingTop: 24, marginBottom: 20 }}>
+        <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: 1.4, color: theme.ink3, fontFamily: theme.fonts.mono }}>— {title}</div>
+        {sub && <div style={{ fontSize: 18, color: theme.ink, marginTop: 6, fontFamily: theme.fonts.display, fontWeight: 500, letterSpacing: -0.2 }}>{sub}</div>}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<Root />);
+</script>
+
+</body>
+</html>

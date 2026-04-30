@@ -1,7 +1,7 @@
 import { apiFetch } from "./client";
 import type {
   CreateSessionResponse,
-  MessagesResponse,
+  HistoryResponse,
   SessionsListResponse,
 } from "./types";
 
@@ -34,6 +34,6 @@ export async function deleteSession(id: string): Promise<void> {
   await apiFetch(`/sessions/${id}`, { method: "DELETE" });
 }
 
-export async function getMessages(id: string): Promise<MessagesResponse> {
-  return apiFetch<MessagesResponse>(`/sessions/${id}/messages`);
+export async function getMessages(id: string): Promise<HistoryResponse> {
+  return apiFetch<HistoryResponse>(`/sessions/${id}/messages`);
 }

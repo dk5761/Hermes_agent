@@ -8,6 +8,12 @@ import type { AppLogger } from "../logger.js";
 // Skip noisy events (voice.*, status.update) — they're live-only.
 // Documented in HERMES_CONTRACT.md §"Events (server → client)".
 export const PERSISTED_EVENT_TYPES: ReadonlySet<string> = new Set([
+  // Gateway-emitted (synthesized by us, not from Hermes).
+  // Hermes' /api/sessions/{id}/messages uses a different id namespace from
+  // session.create, so we can't reconstruct user turns from upstream — we
+  // log them ourselves on chat.send and rebuild history from this log.
+  "gateway.user.message",
+  // Hermes-emitted (from upstream tui_gateway dispatcher).
   "message.start",
   "message.delta",
   "message.complete",

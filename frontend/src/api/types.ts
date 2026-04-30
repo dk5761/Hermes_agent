@@ -41,16 +41,28 @@ export interface CreateSessionResponse {
   updatedAt: number;
 }
 
-// Hermes message payload — content shape varies by role/tool calls. Treat as
-// loosely typed at the boundary; UI narrows as needed.
-export interface HermesMessage {
-  role: string;
-  content?: unknown;
-  [key: string]: unknown;
+// Canonical chat-history row from the gateway. Permanent (never swept).
+// Each row's payload depends on `kind` — see backend src/ws/chat-history.ts.
+export type HistoryKind =
+  | "user.message"
+  | "assistant.message"
+  | "tool.call"
+  | "reasoning"
+  | "approval.request"
+  | "clarify.request"
+  | "sudo.request"
+  | "secret.request"
+  | "error";
+
+export interface HistoryRow {
+  id: number;
+  kind: HistoryKind;
+  createdAt: number;
+  payload: Record<string, unknown>;
 }
 
-export interface MessagesResponse {
-  messages: HermesMessage[];
+export interface HistoryResponse {
+  rows: HistoryRow[];
 }
 
 // Attachment kinds the gateway recognizes; "file" is reserved for future

@@ -14,6 +14,7 @@ import {
   eventsSince,
   isPersistedEventType,
 } from "./event-log.js";
+import { appendHistory, type HistoryKind } from "./chat-history.js";
 import type { HermesWsPool } from "../hermes/ws-pool.js";
 import type { HermesEventParams, JsonValue } from "../hermes/types.js";
 import {
@@ -375,6 +376,26 @@ class GatewayClientHandler {
 
     const finalText = buildFinalPromptText(text, bridgeResult?.promptPrefix ?? "");
 
+    // Persist the user turn to both logs:
+    //   - ws_events: short-lived replay log used for mid-stream reconnect
+    //   - chat_history: permanent narrative log used for cold-load history
+    try {
+      const userPayload = {
+        text,
+        finalText,
+        attachmentIds: attachmentIds.length > 0 ? [...attachmentIds] : undefined,
+      };
+      const env = await appendEvent(this.deps.db, {
+        appSessionId: sid,
+        type: "gateway.user.message",
+        payload: userPayload,
+      });
+      this.sendJson(env);
+      await appendHistory(this.deps.db, sid, "user.message", userPayload);
+    } catch (err) {
+      this.log.warn({ err }, "failed to persist user message");
+    }
+
     try {
       await sharedClient.request("prompt.submit", {
         session_id: hermesSessionId,
@@ -605,7 +626,41 @@ async function handleUpstreamEvent(
       payload: ev.payload ?? null,
     });
     registry.emit(appSessionId, env);
+    await maybePersistHistory(db, appSessionId, ev.type, ev.payload, log);
   } catch (err) {
     log.error({ err, type: ev.type }, "failed to persist upstream event");
+  }
+}
+
+// Map a Hermes upstream event to the canonical chat_history kind, if any.
+// Streaming-only deltas (message.delta, tool.progress, etc.) are deliberately
+// omitted — they're not part of the permanent narrative.
+const HISTORY_KIND_BY_UPSTREAM: ReadonlyMap<string, HistoryKind> = new Map([
+  ["message.complete", "assistant.message"],
+  ["tool.complete", "tool.call"],
+  // Subagent runs render as tool cards; payload carries token rollups, file
+  // lists, output_tail in a different shape but the renderer handles raw detail.
+  ["subagent.complete", "tool.call"],
+  ["reasoning.available", "reasoning"],
+  ["approval.request", "approval.request"],
+  ["clarify.request", "clarify.request"],
+  ["sudo.request", "sudo.request"],
+  ["secret.request", "secret.request"],
+  ["error", "error"],
+]);
+
+async function maybePersistHistory(
+  db: Db,
+  appSessionId: string,
+  upstreamType: string,
+  payload: unknown,
+  log: AppLogger,
+): Promise<void> {
+  const kind = HISTORY_KIND_BY_UPSTREAM.get(upstreamType);
+  if (!kind) return;
+  try {
+    await appendHistory(db, appSessionId, kind, payload);
+  } catch (err) {
+    log.warn({ err, kind, upstreamType }, "failed to persist chat history row");
   }
 }

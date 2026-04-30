@@ -163,6 +163,7 @@ export async function buildServer(deps: BuildServerDeps): Promise<FastifyInstanc
   });
   await registerProxyRoutes(app, { requireAuth, hermesHttp: deps.hermesHttp });
   await registerSettingsRoutes(app, {
+    config: deps.config,
     requireAuth,
     hermesHttp: deps.hermesHttp,
     logger: deps.logger,

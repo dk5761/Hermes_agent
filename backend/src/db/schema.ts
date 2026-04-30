@@ -141,6 +141,27 @@ export const wsEvents = sqliteTable(
   }),
 );
 
+// Permanent narrative log per chat — never swept. Mirrors the canonical
+// "story" of a conversation: user prompts, assistant final messages, tool
+// calls, reasoning blocks, blocking requests, errors, attachment refs.
+// Streaming-only event types (delta/start/progress) are NOT stored here —
+// they live in ws_events for short-lived replay only.
+export const chatHistory = sqliteTable(
+  "chat_history",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    appSessionId: text("app_session_id")
+      .notNull()
+      .references(() => appSessions.id, { onDelete: "cascade" }),
+    kind: text("kind").notNull(),
+    payloadJson: text("payload_json").notNull(),
+    createdAt: integer("created_at").notNull(),
+  },
+  (t) => ({
+    sessionIdIdx: index("chat_history_session_id_idx").on(t.appSessionId, t.id),
+  }),
+);
+
 export const pushTokens = sqliteTable(
   "push_tokens",
   {

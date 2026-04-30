@@ -14,9 +14,12 @@ export interface UserMessage {
   id: string;
   text: string;
   createdAt: string;
-  // Attachments are persisted with the user bubble so chat history renders
-  // thumbnails consistently after reload.
+  // Live path: full DTOs from the upload pipeline. Persisted with the bubble
+  // for the active session so re-renders don't re-fetch.
   attachments?: AttachmentDTO[];
+  // Cold-load path: just the IDs from the permanent chat_history payload.
+  // The renderer resolves each via getAttachment(id) and caches via TanStack.
+  attachmentRefs?: string[];
 }
 
 export interface AssistantMessage {
