@@ -1,14 +1,17 @@
 /*
  * Hermes — Tailwind v4 + Uniwind tokens
  *
- * Six themes (paper / graphite / plot × light / dark) defined as
- * `@variant <name> { ... }` blocks. Their names are also registered in
- * `metro.config.js` under `extraThemes` so Uniwind compiles class output
- * for each one and `Uniwind.setTheme("graphite-light")` is allowed at
- * runtime.
+ * Eight themes total:
+ *   - light, dark         (Uniwind auto-registers; we MUST declare them with
+ *                          the same variables. They alias graphite-{light,dark}.)
+ *   - paper-light, paper-dark
+ *   - graphite-light, graphite-dark
+ *   - plot-light, plot-dark
  *
- * The CSS variable names follow Tailwind v4's color naming convention
- * (`--color-<name>` -> `bg-<name>` / `text-<name>` / `border-<name>`).
+ * Custom names are also registered in `metro.config.js` under `extraThemes`.
+ *
+ * Per Uniwind docs: every @variant must declare the SAME variable set,
+ * wrapped in `@layer theme { :root { … } }`.
  */
 
 @import "tailwindcss";
@@ -16,16 +19,13 @@
 
 /* -----------------------------------------------------------------------
  * Default theme tokens (font-family stack + radius scale).
- * Color tokens live inside the per-variant blocks below; we declare them
- * here as `unset` so Tailwind sees the names.
+ * Color tokens are themed below; these are the unset fallbacks.
  * ------------------------------------------------------------------- */
 @theme {
-  /* Font stacks: bound to CSS vars that each variant overrides. */
   --font-display: "Inter Tight", "Inter", system-ui, sans-serif;
   --font-body: "Inter", system-ui, sans-serif;
   --font-mono: "JetBrains Mono", Menlo, monospace;
 
-  /* Radius scale per design (4 / 8 / 12 / 16 / 20 / 28 px). */
   --radius-sm: 4px;
   --radius-md: 8px;
   --radius-lg: 12px;
@@ -101,142 +101,182 @@
 }
 
 /* -----------------------------------------------------------------------
- * Per-variant token blocks. Uniwind requires every theme to define the
- * SAME set of variables, so each block declares all 14 color tokens plus
- * the three font-stack overrides.
+ * Per-variant token blocks. EVERY variant declares the SAME 14 color
+ * tokens + 3 font tokens — this is a hard Uniwind constraint.
  *
- * Hex values are mirrored verbatim from
- *   design_handoff_hermes/theme.ts -> palettes.<variant>.<mode>
+ * Hex values mirror design_handoff_hermes/theme.ts verbatim.
+ *
+ * `light` and `dark` are auto-registered by Uniwind and alias to
+ * graphite-light / graphite-dark (graphite is the default per handoff §1).
  * ------------------------------------------------------------------- */
+@layer theme {
+  :root {
+    /* ─── light (default) — alias of graphite-light ────────────── */
+    @variant light {
+      --color-bg: #F7F8FA;
+      --color-surface: #FFFFFF;
+      --color-sunken: #EEF0F4;
+      --color-line: #E1E4EA;
+      --color-line-soft: #ECEEF2;
+      --color-chip: #EEF0F4;
+      --color-ink: #0E1116;
+      --color-ink-2: #3A4252;
+      --color-ink-3: #7A8294;
+      --color-accent: #4F46E5;
+      --color-accent-bg: #EEF0FF;
+      --color-positive: #197A4F;
+      --color-warning: #A66A00;
+      --color-danger: #C2342B;
+      --font-display: "Inter Tight", "Inter", system-ui, sans-serif;
+      --font-body: "Inter", system-ui, sans-serif;
+      --font-mono: "JetBrains Mono", Menlo, monospace;
+    }
 
-/* ─── Paper · Light ───────────────────────────────────────────── */
-@variant paper-light {
-  --color-bg: #FAF8F4;
-  --color-surface: #FFFFFF;
-  --color-sunken: #F2EEE6;
-  --color-line: #E5DFD2;
-  --color-line-soft: #EFEAE0;
-  --color-chip: #EEE9DD;
-  --color-ink: #1C1A17;
-  --color-ink-2: #4A4640;
-  --color-ink-3: #8A857A;
-  --color-accent: #B85C2E;
-  --color-accent-bg: #F5E4D6;
-  --color-positive: #3F7A4D;
-  --color-warning: #A8761B;
-  --color-danger: #B43A2E;
+    /* ─── dark (default) — alias of graphite-dark ─────────────── */
+    @variant dark {
+      --color-bg: #0B0D11;
+      --color-surface: #14171D;
+      --color-sunken: #070809;
+      --color-line: #222731;
+      --color-line-soft: #1A1E26;
+      --color-chip: #1B1F27;
+      --color-ink: #EEF1F6;
+      --color-ink-2: #A8B0BF;
+      --color-ink-3: #6A7388;
+      --color-accent: #8B86FF;
+      --color-accent-bg: #1B1B40;
+      --color-positive: #74D29A;
+      --color-warning: #E6B25F;
+      --color-danger: #F26B5E;
+      --font-display: "Inter Tight", "Inter", system-ui, sans-serif;
+      --font-body: "Inter", system-ui, sans-serif;
+      --font-mono: "JetBrains Mono", Menlo, monospace;
+    }
 
-  --font-display: "JetBrains Mono", Menlo, monospace;
-  --font-body: "Inter", system-ui, sans-serif;
-  --font-mono: "JetBrains Mono", Menlo, monospace;
-}
+    /* ─── Paper · Light ───────────────────────────────────────── */
+    @variant paper-light {
+      --color-bg: #FAF8F4;
+      --color-surface: #FFFFFF;
+      --color-sunken: #F2EEE6;
+      --color-line: #E5DFD2;
+      --color-line-soft: #EFEAE0;
+      --color-chip: #EEE9DD;
+      --color-ink: #1C1A17;
+      --color-ink-2: #4A4640;
+      --color-ink-3: #8A857A;
+      --color-accent: #B85C2E;
+      --color-accent-bg: #F5E4D6;
+      --color-positive: #3F7A4D;
+      --color-warning: #A8761B;
+      --color-danger: #B43A2E;
+      --font-display: "JetBrains Mono", Menlo, monospace;
+      --font-body: "Inter", system-ui, sans-serif;
+      --font-mono: "JetBrains Mono", Menlo, monospace;
+    }
 
-/* ─── Paper · Dark ────────────────────────────────────────────── */
-@variant paper-dark {
-  --color-bg: #161410;
-  --color-surface: #1F1C17;
-  --color-sunken: #0F0E0B;
-  --color-line: #2E2A23;
-  --color-line-soft: #26221C;
-  --color-chip: #2A2620;
-  --color-ink: #F2EEE5;
-  --color-ink-2: #B8B2A4;
-  --color-ink-3: #7A7468;
-  --color-accent: #E08A52;
-  --color-accent-bg: #3A2418;
-  --color-positive: #7DB18A;
-  --color-warning: #D6A65A;
-  --color-danger: #E27666;
+    /* ─── Paper · Dark ────────────────────────────────────────── */
+    @variant paper-dark {
+      --color-bg: #161410;
+      --color-surface: #1F1C17;
+      --color-sunken: #0F0E0B;
+      --color-line: #2E2A23;
+      --color-line-soft: #26221C;
+      --color-chip: #2A2620;
+      --color-ink: #F2EEE5;
+      --color-ink-2: #B8B2A4;
+      --color-ink-3: #7A7468;
+      --color-accent: #E08A52;
+      --color-accent-bg: #3A2418;
+      --color-positive: #7DB18A;
+      --color-warning: #D6A65A;
+      --color-danger: #E27666;
+      --font-display: "JetBrains Mono", Menlo, monospace;
+      --font-body: "Inter", system-ui, sans-serif;
+      --font-mono: "JetBrains Mono", Menlo, monospace;
+    }
 
-  --font-display: "JetBrains Mono", Menlo, monospace;
-  --font-body: "Inter", system-ui, sans-serif;
-  --font-mono: "JetBrains Mono", Menlo, monospace;
-}
+    /* ─── Graphite · Light ────────────────────────────────────── */
+    @variant graphite-light {
+      --color-bg: #F7F8FA;
+      --color-surface: #FFFFFF;
+      --color-sunken: #EEF0F4;
+      --color-line: #E1E4EA;
+      --color-line-soft: #ECEEF2;
+      --color-chip: #EEF0F4;
+      --color-ink: #0E1116;
+      --color-ink-2: #3A4252;
+      --color-ink-3: #7A8294;
+      --color-accent: #4F46E5;
+      --color-accent-bg: #EEF0FF;
+      --color-positive: #197A4F;
+      --color-warning: #A66A00;
+      --color-danger: #C2342B;
+      --font-display: "Inter Tight", "Inter", system-ui, sans-serif;
+      --font-body: "Inter", system-ui, sans-serif;
+      --font-mono: "JetBrains Mono", Menlo, monospace;
+    }
 
-/* ─── Graphite · Light ────────────────────────────────────────── */
-@variant graphite-light {
-  --color-bg: #F7F8FA;
-  --color-surface: #FFFFFF;
-  --color-sunken: #EEF0F4;
-  --color-line: #E1E4EA;
-  --color-line-soft: #ECEEF2;
-  --color-chip: #EEF0F4;
-  --color-ink: #0E1116;
-  --color-ink-2: #3A4252;
-  --color-ink-3: #7A8294;
-  --color-accent: #4F46E5;
-  --color-accent-bg: #EEF0FF;
-  --color-positive: #197A4F;
-  --color-warning: #A66A00;
-  --color-danger: #C2342B;
+    /* ─── Graphite · Dark ─────────────────────────────────────── */
+    @variant graphite-dark {
+      --color-bg: #0B0D11;
+      --color-surface: #14171D;
+      --color-sunken: #070809;
+      --color-line: #222731;
+      --color-line-soft: #1A1E26;
+      --color-chip: #1B1F27;
+      --color-ink: #EEF1F6;
+      --color-ink-2: #A8B0BF;
+      --color-ink-3: #6A7388;
+      --color-accent: #8B86FF;
+      --color-accent-bg: #1B1B40;
+      --color-positive: #74D29A;
+      --color-warning: #E6B25F;
+      --color-danger: #F26B5E;
+      --font-display: "Inter Tight", "Inter", system-ui, sans-serif;
+      --font-body: "Inter", system-ui, sans-serif;
+      --font-mono: "JetBrains Mono", Menlo, monospace;
+    }
 
-  --font-display: "Inter Tight", "Inter", system-ui, sans-serif;
-  --font-body: "Inter", system-ui, sans-serif;
-  --font-mono: "JetBrains Mono", Menlo, monospace;
-}
+    /* ─── Plot · Light ────────────────────────────────────────── */
+    @variant plot-light {
+      --color-bg: #F4F1EA;
+      --color-surface: #FFFDF7;
+      --color-sunken: #EBE6DB;
+      --color-line: #D8D2C2;
+      --color-line-soft: #E4DFD0;
+      --color-chip: #EBE6DB;
+      --color-ink: #15140F;
+      --color-ink-2: #4D483C;
+      --color-ink-3: #8A8474;
+      --color-accent: #6B2E48;
+      --color-accent-bg: #F0DDE3;
+      --color-positive: #3A6E4A;
+      --color-warning: #8E6A1F;
+      --color-danger: #A93128;
+      --font-display: "Newsreader", Georgia, serif;
+      --font-body: "Inter", system-ui, sans-serif;
+      --font-mono: "JetBrains Mono", Menlo, monospace;
+    }
 
-/* ─── Graphite · Dark ─────────────────────────────────────────── */
-@variant graphite-dark {
-  --color-bg: #0B0D11;
-  --color-surface: #14171D;
-  --color-sunken: #070809;
-  --color-line: #222731;
-  --color-line-soft: #1A1E26;
-  --color-chip: #1B1F27;
-  --color-ink: #EEF1F6;
-  --color-ink-2: #A8B0BF;
-  --color-ink-3: #6A7388;
-  --color-accent: #8B86FF;
-  --color-accent-bg: #1B1B40;
-  --color-positive: #74D29A;
-  --color-warning: #E6B25F;
-  --color-danger: #F26B5E;
-
-  --font-display: "Inter Tight", "Inter", system-ui, sans-serif;
-  --font-body: "Inter", system-ui, sans-serif;
-  --font-mono: "JetBrains Mono", Menlo, monospace;
-}
-
-/* ─── Plot · Light ────────────────────────────────────────────── */
-@variant plot-light {
-  --color-bg: #F4F1EA;
-  --color-surface: #FFFDF7;
-  --color-sunken: #EBE6DB;
-  --color-line: #D8D2C2;
-  --color-line-soft: #E4DFD0;
-  --color-chip: #EBE6DB;
-  --color-ink: #15140F;
-  --color-ink-2: #4D483C;
-  --color-ink-3: #8A8474;
-  --color-accent: #6B2E48;
-  --color-accent-bg: #F0DDE3;
-  --color-positive: #3A6E4A;
-  --color-warning: #8E6A1F;
-  --color-danger: #A93128;
-
-  --font-display: "Newsreader", Georgia, serif;
-  --font-body: "Inter", system-ui, sans-serif;
-  --font-mono: "JetBrains Mono", Menlo, monospace;
-}
-
-/* ─── Plot · Dark ─────────────────────────────────────────────── */
-@variant plot-dark {
-  --color-bg: #13110D;
-  --color-surface: #1C1914;
-  --color-sunken: #0D0B08;
-  --color-line: #2E2A22;
-  --color-line-soft: #241F1A;
-  --color-chip: #252119;
-  --color-ink: #F1ECDF;
-  --color-ink-2: #B8B19E;
-  --color-ink-3: #7C7665;
-  --color-accent: #D88AA0;
-  --color-accent-bg: #3A1E2A;
-  --color-positive: #80C190;
-  --color-warning: #D8AE6E;
-  --color-danger: #E27566;
-
-  --font-display: "Newsreader", Georgia, serif;
-  --font-body: "Inter", system-ui, sans-serif;
-  --font-mono: "JetBrains Mono", Menlo, monospace;
+    /* ─── Plot · Dark ─────────────────────────────────────────── */
+    @variant plot-dark {
+      --color-bg: #13110D;
+      --color-surface: #1C1914;
+      --color-sunken: #0D0B08;
+      --color-line: #2E2A22;
+      --color-line-soft: #241F1A;
+      --color-chip: #252119;
+      --color-ink: #F1ECDF;
+      --color-ink-2: #B8B19E;
+      --color-ink-3: #7C7665;
+      --color-accent: #D88AA0;
+      --color-accent-bg: #3A1E2A;
+      --color-positive: #80C190;
+      --color-warning: #D8AE6E;
+      --color-danger: #E27566;
+      --font-display: "Newsreader", Georgia, serif;
+      --font-body: "Inter", system-ui, sans-serif;
+      --font-mono: "JetBrains Mono", Menlo, monospace;
+    }
+  }
 }
