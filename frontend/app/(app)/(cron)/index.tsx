@@ -25,7 +25,7 @@ export default function CronListScreen() {
 
   const onPressJob = useCallback(
     (job: CronJob) => {
-      router.push({ pathname: "/cron/[jobId]", params: { jobId: job.id } });
+      router.push({ pathname: "/(cron)/[jobId]", params: { jobId: job.id } });
     },
     [router],
   );

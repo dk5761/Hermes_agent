@@ -101,7 +101,7 @@ export default function SessionsScreen() {
   );
 
   const onSettings = useCallback(() => {
-    router.push("/settings");
+    router.push("/(settings)");
   }, [router]);
 
   const onCreate = useCallback(() => {

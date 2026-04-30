@@ -39,7 +39,7 @@ export default function CronJobDetailScreen() {
   const onPressOutput = useCallback(
     (output: CronOutputSummary) => {
       router.push({
-        pathname: "/cron/[jobId]/output/[outputId]",
+        pathname: "/(cron)/[jobId]/output/[outputId]",
         params: { jobId, outputId: output.id },
       });
     },

@@ -29,7 +29,7 @@ export default function CronOutputDetailScreen() {
   });
 
   const onOpenJob = useCallback(() => {
-    router.push({ pathname: "/cron/[jobId]", params: { jobId } });
+    router.push({ pathname: "/(cron)/[jobId]", params: { jobId } });
   }, [jobId, router]);
 
   const created = outputQuery.data ? toDate(outputQuery.data.createdAt) : null;

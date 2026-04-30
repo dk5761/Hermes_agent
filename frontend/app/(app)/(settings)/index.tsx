@@ -41,7 +41,7 @@ export default function SettingsScreen() {
         </View>
 
         <Pressable
-          onPress={() => router.push("/settings/vision")}
+          onPress={() => router.push("/(settings)/vision")}
           style={({ pressed }) => [styles.linkRow, pressed && { opacity: 0.6 }]}
         >
           <View style={{ flex: 1 }}>

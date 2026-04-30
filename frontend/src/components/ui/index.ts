@@ -79,3 +79,5 @@ export type { PhoneSafeAreaProps } from "./PhoneSafeArea";
 
 export { useThemeTokens } from "./tokens";
 export type { ThemeTokens } from "./tokens";
+
+export { AppTabBar } from "./AppTabBar";

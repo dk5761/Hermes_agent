@@ -47,7 +47,7 @@ function navigateToOutput(router: Router, jobId: string, outputId: string): void
   // doesn't yet know about /cron/[jobId]/output/[outputId] until tsc reads
   // the .expo/types output.
   router.push(
-    `/cron/${encodeURIComponent(jobId)}/output/${encodeURIComponent(outputId)}` as never,
+    `/(cron)/${encodeURIComponent(jobId)}/output/${encodeURIComponent(outputId)}` as never,
   );
 }
 
