@@ -1,12 +1,15 @@
 import crypto from "node:crypto";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import type { FastifyInstance, preHandlerHookHandler } from "fastify";
 import { z } from "zod";
 import type { Db } from "../db/client.js";
-import { appSessions } from "../db/schema.js";
+import { appSessions, wsEvents } from "../db/schema.js";
 import type { HermesHttpClient } from "../hermes/http-client.js";
 import { HermesUpstreamError } from "../hermes/types.js";
 import type { AppLogger } from "../logger.js";
+
+const PREVIEW_EVENT_TYPES = ["message.complete", "message.delta"] as const;
+const PREVIEW_MAX_CHARS = 120;
 
 export interface SessionsRoutesDeps {
   db: Db;
@@ -45,34 +48,23 @@ export async function registerSessionsRoutes(
       .where(eq(appSessions.userId, user.id))
       .orderBy(desc(appSessions.updatedAt));
 
-    // Best-effort enrichment: pull preview from Hermes for mapped sessions.
-    // Tolerant of upstream errors — we never block list view on Hermes health.
-    const enriched = await Promise.all(
-      rows.map(async (row) => {
-        let preview: string | null = null;
-        let hermesTitle: string | null = null;
-        if (row.hermesSessionId) {
-          try {
-            const info = await hermesHttp.getSession(row.hermesSessionId);
-            const t = (info as Record<string, unknown>)["title"];
-            const p = (info as Record<string, unknown>)["last_message_preview"];
-            if (typeof t === "string") hermesTitle = t;
-            if (typeof p === "string") preview = p;
-          } catch (err) {
-            logger.debug({ err, hsid: row.hermesSessionId }, "session enrich skipped");
-          }
-        }
-        return {
-          id: row.id,
-          hermesSessionId: row.hermesSessionId,
-          title: row.titleOverride ?? hermesTitle ?? "Untitled",
-          archived: row.archivedAt !== null,
-          createdAt: row.createdAt,
-          updatedAt: row.updatedAt,
-          preview,
-        };
-      }),
+    // Hermes' tui_gateway session_id (8-char hex from session.create) lives in
+    // a different namespace from /api/sessions (timestamp ids). Fetching by
+    // tui_gateway id 404s. Derive preview from our own ws_events log instead.
+    const previews = await loadPreviewsForSessions(
+      db,
+      rows.map((r) => r.id),
     );
+
+    const enriched = rows.map((row) => ({
+      id: row.id,
+      hermesSessionId: row.hermesSessionId,
+      title: row.titleOverride ?? "Untitled",
+      archived: row.archivedAt !== null,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+      preview: previews.get(row.id) ?? null,
+    }));
     return reply.send({ sessions: enriched });
   });
 
@@ -211,6 +203,57 @@ export async function registerSessionsRoutes(
       }
     },
   );
+}
+
+// Returns the latest message-y event text per session, scanning the most recent
+// rows of ws_events. SQLite is fine for the small N we have on personal use.
+async function loadPreviewsForSessions(
+  db: Db,
+  sessionIds: ReadonlyArray<string>,
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  if (sessionIds.length === 0) return out;
+  const rows = await db
+    .select({
+      appSessionId: wsEvents.appSessionId,
+      type: wsEvents.type,
+      payloadJson: wsEvents.payloadJson,
+    })
+    .from(wsEvents)
+    .where(
+      and(
+        inArray(wsEvents.appSessionId, [...sessionIds]),
+        inArray(wsEvents.type, [...PREVIEW_EVENT_TYPES]),
+      ),
+    )
+    .orderBy(desc(wsEvents.id))
+    .limit(sessionIds.length * 8);
+  for (const r of rows) {
+    if (out.has(r.appSessionId)) continue;
+    const text = extractPreviewText(r.payloadJson);
+    if (text) out.set(r.appSessionId, text);
+  }
+  return out;
+}
+
+function extractPreviewText(payloadJson: string): string | null {
+  try {
+    const obj = JSON.parse(payloadJson) as Record<string, unknown>;
+    const candidate =
+      typeof obj["text"] === "string"
+        ? obj["text"]
+        : typeof obj["delta"] === "string"
+          ? obj["delta"]
+          : null;
+    if (!candidate) return null;
+    const trimmed = candidate.trim().replace(/\s+/g, " ");
+    if (!trimmed) return null;
+    return trimmed.length <= PREVIEW_MAX_CHARS
+      ? trimmed
+      : trimmed.slice(0, PREVIEW_MAX_CHARS - 1) + "…";
+  } catch {
+    return null;
+  }
 }
 
 // Best-effort filter: the contract isn't precise on the search payload shape,

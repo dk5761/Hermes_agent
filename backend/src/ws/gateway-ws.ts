@@ -312,6 +312,11 @@ class GatewayClientHandler {
     const userId = this.userId;
     if (!sid || !userId) return;
 
+    // Auto-title from the first user message when no manual override exists.
+    // Hermes' /api/sessions/{id} uses a different id namespace from session.create,
+    // so we can't fetch the title from there — derive it locally instead.
+    await this.maybeAutoTitle(sid, text);
+
     let bridgeResult: Awaited<ReturnType<AttachmentBridge["build"]>> | null = null;
     if (attachmentIds.length > 0) {
       try {
@@ -486,6 +491,30 @@ class GatewayClientHandler {
       .where(eq(appSessions.id, appSessionId));
     this.reverse.set(hsid, appSessionId);
     return hsid;
+  }
+
+  private async maybeAutoTitle(appSessionId: string, userText: string): Promise<void> {
+    const trimmed = userText.trim();
+    if (!trimmed) return;
+    try {
+      const rows = await this.deps.db
+        .select({
+          titleOverride: appSessions.titleOverride,
+        })
+        .from(appSessions)
+        .where(eq(appSessions.id, appSessionId))
+        .limit(1);
+      const row = rows[0];
+      if (!row || row.titleOverride) return;
+      const title = trimmed.length <= 60 ? trimmed : trimmed.slice(0, 57) + "…";
+      const now = Math.floor(Date.now() / 1000);
+      await this.deps.db
+        .update(appSessions)
+        .set({ titleOverride: title, updatedAt: now })
+        .where(eq(appSessions.id, appSessionId));
+    } catch (err) {
+      this.log.warn({ err }, "auto-title failed; continuing");
+    }
   }
 
   private sendJson(value: unknown): void {

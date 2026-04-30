@@ -1,7 +1,31 @@
-node_modules
-dist
-data
-*.log
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+*.tsbuildinfo
+
+# Runtime data — gateway.db (sessions, refresh tokens, push tokens),
+# blobs, materialize cache. Local-only.
+data/
+
+# Backups
+backups/
+
+# Env (keep .env.example tracked)
 .env
-.env.local
+.env.*
+!.env.example
+
+# Logs
+*.log
+
+# Drizzle Studio / temp
+.drizzle/
+
+# OS
 .DS_Store
+
+# Test coverage (when added)
+coverage/
+.nyc_output/
