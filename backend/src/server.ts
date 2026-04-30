@@ -16,6 +16,8 @@ import { registerCronPrefsRoutes } from "./routes/cron-prefs.js";
 import { registerDevicesRoutes } from "./routes/devices.js";
 import { registerProxyRoutes } from "./routes/proxy.js";
 import { registerSettingsRoutes } from "./routes/settings.js";
+import { registerStorageRoutes } from "./routes/storage.js";
+import { registerAccountRoutes } from "./routes/account.js";
 import { registerUploadsRoutes } from "./routes/uploads.js";
 import { registerBlobsRoutes } from "./routes/blobs.js";
 import { registerGatewayWsRoute } from "./ws/gateway-ws.js";
@@ -166,6 +168,17 @@ export async function buildServer(deps: BuildServerDeps): Promise<FastifyInstanc
     config: deps.config,
     requireAuth,
     hermesHttp: deps.hermesHttp,
+    logger: deps.logger,
+  });
+  await registerStorageRoutes(app, {
+    config: deps.config,
+    requireAuth,
+    dbHandle: deps.dbHandle,
+    logger: deps.logger,
+  });
+  await registerAccountRoutes(app, {
+    db: deps.dbHandle.db,
+    requireAuth,
     logger: deps.logger,
   });
 

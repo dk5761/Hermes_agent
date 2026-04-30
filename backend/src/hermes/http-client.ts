@@ -178,6 +178,57 @@ export class HermesHttpClient {
     return this.putJson("/api/config", { config });
   }
 
+  // ---- Env (provider API keys) ----
+  // Hermes upstream surface (per HERMES_CONTRACT.md):
+  //   GET    /api/env             → { KEY: { set: bool, ... } } (shape varies)
+  //   PUT    /api/env             body { key, value }
+  //   DELETE /api/env             body { key }
+  //   GET    /api/env/reveal      body { key }    only if user opts in
+  //
+  // Shape of GET /api/env is parsed defensively in callers — we just hand back
+  // the raw object. Some Hermes versions return { key: bool }; others return
+  // { key: { set: bool, value?: "***" } }. Callers normalize.
+  async getEnv(): Promise<Record<string, unknown>> {
+    return this.getJson<Record<string, unknown>>("/api/env");
+  }
+
+  async setEnv(key: string, value: string): Promise<unknown> {
+    return this.putJson("/api/env", { key, value });
+  }
+
+  async deleteEnv(key: string): Promise<void> {
+    // Hermes accepts a body on DELETE — undici supports this. Use raw() to
+    // attach the body since deleteJson() doesn't take one.
+    const res = await this.raw("/api/env", {
+      method: "DELETE",
+      body: { key },
+    });
+    if (res.status >= 400 && res.status !== 404) {
+      throw new HermesUpstreamError(res.status, `delete_env_${res.status}`, res.body);
+    }
+  }
+
+  async revealEnv(key: string): Promise<{ value: string | null }> {
+    // POST is what most Hermes versions accept (request body). Some versions
+    // expose this via GET with body — undici allows GET-with-body too. Try
+    // POST first; if 405, fall back. We don't currently surface this from the
+    // gateway (per Stage 4 plan: keys are write-only) but the helper exists
+    // for future "reveal once" UX.
+    const res = await this.raw("/api/env/reveal", { method: "POST", body: { key } });
+    if (res.status === 404 || res.status === 405) {
+      // Fall back to GET-with-body.
+      const res2 = await this.raw("/api/env/reveal", { method: "GET", body: { key } });
+      if (res2.status >= 400) {
+        throw new HermesUpstreamError(res2.status, `reveal_env_${res2.status}`, res2.body);
+      }
+      return parseRevealBody(res2.body);
+    }
+    if (res.status >= 400) {
+      throw new HermesUpstreamError(res.status, `reveal_env_${res.status}`, res.body);
+    }
+    return parseRevealBody(res.body);
+  }
+
   private async callWithRetry(
     path: string,
     opts: HermesRequestOpts,
@@ -244,5 +295,17 @@ export class HermesHttpClient {
       throw new HermesAuthError(`401 from ${path}`);
     }
     throw new HermesUpstreamError(status, `upstream_${status}`, body);
+  }
+}
+
+function parseRevealBody(body: string): { value: string | null } {
+  if (!body) return { value: null };
+  try {
+    const j = JSON.parse(body) as Record<string, unknown>;
+    const v = j["value"];
+    if (typeof v === "string") return { value: v };
+    return { value: null };
+  } catch {
+    return { value: null };
   }
 }
