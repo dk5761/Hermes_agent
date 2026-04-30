@@ -1,0 +1,42 @@
+{
+  "name": "frontend",
+  "version": "1.0.0",
+  "main": "expo-router/entry",
+  "scripts": {
+    "start": "expo start --dev-client",
+    "prebuild": "expo prebuild --clean",
+    "ios": "expo run:ios",
+    "ios:device": "expo run:ios --device",
+    "ios:release": "expo run:ios --configuration Release",
+    "android": "expo run:android",
+    "android:device": "expo run:android --device",
+    "android:release": "expo run:android --variant release",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@react-native-async-storage/async-storage": "2.2.0",
+    "@tanstack/react-query": "^5.100.6",
+    "expo": "~55.0.18",
+    "expo-constants": "~55.0.15",
+    "expo-dev-client": "~55.0.28",
+    "expo-document-picker": "^55.0.13",
+    "expo-file-system": "^55.0.17",
+    "expo-image": "^55.0.9",
+    "expo-image-picker": "^55.0.19",
+    "expo-linking": "~55.0.14",
+    "expo-notifications": "~55.0.21",
+    "expo-router": "~55.0.13",
+    "expo-secure-store": "~55.0.13",
+    "expo-status-bar": "~55.0.5",
+    "react": "19.2.0",
+    "react-native": "0.83.6",
+    "react-native-safe-area-context": "~5.6.2",
+    "react-native-screens": "~4.23.0",
+    "zustand": "^5.0.12"
+  },
+  "devDependencies": {
+    "@types/react": "~19.2.2",
+    "typescript": "~5.9.2"
+  },
+  "private": true
+}
