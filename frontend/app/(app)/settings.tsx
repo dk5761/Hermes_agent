@@ -51,6 +51,32 @@ export default function SettingsScreen() {
           <Text style={styles.chev}>›</Text>
         </Pressable>
 
+        {__DEV__ ? (
+          <Pressable
+            onPress={() => router.push("/__theme")}
+            style={({ pressed }) => [styles.linkRow, pressed && { opacity: 0.6 }]}
+          >
+            <View style={{ flex: 1 }}>
+              <Text style={styles.linkLabel}>Theme debug (dev)</Text>
+              <Text style={styles.linkHint}>Stage 1 visual regression — color tokens, type scale, all 6 themes</Text>
+            </View>
+            <Text style={styles.chev}>›</Text>
+          </Pressable>
+        ) : null}
+
+        {__DEV__ ? (
+          <Pressable
+            onPress={() => router.push("/__components")}
+            style={({ pressed }) => [styles.linkRow, pressed && { opacity: 0.6 }]}
+          >
+            <View style={{ flex: 1 }}>
+              <Text style={styles.linkLabel}>Components debug (dev)</Text>
+              <Text style={styles.linkHint}>Stage 2 component library — every primitive in every variant</Text>
+            </View>
+            <Text style={styles.chev}>›</Text>
+          </Pressable>
+        ) : null}
+
         <View style={styles.spacer} />
         <Button label="Log out" variant="danger" onPress={onLogout} />
       </View>
