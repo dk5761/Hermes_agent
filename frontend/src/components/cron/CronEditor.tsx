@@ -34,6 +34,7 @@ import {
   Row,
   SegControl,
   Section,
+  showToast,
   Stack,
   Text,
   Toggle,
@@ -172,6 +173,7 @@ export function CronEditor({ mode, jobId }: CronEditorProps): React.ReactElement
     },
     onSuccess: (created) => {
       void queryClient.invalidateQueries({ queryKey: cronKeys.jobs() });
+      showToast(`Job “${created.name}” created`, "success");
       router.replace({
         pathname: "/(cron)/[jobId]",
         params: { jobId: created.id },
@@ -180,6 +182,8 @@ export function CronEditor({ mode, jobId }: CronEditorProps): React.ReactElement
     onError: (err) => {
       Alert.alert("Could not create job", (err as Error).message);
     },
+    // Local Alert handles errors — silence the global toast.
+    meta: { silent: true },
   });
 
   const updateMut = useMutation({
@@ -207,11 +211,13 @@ export function CronEditor({ mode, jobId }: CronEditorProps): React.ReactElement
         void queryClient.invalidateQueries({ queryKey: cronKeys.job(jobId) });
       }
       void queryClient.invalidateQueries({ queryKey: cronKeys.jobs() });
+      showToast("Job updated", "success");
       router.back();
     },
     onError: (err) => {
       Alert.alert("Could not update job", (err as Error).message);
     },
+    meta: { silent: true },
   });
 
   const onSave = useCallback(() => {

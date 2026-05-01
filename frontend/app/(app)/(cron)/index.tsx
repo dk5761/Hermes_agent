@@ -10,7 +10,10 @@
  */
 import { useCallback, useMemo, useState } from "react";
 import {
+  ActionSheetIOS,
+  Alert,
   FlatList,
+  Platform,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -18,7 +21,8 @@ import {
   type ListRenderItem,
 } from "react-native";
 import { useRouter } from "expo-router";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import * as Haptics from "expo-haptics";
 
 import {
   Chip,
@@ -28,13 +32,20 @@ import {
   NavIcon,
   PhoneSafeArea,
   Row,
+  SkeletonGroup,
   Stack,
   StatusPill,
   Text,
   Button,
   useThemeTokens,
 } from "@/components/ui";
-import { cronKeys, listJobs } from "@/api/cron";
+import {
+  cronKeys,
+  listJobs,
+  pauseJob,
+  resumeJob,
+  triggerJob,
+} from "@/api/cron";
 import type { CronJob } from "@/api/types";
 import { formatRelative, toDate } from "@/util/time";
 
@@ -53,12 +64,35 @@ function isPaused(job: CronJob): boolean {
 
 export default function CronListScreen() {
   const router = useRouter();
+  const queryClient = useQueryClient();
   const tokens = useThemeTokens();
   const [filter, setFilter] = useState<FilterKey>("all");
 
   const jobsQuery = useQuery({
     queryKey: cronKeys.jobs(),
     queryFn: listJobs,
+  });
+
+  const invalidateJobs = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: cronKeys.jobs() });
+  }, [queryClient]);
+
+  // Long-press actions are wired here so the row can stay a pure presentation
+  // component. Each mutation is fire-and-forget — the global toast handler
+  // surfaces failures, and onSuccess invalidates the jobs list.
+  const pauseMut = useMutation({
+    mutationFn: (id: string) => pauseJob(id),
+    onSuccess: invalidateJobs,
+  });
+  const resumeMut = useMutation({
+    mutationFn: (id: string) => resumeJob(id),
+    onSuccess: invalidateJobs,
+  });
+  const triggerMut = useMutation({
+    mutationFn: (id: string) => triggerJob(id),
+    onSuccess: () => {
+      invalidateJobs();
+    },
   });
 
   const jobs = jobsQuery.data?.jobs ?? [];
@@ -100,6 +134,42 @@ export default function CronListScreen() {
     router.push("/(cron)/new" as const);
   }, [router]);
 
+  const onLongPress = useCallback(
+    (job: CronJob) => {
+      // Haptic feedback signals "menu opened". `.catch` swallows the rare
+      // case where Haptics is unavailable (e.g. simulator or web).
+      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(
+        () => undefined,
+      );
+      const paused = isPaused(job);
+      const pauseLabel = paused ? "Resume" : "Pause";
+      const opts = ["Cancel", "Run now", pauseLabel];
+      if (Platform.OS === "ios") {
+        ActionSheetIOS.showActionSheetWithOptions(
+          { title: job.name, options: opts, cancelButtonIndex: 0 },
+          (idx) => {
+            if (idx === 1) triggerMut.mutate(job.id);
+            else if (idx === 2) {
+              if (paused) resumeMut.mutate(job.id);
+              else pauseMut.mutate(job.id);
+            }
+          },
+        );
+        return;
+      }
+      Alert.alert(job.name, undefined, [
+        { text: "Run now", onPress: () => triggerMut.mutate(job.id) },
+        {
+          text: pauseLabel,
+          onPress: () =>
+            (paused ? resumeMut : pauseMut).mutate(job.id),
+        },
+        { text: "Cancel", style: "cancel" },
+      ]);
+    },
+    [pauseMut, resumeMut, triggerMut],
+  );
+
   const subtitle = useMemo(() => {
     if (counts.total === 0) return "No jobs yet";
     return `${counts.total} job${counts.total === 1 ? "" : "s"} · ${counts.running} running`;
@@ -111,9 +181,10 @@ export default function CronListScreen() {
         job={item}
         isLast={index === filtered.length - 1}
         onPress={() => onOpen(item)}
+        onLongPress={() => onLongPress(item)}
       />
     ),
-    [filtered.length, onOpen],
+    [filtered.length, onLongPress, onOpen],
   );
 
   const keyExtractor = useCallback((j: CronJob) => j.id, []);
@@ -167,7 +238,9 @@ export default function CronListScreen() {
           flexGrow: 1,
         }}
         ListEmptyComponent={
-          jobsQuery.isLoading ? null : (
+          jobsQuery.isLoading ? (
+            <SkeletonGroup count={5} />
+          ) : (
             <EmptyState
               icon="clock"
               title="No cron jobs yet"
@@ -184,7 +257,8 @@ export default function CronListScreen() {
           <RefreshControl
             refreshing={jobsQuery.isFetching && !jobsQuery.isLoading}
             onRefresh={() => jobsQuery.refetch()}
-            tintColor={tokens.ink3}
+            tintColor={tokens.accent}
+            colors={[tokens.accent]}
           />
         }
       />
@@ -198,9 +272,10 @@ interface CronRowProps {
   job: CronJob;
   isLast: boolean;
   onPress: () => void;
+  onLongPress: () => void;
 }
 
-function CronRow({ job, isLast, onPress }: CronRowProps) {
+function CronRow({ job, isLast, onPress, onLongPress }: CronRowProps) {
   const tokens = useThemeTokens();
   const running = isRunning(job);
   const paused = isPaused(job);
@@ -227,6 +302,8 @@ function CronRow({ job, isLast, onPress }: CronRowProps) {
   return (
     <Pressable
       onPress={onPress}
+      onLongPress={onLongPress}
+      delayLongPress={300}
       style={({ pressed }) => ({
         opacity: pressed ? 0.7 : 1,
         paddingVertical: 14,

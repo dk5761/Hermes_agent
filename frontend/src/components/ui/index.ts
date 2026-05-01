@@ -71,8 +71,15 @@ export type { HermesMarkProps } from "./HermesMark";
 export { Sheet } from "./Sheet";
 export type { SheetHandle, SheetProps } from "./Sheet";
 
-export { ToastProvider, useToast } from "./Toast";
+export { ToastProvider, useToast, showToast } from "./Toast";
 export type { ToastKind } from "./Toast";
+
+export { Skeleton, SkeletonRow, SkeletonGroup, SkeletonChat } from "./Skeleton";
+export type {
+  SkeletonProps,
+  SkeletonGroupProps,
+  SkeletonChatProps,
+} from "./Skeleton";
 
 export { PhoneSafeArea } from "./PhoneSafeArea";
 export type { PhoneSafeAreaProps } from "./PhoneSafeArea";

@@ -36,6 +36,7 @@ import {
   NavIcon,
   PhoneSafeArea,
   Row,
+  SkeletonGroup,
   Stack,
   StatusPill,
   Text,
@@ -346,7 +347,9 @@ export default function SessionsScreen() {
           flexGrow: 1,
         }}
         ListEmptyComponent={
-          sessionsQuery.isLoading ? null : (
+          sessionsQuery.isLoading ? (
+            <SkeletonGroup count={6} />
+          ) : (
             <EmptyState
               icon="terminal"
               title="No chats yet"
@@ -358,7 +361,8 @@ export default function SessionsScreen() {
           <RefreshControl
             refreshing={sessionsQuery.isFetching && !sessionsQuery.isLoading}
             onRefresh={() => sessionsQuery.refetch()}
-            tintColor={tokens.ink3}
+            tintColor={tokens.accent}
+            colors={[tokens.accent]}
           />
         }
       />

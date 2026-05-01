@@ -22,6 +22,7 @@ import {
 import { useRouter } from "expo-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import * as Clipboard from "expo-clipboard";
+import * as Haptics from "expo-haptics";
 
 import {
   Button,
@@ -194,6 +195,11 @@ export default function DiagnosticsScreen() {
 
   const onLongPressLine = useCallback(
     async (line: ParsedLine) => {
+      // Tap-and-hold to copy is a hidden gesture; the haptic is the only
+      // confirmation the user gets that the gesture was recognized.
+      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(
+        () => undefined,
+      );
       try {
         await Clipboard.setStringAsync(line.raw);
         toast.show("Line copied", "success");
@@ -350,6 +356,7 @@ export default function DiagnosticsScreen() {
                 refreshing={logsQ.isFetching && !logsQ.isLoading}
                 onRefresh={() => logsQ.refetch()}
                 tintColor={tokens.accent}
+                colors={[tokens.accent]}
               />
             }
           />

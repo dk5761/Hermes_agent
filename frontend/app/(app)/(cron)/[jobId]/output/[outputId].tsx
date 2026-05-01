@@ -113,7 +113,8 @@ export default function CronOutputDetailScreen() {
           <RefreshControl
             refreshing={outputQuery.isFetching}
             onRefresh={() => outputQuery.refetch()}
-            tintColor={tokens.ink3}
+            tintColor={tokens.accent}
+            colors={[tokens.accent]}
           />
         }
       >

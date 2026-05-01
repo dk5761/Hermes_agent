@@ -19,6 +19,7 @@ import {
   NavBar,
   PhoneSafeArea,
   Row,
+  showToast,
   Stack,
   StatusPill,
   Text,
@@ -68,6 +69,7 @@ export default function KeyEditorScreen() {
     setErrorText(null);
   }, [envKey]);
 
+  // Inline error UI handles failures — `meta.silent` avoids a duplicate toast.
   const saveMut = useMutation({
     mutationFn: async (next: string) => {
       if (!envKey) throw new Error("missing envKey");
@@ -76,11 +78,13 @@ export default function KeyEditorScreen() {
     onSuccess: (data: ProviderKeyDetail) => {
       qc.setQueryData(["settings", "keys", envKey], data);
       qc.invalidateQueries({ queryKey: ["settings", "keys"] });
+      showToast(`${data.label ?? envKey ?? "Key"} saved`, "success");
       router.back();
     },
     onError: (err: unknown) => {
       setErrorText(extractErrorMessage(err));
     },
+    meta: { silent: true },
   });
 
   const deleteMut = useMutation({
@@ -91,11 +95,13 @@ export default function KeyEditorScreen() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["settings", "keys"] });
       qc.invalidateQueries({ queryKey: ["settings", "keys", envKey] });
+      showToast(`${envKey ?? "Key"} cleared`, "success");
       router.back();
     },
     onError: (err: unknown) => {
       setErrorText(extractErrorMessage(err));
     },
+    meta: { silent: true },
   });
 
   const onSave = () => {
@@ -103,6 +109,16 @@ export default function KeyEditorScreen() {
     const trimmed = value.trim();
     if (!trimmed) {
       setErrorText("Paste a key value before saving.");
+      return;
+    }
+    // Quick sanity: API keys are always single-token strings. Embedded
+    // whitespace usually means the user copied the surrounding quotes too.
+    if (/\s/.test(trimmed)) {
+      setErrorText("Key contains whitespace — paste only the token.");
+      return;
+    }
+    if (trimmed.length < 8) {
+      setErrorText("Key looks too short. Double-check it copied fully.");
       return;
     }
     saveMut.mutate(trimmed);

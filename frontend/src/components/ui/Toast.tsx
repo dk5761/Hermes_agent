@@ -3,6 +3,11 @@
  *
  * Exposes `<ToastProvider>` mounted near root, plus `useToast()` returning
  * `{ show: (msg, kind?) => void }`. Slides in from above the safe area.
+ *
+ * Also exposes a module-level `showToast(msg, kind?)` so callers outside the
+ * React tree (e.g. TanStack `MutationCache.onError`) can fire toasts. The
+ * active `<ToastProvider>` registers its show function on mount and clears
+ * on unmount; calls before registration are silently dropped.
  */
 import React, {
   createContext,
@@ -38,6 +43,20 @@ interface ToastState {
 
 const ToastContext = createContext<ToastValue | null>(null);
 
+// Module-level bridge: lets non-React callers (e.g. TanStack MutationCache
+// onError) fire toasts via the active provider. The provider registers its
+// `show` function on mount and unregisters on unmount.
+type ToastShowFn = (msg: string, kind?: ToastKind) => void;
+let activeShow: ToastShowFn | null = null;
+
+/**
+ * Fire a toast from outside the React tree. Drops silently if no
+ * `<ToastProvider>` is currently mounted.
+ */
+export function showToast(msg: string, kind: ToastKind = "info"): void {
+  activeShow?.(msg, kind);
+}
+
 export function ToastProvider({ children }: { children: React.ReactNode }) {
   const insets = useSafeAreaInsets();
   const tokens = useThemeTokens();
@@ -53,6 +72,14 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
     counter.current += 1;
     setState({ msg, kind, key: counter.current });
   }, []);
+
+  // Register this provider's show fn for module-level callers.
+  useEffect(() => {
+    activeShow = show;
+    return () => {
+      if (activeShow === show) activeShow = null;
+    };
+  }, [show]);
 
   // Animate in on new state, schedule dismiss after 3s.
   useEffect(() => {

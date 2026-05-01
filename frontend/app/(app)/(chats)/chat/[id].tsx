@@ -14,7 +14,7 @@
  *   - Inline ApprovalCard stays here. Push-notification opening of an
  *     approval routes to /chat/[id]/approval/[requestId] which Agent B builds.
  */
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActionSheetIOS,
   Alert,
@@ -37,6 +37,7 @@ import {
   PhoneSafeArea,
   Row,
   Sheet,
+  SkeletonChat,
   StatusDot,
   Stack,
   Text,
@@ -537,7 +538,27 @@ export default function ChatScreen() {
   }, []);
 
   const headerTitle = session?.title || "New chat";
-  const showStatusBanner = stream.status !== "open" && stream.status !== "idle";
+  // Banner visibility: show whenever we're not in steady "open"/"idle" state,
+  // plus a 3s grace once we transition back to open so the user gets a brief
+  // "Online" confirmation before the banner disappears.
+  const [showOnlineConfirmation, setShowOnlineConfirmation] = useState(false);
+  const wasNonOpen = useRef(false);
+  useEffect(() => {
+    const isOpen = stream.status === "open";
+    if (!isOpen && stream.status !== "idle") {
+      wasNonOpen.current = true;
+    }
+    if (isOpen && wasNonOpen.current) {
+      wasNonOpen.current = false;
+      setShowOnlineConfirmation(true);
+      const t = setTimeout(() => setShowOnlineConfirmation(false), 3000);
+      return () => clearTimeout(t);
+    }
+    return undefined;
+  }, [stream.status]);
+  const showStatusBanner =
+    (stream.status !== "open" && stream.status !== "idle") ||
+    showOnlineConfirmation;
 
   return (
     <PhoneSafeArea>
@@ -594,16 +615,25 @@ export default function ChatScreen() {
         keyboardVerticalOffset={Platform.OS === "ios" ? 88 : 0}
         style={{ flex: 1 }}
       >
-        <FlatList
-          inverted
-          data={reversed}
-          keyExtractor={keyExtractor}
-          renderItem={renderItem}
-          contentContainerStyle={{ paddingVertical: 12 }}
-          keyboardDismissMode="interactive"
-          keyboardShouldPersistTaps="handled"
-          style={{ flex: 1 }}
-        />
+        {/* On a cold open we'd otherwise show a blank list flash before
+            history hydrates — replace with skeleton bubbles that mirror the
+            real Message row rhythm. */}
+        {messagesQuery.isFetching && reversed.length === 0 ? (
+          <View style={{ flex: 1 }}>
+            <SkeletonChat count={5} />
+          </View>
+        ) : (
+          <FlatList
+            inverted
+            data={reversed}
+            keyExtractor={keyExtractor}
+            renderItem={renderItem}
+            contentContainerStyle={{ paddingVertical: 12 }}
+            keyboardDismissMode="interactive"
+            keyboardShouldPersistTaps="handled"
+            style={{ flex: 1 }}
+          />
+        )}
 
         {sessionId ? <ComposerAttachments appSessionId={sessionId} /> : null}
         {sendHint ? (
@@ -706,7 +736,8 @@ export default function ChatScreen() {
         </View>
       </KeyboardAvoidingView>
 
-      <Sheet ref={sheetRef} snapPoints={["32%"]}>
+      {/* Quick-actions menu — standardized to 35%. */}
+      <Sheet ref={sheetRef} snapPoints={["35%"]}>
         <Stack gap={2} style={{ paddingVertical: 8 }}>
           <SheetItem
             label="Search in chat"

@@ -69,6 +69,7 @@ export default function StorageScreen() {
             refreshing={usageQ.isRefetching}
             onRefresh={() => usageQ.refetch()}
             tintColor={tokens.accent}
+            colors={[tokens.accent]}
           />
         }
       >

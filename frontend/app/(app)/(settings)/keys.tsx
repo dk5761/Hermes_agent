@@ -17,6 +17,7 @@ import {
   ListRow,
   NavBar,
   PhoneSafeArea,
+  SkeletonGroup,
   Stack,
   StatusPill,
   Text,
@@ -75,6 +76,7 @@ export default function KeysHubScreen() {
             refreshing={keysQ.isRefetching}
             onRefresh={() => keysQ.refetch()}
             tintColor={tokens.accent}
+            colors={[tokens.accent]}
           />
         }
       >
@@ -99,6 +101,21 @@ export default function KeysHubScreen() {
             icon="key"
             title="No providers"
             body="The gateway didn't return any provider definitions."
+          />
+        ) : null}
+        {/* Skeleton on initial load — prevents the "all empty" flash. */}
+        {keysQ.isLoading ? <SkeletonGroup count={6} /> : null}
+        {/* All-unset case: show a friendly empty state instead of the blank
+            "Not set" header users currently land on after first install. */}
+        {!keysQ.isLoading &&
+        !keysQ.isError &&
+        configured.length === 0 &&
+        unset.length > 0 &&
+        query.trim().length === 0 ? (
+          <EmptyState
+            icon="key"
+            title="No keys configured yet"
+            body="Tap a provider below to paste an API key."
           />
         ) : null}
         <Stack gap={16}>

@@ -32,6 +32,8 @@ import {
   PhoneSafeArea,
   Row,
   Section,
+  showToast,
+  SkeletonRow,
   Stack,
   StatusPill,
   Text,
@@ -90,12 +92,14 @@ export default function CronJobDetailScreen() {
     onSuccess: () => {
       invalidateJob();
       void queryClient.invalidateQueries({ queryKey: cronKeys.outputs(jobId) });
+      showToast("Triggered run", "success");
     },
   });
   const deleteMut = useMutation({
     mutationFn: () => deleteJob(jobId),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: cronKeys.jobs() });
+      showToast("Job deleted", "success");
       router.back();
     },
   });
@@ -225,7 +229,8 @@ export default function CronJobDetailScreen() {
               void jobQuery.refetch();
               void outputsQuery.refetch();
             }}
-            tintColor={tokens.ink3}
+            tintColor={tokens.accent}
+            colors={[tokens.accent]}
           />
         }
       >
@@ -343,7 +348,32 @@ export default function CronJobDetailScreen() {
 
           {/* Recent runs */}
           <Section title={`Last ${Math.min(outputs.length || 10, 10)} runs`}>
-            {outputs.length === 0 ? (
+            {outputsQuery.isLoading && outputs.length === 0 ? (
+              // Skeleton placeholder so the user gets immediate visual feedback
+              // instead of "Loading runs…" text on a fresh detail open.
+              <View
+                style={{
+                  marginHorizontal: 16,
+                  backgroundColor: tokens.surface,
+                  borderRadius: 14,
+                  borderWidth: 1,
+                  borderColor: tokens.line,
+                  overflow: "hidden",
+                }}
+              >
+                {[0, 1, 2].map((i) => (
+                  <View
+                    key={i}
+                    style={{
+                      borderBottomWidth: i < 2 ? 1 : 0,
+                      borderBottomColor: tokens.lineSoft,
+                    }}
+                  >
+                    <SkeletonRow />
+                  </View>
+                ))}
+              </View>
+            ) : outputs.length === 0 ? (
               <View style={{ marginHorizontal: 16 }}>
                 <View
                   style={{
@@ -351,14 +381,14 @@ export default function CronJobDetailScreen() {
                     borderRadius: 14,
                     borderWidth: 1,
                     borderColor: tokens.line,
-                    padding: 16,
+                    paddingVertical: 8,
                   }}
                 >
-                  <Text kind="body" color={tokens.ink3}>
-                    {outputsQuery.isLoading
-                      ? "Loading runs…"
-                      : "No runs yet. Trigger one with “Run now”."}
-                  </Text>
+                  <EmptyState
+                    icon="clock"
+                    title="No runs yet"
+                    body="Trigger one with “Run now”."
+                  />
                 </View>
               </View>
             ) : (

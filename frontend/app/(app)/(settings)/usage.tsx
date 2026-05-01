@@ -10,7 +10,7 @@
  * `victory-native` or `react-native-gifted-charts` later.
  */
 import { useMemo, useState } from "react";
-import { ActivityIndicator, RefreshControl, ScrollView, View } from "react-native";
+import { RefreshControl, ScrollView, View } from "react-native";
 import { useRouter } from "expo-router";
 import { useQuery } from "@tanstack/react-query";
 
@@ -24,6 +24,8 @@ import {
   ProgressBar,
   Row,
   SegControl,
+  Skeleton,
+  SkeletonGroup,
   Stack,
   Text,
   useThemeTokens,
@@ -148,6 +150,7 @@ export default function UsageScreen() {
             refreshing={usageQ.isFetching && !usageQ.isLoading}
             onRefresh={() => usageQ.refetch()}
             tintColor={tokens.accent}
+            colors={[tokens.accent]}
           />
         }
       >
@@ -164,9 +167,24 @@ export default function UsageScreen() {
           </View>
 
           {isLoading ? (
-            <View style={{ paddingVertical: 60, alignItems: "center" }}>
-              <ActivityIndicator color={tokens.accent} />
-            </View>
+            // Hero card placeholder + by-model rows so the layout doesn't jump
+            // once data arrives.
+            <Stack gap={16}>
+              <View
+                className="bg-surface border border-line"
+                style={{
+                  marginHorizontal: 16,
+                  padding: 16,
+                  borderRadius: 14,
+                  gap: 8,
+                }}
+              >
+                <Skeleton width="30%" height={12} />
+                <Skeleton width="50%" height={28} />
+                <Skeleton width="70%" height={12} />
+              </View>
+              <SkeletonGroup count={4} />
+            </Stack>
           ) : isError ? (
             <EmptyState
               icon="bolt"

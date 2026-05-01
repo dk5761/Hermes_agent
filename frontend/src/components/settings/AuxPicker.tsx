@@ -32,6 +32,7 @@ import {
   PhoneSafeArea,
   Row,
   Section,
+  showToast,
   Stack,
   Text,
   useThemeTokens,
@@ -109,6 +110,7 @@ export function AuxPicker({ task, title }: AuxPickerProps) {
       }
       setApiKey(data.apiKey);
       setDirty(false);
+      showToast(`${title} saved`, "success");
       router.back();
     },
   });

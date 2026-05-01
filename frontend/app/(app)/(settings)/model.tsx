@@ -27,6 +27,8 @@ import {
   Row,
   Section,
   Sheet,
+  showToast,
+  SkeletonGroup,
   Stack,
   Text,
   type SheetHandle,
@@ -208,6 +210,8 @@ export default function ModelPickerScreen() {
     queryFn: () => getModelList({ filter: filterStr || undefined, q: q || undefined }),
   });
 
+  // Inline error text in the sheet handles failures — silence the global toast
+  // to avoid duplicating the same message in two places.
   const save = useMutation({
     mutationFn: (m: ModelListEntry) =>
       updateMainModel(m.provider ?? inferProvider(m, providersQ.data ?? []), m.id),
@@ -215,7 +219,9 @@ export default function ModelPickerScreen() {
       qc.setQueryData(["settings", "model"], data);
       sheetRef.current?.dismiss();
       setPending(null);
+      showToast(`Model set to ${data.model}`, "success");
     },
+    meta: { silent: true },
   });
 
   const onPickModel = useCallback((m: ModelListEntry) => {
@@ -328,13 +334,7 @@ export default function ModelPickerScreen() {
 
         <Stack gap={18}>
           {listQ.isLoading ? (
-            <Text
-              kind="caption"
-              className="text-ink-3"
-              style={{ paddingHorizontal: 16 }}
-            >
-              Loading models…
-            </Text>
+            <SkeletonGroup count={6} />
           ) : grouped.length === 0 ? (
             <Text
               kind="caption"
@@ -376,7 +376,8 @@ export default function ModelPickerScreen() {
         </Stack>
       </ScrollView>
 
-      <Sheet ref={sheetRef} snapPoints={["32%"]}>
+      {/* Confirm sheet — standardized quick-action height. */}
+      <Sheet ref={sheetRef} snapPoints={["35%"]}>
         <Stack gap={16} style={{ padding: 20 }}>
           <Stack gap={4}>
             <Text kind="h3">Switch main model?</Text>

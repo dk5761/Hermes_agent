@@ -10,7 +10,7 @@
  * Tapping a row shows a "Coming soon" alert; the detail screen is deferred.
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Alert, RefreshControl, ScrollView, View } from "react-native";
+import { Alert, RefreshControl, ScrollView, View } from "react-native";
 import { useRouter } from "expo-router";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useQuery } from "@tanstack/react-query";
@@ -23,6 +23,7 @@ import {
   NavBar,
   PhoneSafeArea,
   Row,
+  SkeletonGroup,
   Text,
   Toggle,
   useThemeTokens,
@@ -167,12 +168,13 @@ export default function ToolsetsScreen() {
             refreshing={toolsetsQ.isFetching && !toolsetsQ.isLoading}
             onRefresh={() => toolsetsQ.refetch()}
             tintColor={tokens.accent}
+            colors={[tokens.accent]}
           />
         }
       >
         {isLoading ? (
-          <View style={{ paddingVertical: 60, alignItems: "center" }}>
-            <ActivityIndicator color={tokens.accent} />
+          <View style={{ paddingTop: 8 }}>
+            <SkeletonGroup count={5} />
           </View>
         ) : isError ? (
           <EmptyState

@@ -6,7 +6,11 @@ import "../global.css";
 import { useEffect } from "react";
 import { ActivityIndicator, StyleSheet, View } from "react-native";
 import { Slot } from "expo-router";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  MutationCache,
+  QueryClient,
+  QueryClientProvider,
+} from "@tanstack/react-query";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
@@ -15,10 +19,25 @@ import { useAuthRedirect } from "@/auth/hooks";
 import { useAuthStore } from "@/auth/store";
 import { BG, MUTED } from "@/config";
 import { ThemeProvider, useAppFonts } from "@/theme";
+import { ToastProvider, showToast } from "@/components/ui";
+import { humanizeError } from "@/util/errors";
 
 // One client per app instance; React Query cache is in-memory only this phase
 // (TODO Phase 3.5: AsyncStorage persister for warm-start).
+//
+// Global mutation error handler: every mutation that doesn't suppress its
+// onError fires a toast. Mutations that handle errors locally (auth flows,
+// password change with inline messaging) can opt out by passing `meta:
+// { silent: true }` on the useMutation call.
 const queryClient = new QueryClient({
+  mutationCache: new MutationCache({
+    onError: (err, _variables, _context, mutation) => {
+      if (mutation.meta && (mutation.meta as { silent?: boolean }).silent) {
+        return;
+      }
+      showToast(humanizeError(err), "error");
+    },
+  }),
   defaultOptions: {
     queries: {
       retry: 1,
@@ -68,8 +87,10 @@ export default function RootLayout() {
           <FontGate>
             <QueryClientProvider client={queryClient}>
               <BottomSheetModalProvider>
-                <StatusBar style="light" />
-                <AuthGate />
+                <ToastProvider>
+                  <StatusBar style="auto" />
+                  <AuthGate />
+                </ToastProvider>
               </BottomSheetModalProvider>
             </QueryClientProvider>
           </FontGate>

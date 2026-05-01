@@ -6,7 +6,7 @@
  * alert; the detail view is deferred.
  */
 import { useCallback, useMemo, useState } from "react";
-import { ActivityIndicator, Alert, RefreshControl, ScrollView, View } from "react-native";
+import { Alert, RefreshControl, ScrollView, View } from "react-native";
 import { useRouter } from "expo-router";
 import { useQuery } from "@tanstack/react-query";
 
@@ -20,6 +20,7 @@ import {
   NavBar,
   PhoneSafeArea,
   Row,
+  SkeletonGroup,
   Stack,
   Text,
   useThemeTokens,
@@ -151,13 +152,12 @@ export default function SkillsScreen() {
             refreshing={skillsQ.isFetching && !skillsQ.isLoading}
             onRefresh={() => skillsQ.refetch()}
             tintColor={tokens.accent}
+            colors={[tokens.accent]}
           />
         }
       >
         {isLoading ? (
-          <View style={{ paddingVertical: 60, alignItems: "center" }}>
-            <ActivityIndicator color={tokens.accent} />
-          </View>
+          <SkeletonGroup count={6} />
         ) : isError ? (
           <EmptyState
             icon="hash"

@@ -195,6 +195,7 @@ export default function NotificationsScreen() {
             refreshing={refreshing}
             onRefresh={onPullRefresh}
             tintColor={tokens.accent}
+            colors={[tokens.accent]}
           />
         }
       >

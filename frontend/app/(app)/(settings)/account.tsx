@@ -30,6 +30,7 @@ import {
   Row,
   Section,
   Sheet,
+  showToast,
   Stack,
   StatusPill,
   Text,
@@ -72,12 +73,14 @@ export default function AccountScreen() {
     queryFn: listAuthSessions,
   });
 
+  // Local error UI handles failure modes — silence the global toast.
   const revokeMut = useMutation({
     mutationFn: (id: string) => revokeAuthSession(id),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["auth", "sessions"] }),
     onError: (err: unknown) => {
       Alert.alert("Couldn't revoke", extractErrorMessage(err));
     },
+    meta: { silent: true },
   });
 
   const onChangePasswordPress = useCallback(() => {
@@ -132,6 +135,7 @@ export default function AccountScreen() {
             refreshing={sessionsQ.isRefetching}
             onRefresh={() => sessionsQ.refetch()}
             tintColor={tokens.accent}
+            colors={[tokens.accent]}
           />
         }
       >
@@ -270,8 +274,8 @@ export default function AccountScreen() {
         </Stack>
       </ScrollView>
 
-      {/* Change-password sheet. */}
-      <Sheet ref={sheetRef} snapPoints={["70%"]}>
+      {/* Change-password sheet — standardized form height. */}
+      <Sheet ref={sheetRef} snapPoints={["60%"]}>
         <ChangePasswordForm onSuccess={onSheetSuccess} />
       </Sheet>
     </PhoneSafeArea>
@@ -286,7 +290,11 @@ function ChangePasswordForm({ onSuccess }: ChangePasswordFormProps) {
   const [current, setCurrent] = useState("");
   const [next, setNext] = useState("");
   const [confirm, setConfirm] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  // Per-field errors so we can surface mismatch on the confirm field and
+  // length on the new-password field — instead of a single bottom-of-form blob.
+  const [currentError, setCurrentError] = useState<string | null>(null);
+  const [nextError, setNextError] = useState<string | null>(null);
+  const [confirmError, setConfirmError] = useState<string | null>(null);
 
   const mut = useMutation({
     mutationFn: () =>
@@ -295,28 +303,47 @@ function ChangePasswordForm({ onSuccess }: ChangePasswordFormProps) {
       setCurrent("");
       setNext("");
       setConfirm("");
-      setError(null);
+      setCurrentError(null);
+      setNextError(null);
+      setConfirmError(null);
+      showToast("Password updated", "success");
       onSuccess();
     },
     onError: (err: unknown) => {
-      setError(extractErrorMessage(err));
+      // Backend disambiguates current-vs-new failures via specific codes —
+      // map them onto the right field. Anything else hits the toast path.
+      const msg = extractErrorMessage(err);
+      if (msg === "Current password is incorrect.") {
+        setCurrentError(msg);
+      } else if (msg === "New password is too weak.") {
+        setNextError(msg);
+      } else {
+        setNextError(msg);
+      }
     },
+    // Field-level errors handle this; suppress the global error toast so the
+    // user only sees one source of truth.
+    meta: { silent: true },
   });
 
   const onSubmit = () => {
-    setError(null);
+    setCurrentError(null);
+    setNextError(null);
+    setConfirmError(null);
+    let hasErr = false;
     if (!current) {
-      setError("Enter your current password.");
-      return;
+      setCurrentError("Enter your current password.");
+      hasErr = true;
     }
     if (next.length < MIN_PASSWORD_LEN) {
-      setError(`New password must be at least ${MIN_PASSWORD_LEN} characters.`);
-      return;
+      setNextError(`Must be at least ${MIN_PASSWORD_LEN} characters.`);
+      hasErr = true;
     }
     if (next !== confirm) {
-      setError("New password and confirmation don't match.");
-      return;
+      setConfirmError("Passwords don't match.");
+      hasErr = true;
     }
+    if (hasErr) return;
     mut.mutate();
   };
 
@@ -326,29 +353,41 @@ function ChangePasswordForm({ onSuccess }: ChangePasswordFormProps) {
       <Text kind="caption" className="text-ink-3">
         New password must be at least {MIN_PASSWORD_LEN} characters.
       </Text>
-      <Field label="Current password">
+      <Field
+        label="Current password"
+        error={currentError ?? undefined}
+      >
         <Input
           value={current}
-          onChange={setCurrent}
+          onChange={(t) => {
+            setCurrent(t);
+            if (currentError) setCurrentError(null);
+          }}
           secureTextEntry
           placeholder="••••••••"
         />
       </Field>
-      <Field label="New password">
+      <Field label="New password" error={nextError ?? undefined}>
         <Input
           value={next}
-          onChange={setNext}
+          onChange={(t) => {
+            setNext(t);
+            if (nextError) setNextError(null);
+          }}
           secureTextEntry
           placeholder="At least 12 chars"
         />
       </Field>
       <Field
         label="Confirm new password"
-        error={error ?? undefined}
+        error={confirmError ?? undefined}
       >
         <Input
           value={confirm}
-          onChange={setConfirm}
+          onChange={(t) => {
+            setConfirm(t);
+            if (confirmError) setConfirmError(null);
+          }}
           secureTextEntry
           placeholder="Repeat new password"
         />

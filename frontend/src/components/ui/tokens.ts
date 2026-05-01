@@ -10,7 +10,7 @@
  * in sync by inspection; if `global.css` changes, update this file too.
  */
 import { useMemo } from "react";
-import { useTheme, type Variant, type Mode } from "@/theme";
+import { useTheme, type Variant, type ResolvedMode } from "@/theme";
 
 export interface ThemeTokens {
   bg: string;
@@ -29,7 +29,7 @@ export interface ThemeTokens {
   danger: string;
 }
 
-const PALETTES: Record<`${Variant}-${Mode}`, ThemeTokens> = {
+const PALETTES: Record<`${Variant}-${ResolvedMode}`, ThemeTokens> = {
   "paper-light": {
     bg: "#FAF8F4",
     surface: "#FFFFFF",
@@ -130,6 +130,10 @@ const PALETTES: Record<`${Variant}-${Mode}`, ThemeTokens> = {
 
 /** Returns the literal hex tokens for the currently-active theme. */
 export function useThemeTokens(): ThemeTokens {
-  const { variant, mode } = useTheme();
-  return useMemo(() => PALETTES[`${variant}-${mode}`], [variant, mode]);
+  // Use resolvedMode so "system" follows the current OS scheme.
+  const { variant, resolvedMode } = useTheme();
+  return useMemo(
+    () => PALETTES[`${variant}-${resolvedMode}`],
+    [variant, resolvedMode],
+  );
 }

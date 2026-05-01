@@ -15,6 +15,7 @@ import {
   Input,
   PhoneSafeArea,
   Row,
+  showToast,
   Stack,
   StatusDot,
   Text,
@@ -77,6 +78,8 @@ export default function LoginScreen() {
         refreshToken: res.refreshToken,
         user: res.user,
       });
+      // Confirm sign-in via toast — useful when redirect is slightly delayed.
+      showToast(`Welcome back, ${res.user.username}`, "success");
     } catch (err) {
       if (err instanceof ApiError) {
         const code = typeof err.body === "string" ? err.body : err.body.error;
