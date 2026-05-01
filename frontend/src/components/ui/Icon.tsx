@@ -59,6 +59,7 @@ export const ICONS = {
   toggle: "M8 7h8a5 5 0 010 10H8a5 5 0 010-10zM8 17a5 5 0 100-10 5 5 0 000 10z",
   shieldCheck: "M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6l8-3zM9 12l2 2 4-4",
   hash: "M4 9h16M4 15h16M10 3l-2 18M16 3l-2 18",
+  pin: "M9 3h6l-1 5 4 4-2 2h-3v5l-1 1-1-1v-5H8l-2-2 4-4-1-5z",
 } as const;
 
 export type IconName = keyof typeof ICONS;

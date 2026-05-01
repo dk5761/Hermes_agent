@@ -52,6 +52,7 @@ import {
 } from "@/api/sessions";
 import type { SessionDto } from "@/api/types";
 import { useChatStore } from "@/state/chat-store";
+import { usePinnedSessions } from "@/state/pinned-sessions";
 import { formatRelative } from "@/util/time";
 
 const QUERY_KEY = ["sessions"] as const;
@@ -60,6 +61,7 @@ type FilterKey = "all" | "running" | "awaiting" | "archived";
 
 interface SessionRow extends SessionDto {
   badge: "running" | "approval" | null;
+  pinned: boolean;
 }
 
 function tabBarBottomPadding(): number {
@@ -99,6 +101,8 @@ export default function SessionsScreen() {
   // Reach into the chat-store directly so we re-render when streaming or
   // approvals change. We only need a thin derived view, not the full state.
   const byId = useChatStore((s) => s.byId);
+  const pinnedMap = usePinnedSessions((s) => s.pinned);
+  const togglePinned = usePinnedSessions((s) => s.togglePinned);
 
   const create = useMutation({
     mutationFn: () => createSession(),
@@ -137,9 +141,9 @@ export default function SessionsScreen() {
           : cs?.isStreaming
             ? "running"
             : null;
-      return { ...s, badge };
+      return { ...s, badge, pinned: !!pinnedMap[s.id] };
     });
-  }, [allSessions, byId]);
+  }, [allSessions, byId, pinnedMap]);
 
   // Counts shown in the filter chips. Computed off the un-filtered list so
   // chip labels stay stable across filter toggles.
@@ -159,10 +163,12 @@ export default function SessionsScreen() {
     return { total, running, awaiting, archived };
   }, [decorated]);
 
-  // Apply filter + search query.
+  // Apply filter + search query, then surface pinned sessions to the top.
+  // The underlying API list is already sorted by updatedAt desc; we preserve
+  // that order within each partition (pinned vs unpinned).
   const filtered: SessionRow[] = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return decorated.filter((s) => {
+    const matched = decorated.filter((s) => {
       if (filter === "archived") {
         if (!s.archived) return false;
       } else {
@@ -174,6 +180,10 @@ export default function SessionsScreen() {
       const hay = `${s.title.toLowerCase()} ${(s.preview ?? "").toLowerCase()}`;
       return hay.includes(q);
     });
+    if (filter === "archived") return matched;
+    const pinned = matched.filter((s) => s.pinned);
+    const rest = matched.filter((s) => !s.pinned);
+    return [...pinned, ...rest];
   }, [decorated, filter, query]);
 
   const onLongPress = useCallback(
@@ -182,18 +192,18 @@ export default function SessionsScreen() {
         () => undefined,
       );
       const archiveLabel = s.archived ? "Unarchive" : "Archive";
+      const pinLabel = s.pinned ? "Unpin" : "Pin";
       if (Platform.OS === "ios") {
         ActionSheetIOS.showActionSheetWithOptions(
           {
             title: s.title,
-            options: ["Cancel", "Pin", "Rename", archiveLabel, "Delete"],
+            options: ["Cancel", pinLabel, "Rename", archiveLabel, "Delete"],
             destructiveButtonIndex: 4,
             cancelButtonIndex: 0,
           },
           (idx) => {
             if (idx === 1) {
-              // Pin not yet implemented (see report). Surface as no-op so
-              // long-press flow stays predictable.
+              togglePinned(s.id);
               return;
             }
             if (idx === 2) {
@@ -230,7 +240,7 @@ export default function SessionsScreen() {
       }
       // Android: cascading Alerts. ActionSheet equivalent isn't built-in.
       Alert.alert(s.title, undefined, [
-        { text: "Pin", onPress: () => undefined },
+        { text: pinLabel, onPress: () => togglePinned(s.id) },
         {
           text: "Rename",
           onPress: () => {
@@ -267,7 +277,7 @@ export default function SessionsScreen() {
         { text: "Cancel", style: "cancel" },
       ]);
     },
-    [archive, remove, rename],
+    [archive, remove, rename, togglePinned],
   );
 
   const onSettings = useCallback(() => {
@@ -465,14 +475,19 @@ function SessionRowView({
       />
       <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
         <Row gap={8} align="center" justify="space-between">
-          <Text
-            kind="body-lg"
-            numberOfLines={1}
-            style={{ fontWeight: titleWeight, flex: 1, minWidth: 0 }}
-          >
-            {item.archived ? "[archived] " : ""}
-            {item.title}
-          </Text>
+          <Row gap={6} align="center" style={{ flex: 1, minWidth: 0 }}>
+            {item.pinned ? (
+              <Icon name="pin" size={12} color={tokens.accent} />
+            ) : null}
+            <Text
+              kind="body-lg"
+              numberOfLines={1}
+              style={{ fontWeight: titleWeight, flex: 1, minWidth: 0 }}
+            >
+              {item.archived ? "[archived] " : ""}
+              {item.title}
+            </Text>
+          </Row>
           <Text kind="caption" color={tokens.ink3} style={{ flexShrink: 0 }}>
             {formatRelative(item.updatedAt)}
           </Text>

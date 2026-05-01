@@ -18,6 +18,7 @@ import { BottomSheetModalProvider } from "@gorhom/bottom-sheet";
 import { useAuthRedirect } from "@/auth/hooks";
 import { useAuthStore } from "@/auth/store";
 import { useTodosUi } from "@/state/todos";
+import { usePinnedSessions } from "@/state/pinned-sessions";
 import { BG, MUTED } from "@/config";
 import { ThemeProvider, useAppFonts } from "@/theme";
 import { ToastProvider, showToast } from "@/components/ui";
@@ -56,6 +57,7 @@ function AuthGate() {
     void hydrate();
     // Pin/collapse state is non-blocking — we don't gate the splash on it.
     void useTodosUi.getState().hydrate();
+    void usePinnedSessions.getState().hydrate();
   }, [hydrate]);
 
   useAuthRedirect();
