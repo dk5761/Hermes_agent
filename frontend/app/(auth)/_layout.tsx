@@ -1,12 +1,15 @@
 import { Stack } from "expo-router";
-import { BG } from "@/config";
+import { useThemeTokens } from "@/components/ui/tokens";
 
 export default function AuthLayout() {
+  // Pull bg from active theme so the auth shell follows variant + mode
+  // (avoids hardcoded black showing through during sign-out).
+  const tokens = useThemeTokens();
   return (
     <Stack
       screenOptions={{
         headerShown: false,
-        contentStyle: { backgroundColor: BG },
+        contentStyle: { backgroundColor: tokens.bg },
       }}
     />
   );

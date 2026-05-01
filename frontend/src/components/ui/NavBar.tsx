@@ -36,54 +36,62 @@ export function NavBar({
   const insets = useSafeAreaInsets();
   const tokens = useThemeTokens();
 
+  // Large variant on tab roots usually has no back/leading/trailing — skip
+  // rendering the toolbar Row so the display title sits directly under the
+  // status bar with minimal dead space. Render the Row only when there's
+  // something to put in it.
+  const hasToolbar = !!onBack || !!leading || !!trailing || !large;
+
   return (
     <Stack
       className="bg-bg"
       style={{
-        paddingTop: insets.top + 8,
+        paddingTop: insets.top + (large && !hasToolbar ? 4 : 8),
         paddingBottom: large ? 8 : 12,
       }}
     >
-      <Row
-        align="center"
-        justify="space-between"
-        style={{ paddingHorizontal: 16, minHeight: 36 }}
-      >
-        <Row gap={4} style={{ minWidth: 0 }}>
-          {onBack ? (
-            <Pressable
-              onPress={onBack}
+      {hasToolbar ? (
+        <Row
+          align="center"
+          justify="space-between"
+          style={{ paddingHorizontal: 16, minHeight: 36 }}
+        >
+          <Row gap={4} style={{ minWidth: 0 }}>
+            {onBack ? (
+              <Pressable
+                onPress={onBack}
+                style={{
+                  padding: 6,
+                  marginLeft: -6,
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                <Icon name="chevL" size={22} color={tokens.accent} />
+              </Pressable>
+            ) : null}
+            {leading}
+          </Row>
+          {!large && title ? (
+            // Absolute-centered title so trailing/leading slot widths don't
+            // bias horizontal placement.
+            <View
+              pointerEvents="none"
               style={{
-                padding: 6,
-                marginLeft: -6,
+                position: "absolute",
+                left: 0,
+                right: 0,
                 alignItems: "center",
-                justifyContent: "center",
               }}
             >
-              <Icon name="chevL" size={22} color={tokens.accent} />
-            </Pressable>
+              <Text kind="h3">{title}</Text>
+            </View>
           ) : null}
-          {leading}
+          <Row gap={4}>{trailing}</Row>
         </Row>
-        {!large && title ? (
-          // Absolute-centered title so trailing/leading slot widths don't
-          // bias horizontal placement.
-          <View
-            pointerEvents="none"
-            style={{
-              position: "absolute",
-              left: 0,
-              right: 0,
-              alignItems: "center",
-            }}
-          >
-            <Text kind="h3">{title}</Text>
-          </View>
-        ) : null}
-        <Row gap={4}>{trailing}</Row>
-      </Row>
+      ) : null}
       {large && title ? (
-        <Stack gap={2} style={{ paddingHorizontal: 16, paddingTop: 8, paddingBottom: 4 }}>
+        <Stack gap={2} style={{ paddingHorizontal: 16, paddingTop: hasToolbar ? 8 : 0, paddingBottom: 4 }}>
           <Text kind="display">{title}</Text>
           {subtitle ? (
             <Text kind="body" className="text-ink-3">

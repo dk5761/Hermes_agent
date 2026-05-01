@@ -1,17 +1,15 @@
-import { useEffect } from "react";
-import { Tabs, useRouter } from "expo-router";
+import { Tabs } from "expo-router";
 import { useAuthStore } from "@/auth/store";
 import { AppTabBar } from "@/components/ui/AppTabBar";
 
 export default function AppLayout() {
-  const router = useRouter();
   const isAuthed = useAuthStore((s) => Boolean(s.accessToken && s.user));
   const hydrated = useAuthStore((s) => s.hydrated);
 
-  useEffect(() => {
-    if (hydrated && !isAuthed) router.replace("/login");
-  }, [hydrated, isAuthed, router]);
-
+  // Auth-state redirect is owned by useAuthRedirect() in the root layout.
+  // Do NOT fire a second redirect from here — concurrent replace() calls
+  // during sign-out leave the router half-mounted and the login screen
+  // renders into a void.
   if (!hydrated) return null;
   if (!isAuthed) return null;
 

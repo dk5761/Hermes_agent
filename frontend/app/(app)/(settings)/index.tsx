@@ -131,7 +131,8 @@ export default function SettingsIndexScreen() {
   return (
     <PhoneSafeArea>
       <NavBar large title="Settings" />
-      <ScrollView contentContainerStyle={{ paddingBottom: 60 }}>
+      {/* paddingBottom must clear the floating AppTabBar (~50pt bar + safe area). */}
+      <ScrollView contentContainerStyle={{ paddingBottom: 140 }}>
         <Stack gap={20}>
           {/* Identity */}
           <View
