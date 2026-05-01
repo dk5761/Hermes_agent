@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNotNull } from "drizzle-orm";
 import { z } from "zod";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { WebSocket } from "ws";
@@ -143,6 +143,21 @@ export async function registerGatewayWsRoute(
     void handleUpstreamEvent(ev, deps.db, reverse, registry, log, deps.chatRunTimer);
   });
 
+  // Whenever the upstream WS connects (initial boot, reconnect after Hermes
+  // restart, or after our gateway restart), every existing hermes_session_id
+  // in our DB is stale. Hermes' tui_gateway pins a session's *event transport*
+  // to the WS that created it (tui_gateway/ws.py:165-169 → on disconnect it
+  // reassigns the session's transport to _stdio_transport, so subsequent
+  // events go to Hermes' container stdout instead of any WS). The new WS we
+  // just opened has no way to "rebind" — the only fix is to recreate the
+  // session via session.create on the next chat.send. We force that by
+  // clearing the cached upstream id; the recreate path in handleChatSend
+  // already handles the case where hermesSessionId is null.
+  sharedClient.onConnection((state) => {
+    if (state !== "open") return;
+    void invalidateAllHermesSessions(deps.db, reverse, log);
+  });
+
   app.get(
     "/ws",
     { websocket: true },
@@ -271,6 +286,8 @@ class GatewayClientHandler {
     const frame = parsed.data;
     const sessionId = this.appSessionId;
     if (!sessionId) return;
+
+    this.log.info({ frameType: frame.type, sessionId }, "ws frame received");
 
     switch (frame.type) {
       case "resume":
@@ -410,28 +427,43 @@ class GatewayClientHandler {
       });
     } catch (err) {
       // Hermes' tui_gateway sessions live in-memory only — they vanish on
-      // Hermes restart or after idle eviction, but our app_sessions row still
-      // holds the stale 8-char hex id. Detect that case and re-create the
-      // upstream session, then retry prompt.submit once.
+      // Hermes restart or after idle eviction. Two failure modes we can
+      // recover from:
+      //   1. session_gone: stale id; recreate then retry.
+      //   2. session_busy (Hermes code 4009): a prior run() crashed before
+      //      finally{} reset `running=False`. Send session.interrupt to
+      //      force-clear, brief sleep, then retry on the same session id.
       const reason = errorMessage(err);
-      // Always log the raw reason at warn — historical drift in upstream
-      // error wording was the cause of "old chats stop responding" reports;
-      // the log gives us the exact phrase to extend the regex with later.
       this.log.warn({ err, hermesSessionId, reason }, "prompt.submit failed");
       const sessionGone =
         /session/i.test(reason) &&
         /not found|unknown|invalid|expired|missing|no such|gone|evicted/i.test(reason);
-      // Hermes' JSON-RPC -32602 (invalid params) is also raised when a
-      // session_id refers to a session that no longer exists.
       const isInvalidParams = /-32602|invalid params/i.test(reason);
-      if (sessionGone || isInvalidParams) {
-        this.log.warn({ hermesSessionId }, "upstream session evicted, recreating and retrying");
+      const sessionBusy = /4009|session busy|busy/i.test(reason);
+
+      if (sessionBusy && !sessionGone && !isInvalidParams) {
+        this.log.warn({ hermesSessionId }, "upstream session busy, interrupting then retrying");
+        try {
+          await sharedClient.request("session.interrupt", { session_id: hermesSessionId });
+          // Give Hermes' run-thread a moment to hit its finally{} and clear
+          // the running flag.
+          await new Promise((r) => setTimeout(r, 300));
+          await sharedClient.request("prompt.submit", {
+            session_id: hermesSessionId,
+            text: finalText,
+          });
+          return;
+        } catch (retryErr) {
+          this.log.error({ err: retryErr }, "prompt.submit retry after interrupt failed");
+          // Fall through to recreate path below — interrupt didn't help.
+        }
+      }
+
+      if (sessionGone || isInvalidParams || sessionBusy) {
+        this.log.warn({ hermesSessionId }, "upstream session unrecoverable, recreating");
         try {
           await this.clearHermesSessionMapping(sid);
           const fresh = await this.createHermesSession(sid);
-          // Re-apply the model override on the fresh upstream session — the
-          // earlier `config.set` either never ran (we returned before it)
-          // or ran against the dead session.
           await this.maybeApplySessionModelOverride(sid, fresh, sharedClient);
           await sharedClient.request("prompt.submit", {
             session_id: fresh,
@@ -696,13 +728,16 @@ async function handleUpstreamEvent(
   chatRunTimer: ChatRunTimer | undefined,
 ): Promise<void> {
   const hsid = ev.session_id;
-  if (!hsid) return;
-  const appSessionId = await reverse.lookup(hsid);
-  if (!appSessionId) {
-    // Could be a session created from an external Hermes UI we don't track.
-    log.debug({ hsid, type: ev.type }, "upstream event for unmapped session");
+  if (!hsid) {
+    log.info({ type: ev.type }, "upstream event has no session_id");
     return;
   }
+  const appSessionId = await reverse.lookup(hsid);
+  if (!appSessionId) {
+    log.info({ hsid, type: ev.type }, "upstream event for unmapped session");
+    return;
+  }
+  log.info({ hsid, appSessionId, type: ev.type }, "upstream event relayed");
   // Phase 7: record per-run timing transitions. Errors flush as "errored" so
   // we still get a chat_run log line for failed runs.
   if (chatRunTimer) {
@@ -734,6 +769,34 @@ async function handleUpstreamEvent(
     await maybePersistHistory(db, appSessionId, ev.type, ev.payload, log);
   } catch (err) {
     log.error({ err, type: ev.type }, "failed to persist upstream event");
+  }
+}
+
+// Clear every cached hermes_session_id in the DB and reverse cache. Called
+// on each upstream WS open (boot or reconnect) — see comment at the call
+// site for why this is necessary (Hermes' transport-pinning quirk).
+async function invalidateAllHermesSessions(
+  db: Db,
+  reverse: ReverseSessionMap,
+  log: AppLogger,
+): Promise<void> {
+  try {
+    const stale = await db
+      .select({ id: appSessions.id, hsid: appSessions.hermesSessionId })
+      .from(appSessions)
+      .where(isNotNull(appSessions.hermesSessionId));
+    if (stale.length === 0) return;
+    const now = Math.floor(Date.now() / 1000);
+    await db
+      .update(appSessions)
+      .set({ hermesSessionId: null, updatedAt: now })
+      .where(isNotNull(appSessions.hermesSessionId));
+    for (const row of stale) {
+      if (row.hsid) reverse.invalidate(row.hsid);
+    }
+    log.info({ cleared: stale.length }, "invalidated stale hermes session mappings on upstream connect");
+  } catch (err) {
+    log.warn({ err }, "failed to invalidate stale hermes session mappings");
   }
 }
 
