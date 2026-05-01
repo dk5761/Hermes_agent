@@ -41,13 +41,17 @@ import {
   StatusDot,
   Stack,
   Text,
+  TodoPlanCard,
   useThemeTokens,
   type SheetHandle,
+  type TodoItem,
+  type TodoStatus,
 } from "@/components/ui";
 import { ApprovalCard } from "@/components/ApprovalCard";
 import { ComposerAttachments } from "@/components/ComposerAttachments";
 import { useChatStream } from "@/ws/use-chat-stream";
 import { useChatStore } from "@/state/chat-store";
+import { useTodosUi } from "@/state/todos";
 import { usePendingAttachments } from "@/state/pending-attachments";
 import { pickDocument, pickImage, PickerError } from "@/attachments/picker";
 import {
@@ -266,6 +270,10 @@ export default function ChatScreen() {
   const sheetRef = useRef<SheetHandle>(null);
 
   const sessionState = useChatStore((s) => (sessionId ? s.byId[sessionId] : undefined));
+  const latestTodoToolId = useChatStore((s) =>
+    sessionId ? (s.latestTodoToolIdById[sessionId] ?? null) : null,
+  );
+  const setLatestTodoToolId = useChatStore((s) => s.setLatestTodoToolId);
   const stream = useChatStream(sessionId);
   const [input, setInput] = useState("");
   const inputRef = useRef<TextInput>(null);
@@ -292,6 +300,54 @@ export default function ChatScreen() {
     queryFn: () => (sessionId ? getMessages(sessionId) : Promise.resolve({ rows: [] })),
     enabled: !!sessionId,
   });
+
+  // Cold-load: walk history backward, find the most recent tool.call with
+  // name="todo" and seed latestTodoToolIdById so the right card gets the
+  // footer treatment on first render. Live tool.complete envelopes update
+  // the same field via the chat-store reducer.
+  useEffect(() => {
+    if (!sessionId) return;
+    const apiRows: HistoryRow[] = messagesQuery.data?.rows ?? [];
+    if (apiRows.length === 0) return;
+    for (let i = apiRows.length - 1; i >= 0; i--) {
+      const r = apiRows[i];
+      if (r.kind !== "tool.call") continue;
+      const p = r.payload;
+      if (p?.["name"] !== "todo") continue;
+      if (!Array.isArray(p?.["todos"])) continue;
+      const tid = p["tool_id"];
+      if (typeof tid === "string") {
+        setLatestTodoToolId(sessionId, tid);
+      }
+      return;
+    }
+  }, [sessionId, messagesQuery.data, setLatestTodoToolId]);
+
+  // ─── add-step pipeline ───────────────────────────────────────────────────
+  const onAddStep = useCallback(
+    (content: string) => {
+      if (!sessionId) return;
+      // Phrasing chosen so the agent's own todo tool reliably appends rather
+      // than replanning. The trailing instruction nudges it to keep existing
+      // items intact.
+      const text = `Add this step to the plan: "${content}". Keep all existing steps unchanged.`;
+      stream.send(text);
+    },
+    [sessionId, stream],
+  );
+
+  // ─── pinned card lookup ──────────────────────────────────────────────────
+  const todosPinnedMap = useTodosUi((s) => s.pinnedByCard);
+  const pinnedToolId = useMemo<string | null>(() => {
+    if (!sessionId) return null;
+    const prefix = `${sessionId}:`;
+    for (const [k, v] of Object.entries(todosPinnedMap)) {
+      if (!v) continue;
+      if (!k.startsWith(prefix)) continue;
+      return k.slice(prefix.length);
+    }
+    return null;
+  }, [sessionId, todosPinnedMap]);
 
   const historyRows = useMemo<Row[]>(() => {
     const apiRows: HistoryRow[] = messagesQuery.data?.rows ?? [];
@@ -340,6 +396,73 @@ export default function ChatScreen() {
     const live = buildRows(sessionState);
     return [...historyRows, ...live];
   }, [historyRows, sessionState]);
+
+  // Resolve the pinned card's payload — search live messages first (they hold
+  // the latest todos array post-update), fall back to history rows. The
+  // tool_id we're matching is the upstream-stable id, persisted in
+  // detail.tool_id for tool messages.
+  const pinnedTodoData = useMemo<{
+    todos: TodoItem[];
+    status: "running" | "complete" | "error";
+    createdAt: string;
+  } | null>(() => {
+    if (!pinnedToolId) return null;
+    const validate = (raw: unknown): TodoItem[] | null => {
+      if (!Array.isArray(raw)) return null;
+      const allowed: ReadonlySet<TodoStatus> = new Set([
+        "pending",
+        "in_progress",
+        "completed",
+        "cancelled",
+      ]);
+      const out: TodoItem[] = [];
+      for (const v of raw) {
+        if (!v || typeof v !== "object") return null;
+        const r = v as Record<string, unknown>;
+        if (
+          typeof r.id !== "string" ||
+          typeof r.content !== "string" ||
+          typeof r.status !== "string" ||
+          !allowed.has(r.status as TodoStatus)
+        ) {
+          return null;
+        }
+        out.push({ id: r.id, content: r.content, status: r.status as TodoStatus });
+      }
+      return out;
+    };
+    // Live messages — newest entry with matching tool_id wins.
+    const msgs = sessionState?.messages ?? [];
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      const m = msgs[i];
+      if (m.kind !== "tool" || m.name !== "todo") continue;
+      const detailToolId =
+        typeof m.detail?.tool_id === "string" ? (m.detail.tool_id as string) : null;
+      const ownId = detailToolId ?? m.id;
+      if (ownId !== pinnedToolId) continue;
+      const todos = validate(m.detail?.todos);
+      if (todos) return { todos, status: m.status, createdAt: m.createdAt };
+    }
+    // History rows fallback.
+    const apiRows: HistoryRow[] = messagesQuery.data?.rows ?? [];
+    for (let i = apiRows.length - 1; i >= 0; i--) {
+      const r = apiRows[i];
+      if (r.kind !== "tool.call") continue;
+      const p = r.payload;
+      if (p?.["name"] !== "todo") continue;
+      const tid = typeof p["tool_id"] === "string" ? (p["tool_id"] as string) : null;
+      if (tid !== pinnedToolId) continue;
+      const todos = validate(p["todos"]);
+      if (todos) {
+        return {
+          todos,
+          status: "complete",
+          createdAt: new Date(r.createdAt * 1000).toISOString(),
+        };
+      }
+    }
+    return null;
+  }, [pinnedToolId, sessionState, messagesQuery.data]);
 
   // Inverted FlatList: newest at the bottom visually, so the underlying data
   // array is reversed.
@@ -505,7 +628,14 @@ export default function ChatScreen() {
   const renderItem = useCallback<ListRenderItem<Row>>(
     ({ item }) => {
       if (item.rowKind === "msg") {
-        return <MessageRow message={item.data} sessionId={sessionId} />;
+        return (
+          <MessageRow
+            message={item.data}
+            sessionId={sessionId}
+            latestTodoToolId={latestTodoToolId}
+            onAddStep={onAddStep}
+          />
+        );
       }
       if (item.rowKind === "stream-tool") {
         // Streaming tool calls share the same renderer as completed ones.
@@ -522,6 +652,8 @@ export default function ChatScreen() {
               createdAt: item.data.createdAt,
             }}
             sessionId={sessionId}
+            latestTodoToolId={latestTodoToolId}
+            onAddStep={onAddStep}
           />
         );
       }
@@ -553,7 +685,7 @@ export default function ChatScreen() {
       }
       return null;
     },
-    [sessionId, stream],
+    [sessionId, stream, latestTodoToolId, onAddStep],
   );
 
   const keyExtractor = useCallback((item: Row): string => {
@@ -655,16 +787,45 @@ export default function ChatScreen() {
             <SkeletonChat count={5} />
           </View>
         ) : (
-          <FlatList
-            inverted
-            data={reversed}
-            keyExtractor={keyExtractor}
-            renderItem={renderItem}
-            contentContainerStyle={{ paddingVertical: 12 }}
-            keyboardDismissMode="interactive"
-            keyboardShouldPersistTaps="handled"
-            style={{ flex: 1 }}
-          />
+          <View style={{ flex: 1 }}>
+            {pinnedToolId && pinnedTodoData && sessionId ? (
+              <View
+                style={{
+                  paddingTop: 4,
+                  paddingBottom: 4,
+                  backgroundColor: tokens.bg,
+                  borderBottomWidth: 1,
+                  borderBottomColor: tokens.lineSoft,
+                  shadowColor: "#000",
+                  shadowOpacity: 0.08,
+                  shadowRadius: 6,
+                  shadowOffset: { width: 0, height: 2 },
+                  elevation: 2,
+                  zIndex: 10,
+                }}
+              >
+                <TodoPlanCard
+                  toolCallId={pinnedToolId}
+                  sessionId={sessionId}
+                  todos={pinnedTodoData.todos}
+                  status={pinnedTodoData.status}
+                  isLatest={latestTodoToolId === pinnedToolId}
+                  createdAt={pinnedTodoData.createdAt}
+                  onAddStep={onAddStep}
+                />
+              </View>
+            ) : null}
+            <FlatList
+              inverted
+              data={reversed}
+              keyExtractor={keyExtractor}
+              renderItem={renderItem}
+              contentContainerStyle={{ paddingVertical: 12 }}
+              keyboardDismissMode="interactive"
+              keyboardShouldPersistTaps="handled"
+              style={{ flex: 1 }}
+            />
+          </View>
         )}
 
         {sessionId ? <ComposerAttachments appSessionId={sessionId} /> : null}

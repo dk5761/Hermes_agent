@@ -38,7 +38,34 @@ import { MarkdownView } from "./Markdown";
 import { Row } from "./Row";
 import { Stack } from "./Stack";
 import { Text } from "./Text";
+import { TodoPlanCard } from "./TodoPlanCard";
+import type { TodoItem, TodoStatus } from "./TodoStepRow";
 import { useThemeTokens } from "./tokens";
+
+const TODO_STATUSES: ReadonlySet<TodoStatus> = new Set([
+  "pending",
+  "in_progress",
+  "completed",
+  "cancelled",
+]);
+
+// Type guard at the trust boundary — `message.detail` is `Record<string, unknown>`.
+function isTodoItem(v: unknown): v is TodoItem {
+  if (!v || typeof v !== "object") return false;
+  const r = v as Record<string, unknown>;
+  return (
+    typeof r.id === "string" &&
+    typeof r.content === "string" &&
+    typeof r.status === "string" &&
+    TODO_STATUSES.has(r.status as TodoStatus)
+  );
+}
+
+function asTodoItems(v: unknown): TodoItem[] | null {
+  if (!Array.isArray(v)) return null;
+  if (!v.every(isTodoItem)) return null;
+  return v as TodoItem[];
+}
 
 // Map common tool names to icon glyphs. Default fallback is `bolt`.
 const TOOL_ICON: Record<string, IconName> = {
@@ -465,9 +492,13 @@ export type MessageRowInput =
 interface MessageProps {
   message: ChatMessage;
   sessionId: string | null;
+  // Latest todo tool_call_id for this session — drives "isLatest" on the
+  // TodoPlanCard so older plan cards lose their footer.
+  latestTodoToolId?: string | null;
+  onAddStep?: (content: string) => void;
 }
 
-function MessageInner({ message, sessionId }: MessageProps) {
+function MessageInner({ message, sessionId, latestTodoToolId, onAddStep }: MessageProps) {
   switch (message.kind) {
     case "user":
       return <UserRow message={message} />;
@@ -478,8 +509,36 @@ function MessageInner({ message, sessionId }: MessageProps) {
       }
       return <AssistantRow message={message} />;
     }
-    case "tool":
+    case "tool": {
+      if (message.name === "todo" && sessionId) {
+        const todos = asTodoItems(message.detail?.todos);
+        if (todos) {
+          // History rows persist tool_id under detail.tool_id; live messages
+          // use the chat-store's id (which is itself the tool_call_id).
+          const detailToolId =
+            typeof message.detail?.tool_id === "string"
+              ? (message.detail.tool_id as string)
+              : null;
+          const ownToolId = detailToolId ?? message.id;
+          return (
+            <TodoPlanCard
+              toolCallId={ownToolId}
+              sessionId={sessionId}
+              todos={todos}
+              status={message.status}
+              isLatest={
+                latestTodoToolId !== null &&
+                latestTodoToolId !== undefined &&
+                latestTodoToolId === ownToolId
+              }
+              createdAt={message.createdAt}
+              onAddStep={onAddStep}
+            />
+          );
+        }
+      }
       return <ToolRow data={message} sessionId={sessionId} />;
+    }
     case "error":
       return <ErrorRow message={message} />;
   }

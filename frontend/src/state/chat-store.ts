@@ -87,12 +87,17 @@ export interface ChatSessionState {
 
 interface ChatStore {
   byId: Record<string, ChatSessionState>;
+  // Per-session: most recent tool_call_id where name === "todo". Drives
+  // "isLatest" on TodoPlanCard (footer + pin/add-step UI). Lives outside
+  // ChatSessionState so it survives `reset(id)` cold-loads.
+  latestTodoToolIdById: Record<string, string | null>;
   ensure: (id: string) => void;
   get: (id: string) => ChatSessionState | undefined;
   reset: (id: string) => void;
   pushUserMessage: (id: string, text: string, attachments?: AttachmentDTO[]) => void;
   applyEnvelope: (id: string, env: GatewayEventEnvelope) => void;
   resolveApproval: (id: string, requestId: string) => void;
+  setLatestTodoToolId: (sessionId: string, toolCallId: string | null) => void;
 }
 
 const empty = (appSessionId: string): ChatSessionState => ({
@@ -328,6 +333,7 @@ function reduce(state: ChatSessionState, env: GatewayEventEnvelope): ChatSession
 
 export const useChatStore = create<ChatStore>((set, get) => ({
   byId: {},
+  latestTodoToolIdById: {},
 
   ensure(id) {
     if (get().byId[id]) return;
@@ -364,7 +370,23 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   applyEnvelope(id, env) {
     set((s) => {
       const cur = s.byId[id] ?? empty(id);
-      return { byId: { ...s.byId, [id]: reduce(cur, env) } };
+      const nextSession = reduce(cur, env);
+      // Bump latest-todo pointer when a tool.complete with name="todo" lands.
+      // We read tool_id (the upstream-stable id) rather than fishing it back
+      // out of the message we just appended.
+      let latest = s.latestTodoToolIdById;
+      if (env.type === "tool.complete") {
+        const p = env.payload as Record<string, unknown> | null;
+        const name = p && typeof p["name"] === "string" ? (p["name"] as string) : null;
+        const toolId = p && typeof p["tool_id"] === "string" ? (p["tool_id"] as string) : null;
+        if (name === "todo" && toolId) {
+          latest = { ...latest, [id]: toolId };
+        }
+      }
+      return {
+        byId: { ...s.byId, [id]: nextSession },
+        latestTodoToolIdById: latest,
+      };
     });
   },
 
@@ -382,5 +404,14 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         },
       };
     });
+  },
+
+  setLatestTodoToolId(sessionId, toolCallId) {
+    set((s) => ({
+      latestTodoToolIdById: {
+        ...s.latestTodoToolIdById,
+        [sessionId]: toolCallId,
+      },
+    }));
   },
 }));
