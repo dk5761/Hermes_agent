@@ -1,7 +1,42 @@
+import path from "node:path";
+import { promises as fsp } from "node:fs";
 import type { Db } from "../db/client.js";
 import type { AppLogger } from "../logger.js";
 import type { BlobStore } from "../storage/blob-store.js";
 import { loadAttachmentForUser, type AttachmentLookupResult } from "../uploads/pipeline.js";
+
+// Hermes' tui_gateway image.attach (cli.py:1303) gates files by **suffix**:
+//   {.png .jpg .jpeg .gif .webp .bmp .tiff .tif .svg .ico}
+// Our blobs are stored as bare sha256 hashes with no extension, so the
+// suffix check fails with code 4016. We compensate by symlinking to a
+// sibling name `<sha>.<ext>` derived from the blob's mimeType and handing
+// Hermes that path. Symlinks land in the shared bind-mount, so Hermes can
+// follow them.
+function mimeToImageExt(mime: string): string | null {
+  const m = mime.toLowerCase().split(";")[0]?.trim() ?? "";
+  switch (m) {
+    case "image/jpeg":
+    case "image/jpg":
+      return "jpg";
+    case "image/png":
+      return "png";
+    case "image/gif":
+      return "gif";
+    case "image/webp":
+      return "webp";
+    case "image/bmp":
+      return "bmp";
+    case "image/tiff":
+      return "tiff";
+    case "image/svg+xml":
+      return "svg";
+    case "image/x-icon":
+    case "image/vnd.microsoft.icon":
+      return "ico";
+    default:
+      return null;
+  }
+}
 
 export interface AttachmentBridgeConfig {
   // Per-PDF cap to keep prompt prefix bounded.
@@ -125,7 +160,30 @@ export class AttachmentBridge {
     const target = att.hermesReady ?? att.primary;
     try {
       const localPath = await this.blobStore.materializeLocalFile({ key: target.objectKey });
-      out.push({ attachmentId: id, localPath });
+      // Hermes wants a recognisable image extension on the file path. Create
+      // (or reuse) a symlink alongside the bare-sha blob; both are visible
+      // in the read-only bind-mount Hermes sees.
+      const ext = mimeToImageExt(target.mimeType);
+      let attachPath = localPath;
+      if (ext) {
+        // Hermes' _resolve_attachment_path calls Path.resolve() which
+        // strips symlinks back to the bare-sha target (cli.py:1407 →
+        // suffix check at :1303 re-trips). Hardlinks would work but
+        // Docker-for-Mac's grpcfuse bind-mount silently no-ops them.
+        // Plain copy is the reliable cross-platform option; the file is
+        // already small (~hundreds of KB after the hermes-ready pass).
+        const dir = path.dirname(localPath);
+        const linkPath = path.join(dir, `${path.basename(localPath)}.${ext}`);
+        try {
+          await fsp.copyFile(localPath, linkPath, fsp.constants?.COPYFILE_EXCL ?? 0);
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code !== "EEXIST") {
+            this.log.warn({ err, linkPath }, "image extension copy failed");
+          }
+        }
+        attachPath = linkPath;
+      }
+      out.push({ attachmentId: id, localPath: attachPath });
     } catch (err) {
       this.log.warn({ err, blobId: target.blobId }, "image materialize failed");
       warnings.push({

@@ -1,5 +1,6 @@
 import * as ImagePicker from "expo-image-picker";
 import * as DocumentPicker from "expo-document-picker";
+import * as ImageManipulator from "expo-image-manipulator";
 import type { LocalFileInput } from "./types";
 import type { AttachmentKind } from "../api/types";
 
@@ -64,15 +65,54 @@ export async function pickImage(): Promise<LocalFileInput[]> {
   for (const a of res.assets) {
     const mime = inferImageMime(a.uri, a.mimeType);
     if (!IMAGE_MIMES.has(mime)) continue;
-    out.push({
-      uri: a.uri,
-      name: deriveName(a.uri, a.fileName),
-      mime,
-      kind: "image",
-      sizeBytes: a.fileSize,
-    });
+    // Re-encode to JPEG: the gateway uses libvips/sharp which lacks the HEIF
+    // plugin in our Docker image, so HEIC inputs fail thumbnail + hermes-
+    // ready builds upstream. iOS' image picker can return HEIC even when
+    // mediaTypes=Images. Forcing JPEG client-side keeps the upload pipeline
+    // consistent and shrinks transfer size at the same time.
+    const reencoded = await reencodeToJpeg(a.uri).catch(() => null);
+    if (reencoded) {
+      out.push({
+        uri: reencoded.uri,
+        name: replaceExt(deriveName(a.uri, a.fileName), "jpg"),
+        mime: "image/jpeg",
+        kind: "image",
+        sizeBytes: reencoded.sizeBytes ?? a.fileSize,
+      });
+    } else {
+      // Fall back to the original asset if the manipulator fails (e.g. format
+      // unsupported on this device). The gateway will return a clear error if
+      // the upstream still can't process it.
+      out.push({
+        uri: a.uri,
+        name: deriveName(a.uri, a.fileName),
+        mime,
+        kind: "image",
+        sizeBytes: a.fileSize,
+      });
+    }
   }
   return out;
+}
+
+async function reencodeToJpeg(
+  uri: string,
+): Promise<{ uri: string; sizeBytes?: number } | null> {
+  try {
+    const result = await ImageManipulator.manipulateAsync(uri, [], {
+      compress: 0.85,
+      format: ImageManipulator.SaveFormat.JPEG,
+    });
+    return { uri: result.uri };
+  } catch {
+    return null;
+  }
+}
+
+function replaceExt(name: string, newExt: string): string {
+  const dot = name.lastIndexOf(".");
+  const base = dot > 0 ? name.slice(0, dot) : name;
+  return `${base}.${newExt}`;
 }
 
 export async function pickDocument(): Promise<LocalFileInput[]> {

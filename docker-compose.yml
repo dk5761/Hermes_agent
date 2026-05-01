@@ -13,6 +13,12 @@ services:
       - "0.0.0.0:8080:8080"
     volumes:
       - ./data/hermes-home:/opt/data
+      # Gateway writes uploaded images to /app/data/blobs/... in *its*
+      # container then sends that absolute path to Hermes via image.attach.
+      # Hermes lives in a separate filesystem namespace, so we bind the same
+      # host directory at the same path inside Hermes' container — read-only
+      # is sufficient (Hermes only needs to load the bytes for the model).
+      - ./backend/data/blobs:/app/data/blobs:ro
     environment:
       HERMES_UID: ${HERMES_UID:-10000}
       HERMES_GID: ${HERMES_GID:-10000}
