@@ -49,6 +49,7 @@ import {
 } from "@/components/ui";
 import { ApprovalCard } from "@/components/ApprovalCard";
 import { ComposerAttachments } from "@/components/ComposerAttachments";
+import { exportChat } from "@/util/export-chat";
 import { useChatStream } from "@/ws/use-chat-stream";
 import { useChatStore } from "@/state/chat-store";
 import { useTodosUi } from "@/state/todos";
@@ -740,6 +741,40 @@ export default function ChatScreen() {
     sheetRef.current?.dismiss();
   }, []);
 
+  const onExport = useCallback(() => {
+    if (!sessionId || !session) return;
+    const rows = messagesQuery.data?.rows ?? [];
+    if (rows.length === 0) {
+      Alert.alert("Nothing to export", "This chat has no messages yet.");
+      return;
+    }
+    const run = (format: "markdown" | "json") => {
+      void exportChat(session, rows, format).catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : "Export failed";
+        Alert.alert("Export failed", msg);
+      });
+    };
+    if (Platform.OS === "ios") {
+      ActionSheetIOS.showActionSheetWithOptions(
+        {
+          title: "Export format",
+          options: ["Cancel", "Markdown", "JSON"],
+          cancelButtonIndex: 0,
+        },
+        (idx) => {
+          if (idx === 1) run("markdown");
+          else if (idx === 2) run("json");
+        },
+      );
+      return;
+    }
+    Alert.alert("Export format", undefined, [
+      { text: "Markdown", onPress: () => run("markdown") },
+      { text: "JSON", onPress: () => run("json") },
+      { text: "Cancel", style: "cancel" },
+    ]);
+  }, [sessionId, session, messagesQuery.data]);
+
   // ─── render ───────────────────────────────────────────────────────────────
 
   const renderItem = useCallback<ListRenderItem<Row>>(
@@ -1143,13 +1178,20 @@ export default function ChatScreen() {
       </KeyboardAvoidingView>
 
       {/* Quick-actions menu — standardized to 35%. */}
-      <Sheet ref={sheetRef} snapPoints={["35%"]}>
+      <Sheet ref={sheetRef} snapPoints={["42%"]}>
         <Stack gap={2} style={{ paddingVertical: 8 }}>
           <SheetItem
             label="Search in chat"
             onPress={() => {
               dismissSheet();
               onSearchOpen();
+            }}
+          />
+          <SheetItem
+            label="Export"
+            onPress={() => {
+              dismissSheet();
+              onExport();
             }}
           />
           <SheetItem
