@@ -1,0 +1,20 @@
+diff --git a/ReactCommon/react/nativemodule/core/platform/ios/ReactCommon/RCTTurboModuleManager.mm b/ReactCommon/react/nativemodule/core/platform/ios/ReactCommon/RCTTurboModuleManager.mm
+index ac4c5c5c2a0f08e3bb1f128d8344b0c12b0b72d0..cd91981101ac3d0b9a3453ab01870184b96f23c7 100644
+--- a/ReactCommon/react/nativemodule/core/platform/ios/ReactCommon/RCTTurboModuleManager.mm
++++ b/ReactCommon/react/nativemodule/core/platform/ios/ReactCommon/RCTTurboModuleManager.mm
+@@ -1120,8 +1120,13 @@ typedef struct {
+     }
+   }
+ 
+-  if (dispatch_group_wait(moduleInvalidationGroup, dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC))) {
+-    RCTLogError(@"TurboModuleManager: Timed out waiting for modules to be invalidated");
++  // PATCH: bumped 10s → 30s. react-native-worklets' WorkletsModule destroys
++  // every worklet runtime in invalidate, which on a slow JS reload can
++  // exceed 10s in dev (production never reloads, so prod cost = nil).
++  // Also downgraded Error → Warn since reload always succeeds; this is
++  // diagnostic noise, not a failure.
++  if (dispatch_group_wait(moduleInvalidationGroup, dispatch_time(DISPATCH_TIME_NOW, 30 * NSEC_PER_SEC))) {
++    RCTLogWarn(@"TurboModuleManager: Timed out waiting for modules to be invalidated");
+   }
+ 
+   _moduleHolders.clear();
