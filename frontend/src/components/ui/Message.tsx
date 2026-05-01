@@ -495,31 +495,45 @@ interface MessageProps {
   // Latest todo tool_call_id for this session — drives "isLatest" on the
   // TodoPlanCard so older plan cards lose their Pin footer.
   latestTodoToolId?: string | null;
+  // Search-in-chat highlighting. When `searchActive` and `isMatch`, paint an
+  // accent ring around the row. When `searchActive` and not a match, dim the
+  // row so matches stand out.
+  searchActive?: boolean;
+  isMatch?: boolean;
+  isActiveMatch?: boolean;
 }
 
-function MessageInner({ message, sessionId, latestTodoToolId }: MessageProps) {
+function MessageInner({
+  message,
+  sessionId,
+  latestTodoToolId,
+  searchActive,
+  isMatch,
+  isActiveMatch,
+}: MessageProps) {
+  let inner: React.ReactNode = null;
   switch (message.kind) {
     case "user":
-      return <UserRow message={message} />;
+      inner = <UserRow message={message} />;
+      break;
     case "assistant": {
-      // Reasoning-only history rows arrive as { text: "", reasoning: "..." }.
       if (message.text.length === 0 && message.reasoning && message.reasoning.length > 0) {
-        return <ReasoningOnlyRow text={message.reasoning} />;
+        inner = <ReasoningOnlyRow text={message.reasoning} />;
+      } else {
+        inner = <AssistantRow message={message} />;
       }
-      return <AssistantRow message={message} />;
+      break;
     }
     case "tool": {
       if (message.name === "todo" && sessionId) {
         const todos = asTodoItems(message.detail?.todos);
         if (todos) {
-          // History rows persist tool_id under detail.tool_id; live messages
-          // use the chat-store's id (which is itself the tool_call_id).
           const detailToolId =
             typeof message.detail?.tool_id === "string"
               ? (message.detail.tool_id as string)
               : null;
           const ownToolId = detailToolId ?? message.id;
-          return (
+          inner = (
             <TodoPlanCard
               toolCallId={ownToolId}
               sessionId={sessionId}
@@ -533,13 +547,52 @@ function MessageInner({ message, sessionId, latestTodoToolId }: MessageProps) {
               createdAt={message.createdAt}
             />
           );
+          break;
         }
       }
-      return <ToolRow data={message} sessionId={sessionId} />;
+      inner = <ToolRow data={message} sessionId={sessionId} />;
+      break;
     }
     case "error":
-      return <ErrorRow message={message} />;
+      inner = <ErrorRow message={message} />;
+      break;
   }
+
+  if (!searchActive) return <>{inner}</>;
+  return (
+    <SearchHighlightWrap isMatch={!!isMatch} isActiveMatch={!!isActiveMatch}>
+      {inner}
+    </SearchHighlightWrap>
+  );
+}
+
+function SearchHighlightWrap({
+  isMatch,
+  isActiveMatch,
+  children,
+}: {
+  isMatch: boolean;
+  isActiveMatch: boolean;
+  children: React.ReactNode;
+}) {
+  const tokens = useThemeTokens();
+  if (isActiveMatch) {
+    return (
+      <View
+        style={{
+          marginHorizontal: 4,
+          marginVertical: 2,
+          borderRadius: 14,
+          borderWidth: 2,
+          borderColor: tokens.accent,
+          backgroundColor: tokens.accent + "14",
+        }}
+      >
+        {children}
+      </View>
+    );
+  }
+  return <View style={{ opacity: isMatch ? 1 : 0.35 }}>{children}</View>;
 }
 
 export const Message = memo(MessageInner);

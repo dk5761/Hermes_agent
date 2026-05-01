@@ -269,6 +269,12 @@ export default function ChatScreen() {
   const queryClient = useQueryClient();
   const sheetRef = useRef<SheetHandle>(null);
 
+  const flatListRef = useRef<FlatList<Row>>(null);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [matchIdx, setMatchIdx] = useState(0);
+  const searchInputRef = useRef<TextInput>(null);
+
   const sessionState = useChatStore((s) => (sessionId ? s.byId[sessionId] : undefined));
   const latestTodoToolId = useChatStore((s) =>
     sessionId ? (s.latestTodoToolIdById[sessionId] ?? null) : null,
@@ -455,6 +461,73 @@ export default function ChatScreen() {
   // array is reversed.
   const reversed = useMemo(() => rows.slice().reverse(), [rows]);
 
+  // ─── search-in-chat ──────────────────────────────────────────────────────
+  // Match against user/assistant text (case-insensitive substring). Approval,
+  // tool, and error rows are ignored — search is for narrative content.
+  const trimmedQuery = searchQuery.trim();
+  const searchActive = searchOpen && trimmedQuery.length > 0;
+  const matchIds = useMemo<string[]>(() => {
+    if (!searchActive) return [];
+    const q = trimmedQuery.toLowerCase();
+    const out: string[] = [];
+    for (const r of rows) {
+      if (r.rowKind !== "msg") continue;
+      const m = r.data;
+      if (m.kind === "user") {
+        if (m.text.toLowerCase().includes(q)) out.push(m.id);
+      } else if (m.kind === "assistant") {
+        if (m.text.toLowerCase().includes(q)) out.push(m.id);
+        else if (m.reasoning && m.reasoning.toLowerCase().includes(q)) out.push(m.id);
+      }
+    }
+    return out;
+  }, [rows, trimmedQuery, searchActive]);
+  const matchIdSet = useMemo(() => new Set(matchIds), [matchIds]);
+  const totalMatches = matchIds.length;
+  const safeMatchIdx = totalMatches === 0 ? 0 : Math.min(matchIdx, totalMatches - 1);
+  const activeMatchId = totalMatches > 0 ? matchIds[safeMatchIdx] : null;
+
+  // Reset cursor when query changes.
+  useEffect(() => {
+    setMatchIdx(0);
+  }, [trimmedQuery]);
+
+  // Scroll the inverted FlatList to the active match.
+  useEffect(() => {
+    if (!activeMatchId || !flatListRef.current) return;
+    const idx = reversed.findIndex(
+      (r) => r.rowKind === "msg" && r.data.id === activeMatchId,
+    );
+    if (idx < 0) return;
+    try {
+      flatListRef.current.scrollToIndex({
+        index: idx,
+        animated: true,
+        viewPosition: 0.5,
+      });
+    } catch {
+      /* ignore — index may be temporarily out-of-range during re-render */
+    }
+  }, [activeMatchId, reversed]);
+
+  const onSearchOpen = useCallback(() => {
+    setSearchOpen(true);
+    setTimeout(() => searchInputRef.current?.focus(), 50);
+  }, []);
+  const onSearchClose = useCallback(() => {
+    setSearchOpen(false);
+    setSearchQuery("");
+    setMatchIdx(0);
+  }, []);
+  const onMatchPrev = useCallback(() => {
+    if (totalMatches === 0) return;
+    setMatchIdx((i) => (i - 1 + totalMatches) % totalMatches);
+  }, [totalMatches]);
+  const onMatchNext = useCallback(() => {
+    if (totalMatches === 0) return;
+    setMatchIdx((i) => (i + 1) % totalMatches);
+  }, [totalMatches]);
+
   // Send-gating: hold sends while uploads are in flight.
   const uploadingCount = pendingList.filter(
     (p) => p.status === "queued" || p.status === "uploading",
@@ -615,11 +688,15 @@ export default function ChatScreen() {
   const renderItem = useCallback<ListRenderItem<Row>>(
     ({ item }) => {
       if (item.rowKind === "msg") {
+        const isMatch = matchIdSet.has(item.data.id);
         return (
           <MessageRow
             message={item.data}
             sessionId={sessionId}
             latestTodoToolId={latestTodoToolId}
+            searchActive={searchActive}
+            isMatch={isMatch}
+            isActiveMatch={searchActive && item.data.id === activeMatchId}
           />
         );
       }
@@ -670,7 +747,7 @@ export default function ChatScreen() {
       }
       return null;
     },
-    [sessionId, stream, latestTodoToolId],
+    [sessionId, stream, latestTodoToolId, searchActive, activeMatchId, matchIdSet],
   );
 
   const keyExtractor = useCallback((item: Row): string => {
@@ -722,8 +799,91 @@ export default function ChatScreen() {
             </Text>
           </Row>
         }
-        trailing={<NavIcon name="more" onPress={openSheet} />}
+        trailing={
+          <>
+            <NavIcon name="search" onPress={onSearchOpen} />
+            <NavIcon name="more" onPress={openSheet} />
+          </>
+        }
       />
+
+      {searchOpen ? (
+        <View
+          style={{
+            paddingHorizontal: 12,
+            paddingVertical: 8,
+            backgroundColor: tokens.surface,
+            borderBottomWidth: 1,
+            borderBottomColor: tokens.line,
+          }}
+        >
+          <Row gap={8} align="center">
+            <Icon name="search" size={16} color={tokens.ink3} />
+            <TextInput
+              ref={searchInputRef}
+              value={searchQuery}
+              onChangeText={setSearchQuery}
+              placeholder="Search this chat"
+              placeholderTextColor={tokens.ink3}
+              returnKeyType="search"
+              autoCapitalize="none"
+              autoCorrect={false}
+              style={{
+                flex: 1,
+                color: tokens.ink,
+                fontFamily: "Inter_400Regular",
+                fontSize: 14,
+                paddingVertical: 4,
+              }}
+            />
+            {trimmedQuery.length > 0 ? (
+              <Text kind="caption" mono color={tokens.ink3}>
+                {totalMatches === 0 ? "0/0" : `${safeMatchIdx + 1}/${totalMatches}`}
+              </Text>
+            ) : null}
+            <Pressable
+              onPress={onMatchPrev}
+              disabled={totalMatches === 0}
+              hitSlop={6}
+              style={{
+                width: 28,
+                height: 28,
+                alignItems: "center",
+                justifyContent: "center",
+                opacity: totalMatches === 0 ? 0.3 : 1,
+              }}
+            >
+              <Icon name="chevU" size={16} color={tokens.ink2} />
+            </Pressable>
+            <Pressable
+              onPress={onMatchNext}
+              disabled={totalMatches === 0}
+              hitSlop={6}
+              style={{
+                width: 28,
+                height: 28,
+                alignItems: "center",
+                justifyContent: "center",
+                opacity: totalMatches === 0 ? 0.3 : 1,
+              }}
+            >
+              <Icon name="chevD" size={16} color={tokens.ink2} />
+            </Pressable>
+            <Pressable
+              onPress={onSearchClose}
+              hitSlop={6}
+              style={{
+                width: 28,
+                height: 28,
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              <Icon name="close" size={16} color={tokens.ink2} />
+            </Pressable>
+          </Row>
+        </View>
+      ) : null}
 
       {showStatusBanner ? (
         <View
@@ -773,6 +933,7 @@ export default function ChatScreen() {
           </View>
         ) : (
           <FlatList
+            ref={flatListRef}
             inverted
             data={reversed}
             keyExtractor={keyExtractor}
@@ -781,6 +942,15 @@ export default function ChatScreen() {
             keyboardDismissMode="interactive"
             keyboardShouldPersistTaps="handled"
             style={{ flex: 1 }}
+            onScrollToIndexFailed={(info) => {
+              setTimeout(() => {
+                flatListRef.current?.scrollToIndex({
+                  index: info.index,
+                  animated: false,
+                  viewPosition: 0.5,
+                });
+              }, 50);
+            }}
           />
         )}
 
@@ -922,7 +1092,7 @@ export default function ChatScreen() {
             label="Search in chat"
             onPress={() => {
               dismissSheet();
-              // Placeholder — search-in-chat is not built yet.
+              onSearchOpen();
             }}
           />
           <SheetItem
