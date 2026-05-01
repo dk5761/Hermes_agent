@@ -414,12 +414,25 @@ class GatewayClientHandler {
       // holds the stale 8-char hex id. Detect that case and re-create the
       // upstream session, then retry prompt.submit once.
       const reason = errorMessage(err);
-      const sessionGone = /session not found|unknown session|no session/i.test(reason);
-      if (sessionGone) {
-        this.log.warn({ err, hermesSessionId }, "upstream session evicted, recreating and retrying");
+      // Always log the raw reason at warn — historical drift in upstream
+      // error wording was the cause of "old chats stop responding" reports;
+      // the log gives us the exact phrase to extend the regex with later.
+      this.log.warn({ err, hermesSessionId, reason }, "prompt.submit failed");
+      const sessionGone =
+        /session/i.test(reason) &&
+        /not found|unknown|invalid|expired|missing|no such|gone|evicted/i.test(reason);
+      // Hermes' JSON-RPC -32602 (invalid params) is also raised when a
+      // session_id refers to a session that no longer exists.
+      const isInvalidParams = /-32602|invalid params/i.test(reason);
+      if (sessionGone || isInvalidParams) {
+        this.log.warn({ hermesSessionId }, "upstream session evicted, recreating and retrying");
         try {
           await this.clearHermesSessionMapping(sid);
           const fresh = await this.createHermesSession(sid);
+          // Re-apply the model override on the fresh upstream session — the
+          // earlier `config.set` either never ran (we returned before it)
+          // or ran against the dead session.
+          await this.maybeApplySessionModelOverride(sid, fresh, sharedClient);
           await sharedClient.request("prompt.submit", {
             session_id: fresh,
             text: finalText,
@@ -431,7 +444,6 @@ class GatewayClientHandler {
           return;
         }
       }
-      this.log.error({ err }, "prompt.submit failed");
       this.sendControl("control.error", { error: "prompt_submit_failed" });
     }
   }
