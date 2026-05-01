@@ -33,6 +33,7 @@ import {
   getMainModel,
   getStorageUsage,
 } from "@/api/settings";
+import { useNotificationsInbox } from "@/state/notifications-inbox";
 
 function formatBytes(n: number): string {
   if (!n) return "—";
@@ -95,6 +96,9 @@ export default function SettingsIndexScreen() {
     staleTime: 30_000,
     retry: false,
   });
+  const inboxUnread = useNotificationsInbox(
+    (s) => s.items.filter((it) => !it.archived && !it.read).length,
+  );
 
   const onLogout = useCallback(async () => {
     if (refreshToken) await apiLogout(refreshToken);
@@ -222,6 +226,13 @@ export default function SettingsIndexScreen() {
               title="Notifications"
               chevron
               onPress={goto("/(settings)/notifications")}
+            />
+            <ListRow
+              icon="bell"
+              title="Notifications inbox"
+              detail={inboxUnread > 0 ? `${inboxUnread} unread` : undefined}
+              chevron
+              onPress={goto("/(settings)/notifications-inbox")}
             />
             <ListRow
               icon="database"

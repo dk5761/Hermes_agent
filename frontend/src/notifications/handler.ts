@@ -2,6 +2,7 @@ import * as Notifications from "expo-notifications";
 import type { Router } from "expo-router";
 import type { QueryClient } from "@tanstack/react-query";
 import { cronKeys } from "@/api/cron";
+import { useNotificationsInbox } from "@/state/notifications-inbox";
 
 // We expect this exact shape in the `data` field of cron-output pushes; the
 // backend gateway is the single producer so a hand-rolled guard is sufficient.
@@ -51,12 +52,35 @@ function navigateToOutput(router: Router, jobId: string, outputId: string): void
   );
 }
 
+function recordToInbox(
+  notif:
+    | Notifications.Notification
+    | Notifications.NotificationResponse["notification"],
+  receivedAt?: number,
+): void {
+  const req = notif.request;
+  const content = req.content;
+  const dataRaw = content.data;
+  const data: Record<string, unknown> =
+    dataRaw && typeof dataRaw === "object" ? (dataRaw as Record<string, unknown>) : {};
+  useNotificationsInbox.getState().add({
+    id: req.identifier,
+    title: content.title ?? "",
+    body: content.body ?? "",
+    data,
+    receivedAt,
+  });
+}
+
 export function setupNotificationListeners(
   args: SetupArgs,
 ): NotificationListenersHandle {
   const { router, queryClient } = args;
 
   const receivedSub = Notifications.addNotificationReceivedListener((evt) => {
+    // Always log to the inbox so the user has a history of every push the
+    // app saw, regardless of payload type.
+    recordToInbox(evt);
     const data = evt.request.content.data;
     if (!isCronOutputData(data)) return;
     // Refresh outputs list for this job so any open detail screen reflects
@@ -66,6 +90,11 @@ export function setupNotificationListeners(
   });
 
   const responseSub = Notifications.addNotificationResponseReceivedListener((evt) => {
+    // Tapping marks the notification read. add() is idempotent (deduped by
+    // id) so it safely covers the case where the received listener didn't
+    // fire (e.g., killed-state tap).
+    recordToInbox(evt.notification);
+    useNotificationsInbox.getState().markRead(evt.notification.request.identifier);
     const data = evt.notification.request.content.data;
     if (!isCronOutputData(data)) return;
     navigateToOutput(router, data.jobId, data.outputId);
@@ -77,6 +106,8 @@ export function setupNotificationListeners(
   void (async () => {
     const last = await Notifications.getLastNotificationResponseAsync();
     if (!last) return;
+    recordToInbox(last.notification);
+    useNotificationsInbox.getState().markRead(last.notification.request.identifier);
     const data = last.notification.request.content.data;
     if (!isCronOutputData(data)) return;
     navigateToOutput(router, data.jobId, data.outputId);
