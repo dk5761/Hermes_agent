@@ -493,12 +493,11 @@ interface MessageProps {
   message: ChatMessage;
   sessionId: string | null;
   // Latest todo tool_call_id for this session — drives "isLatest" on the
-  // TodoPlanCard so older plan cards lose their footer.
+  // TodoPlanCard so older plan cards lose their Pin footer.
   latestTodoToolId?: string | null;
-  onAddStep?: (content: string) => void;
 }
 
-function MessageInner({ message, sessionId, latestTodoToolId, onAddStep }: MessageProps) {
+function MessageInner({ message, sessionId, latestTodoToolId }: MessageProps) {
   switch (message.kind) {
     case "user":
       return <UserRow message={message} />;
@@ -532,7 +531,6 @@ function MessageInner({ message, sessionId, latestTodoToolId, onAddStep }: Messa
                 latestTodoToolId === ownToolId
               }
               createdAt={message.createdAt}
-              onAddStep={onAddStep}
             />
           );
         }

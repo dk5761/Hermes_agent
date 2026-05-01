@@ -323,19 +323,6 @@ export default function ChatScreen() {
     }
   }, [sessionId, messagesQuery.data, setLatestTodoToolId]);
 
-  // ─── add-step pipeline ───────────────────────────────────────────────────
-  const onAddStep = useCallback(
-    (content: string) => {
-      if (!sessionId) return;
-      // Phrasing chosen so the agent's own todo tool reliably appends rather
-      // than replanning. The trailing instruction nudges it to keep existing
-      // items intact.
-      const text = `Add this step to the plan: "${content}". Keep all existing steps unchanged.`;
-      stream.send(text);
-    },
-    [sessionId, stream],
-  );
-
   // ─── pinned card lookup ──────────────────────────────────────────────────
   const todosPinnedMap = useTodosUi((s) => s.pinnedByCard);
   const pinnedToolId = useMemo<string | null>(() => {
@@ -633,7 +620,6 @@ export default function ChatScreen() {
             message={item.data}
             sessionId={sessionId}
             latestTodoToolId={latestTodoToolId}
-            onAddStep={onAddStep}
           />
         );
       }
@@ -653,7 +639,6 @@ export default function ChatScreen() {
             }}
             sessionId={sessionId}
             latestTodoToolId={latestTodoToolId}
-            onAddStep={onAddStep}
           />
         );
       }
@@ -685,7 +670,7 @@ export default function ChatScreen() {
       }
       return null;
     },
-    [sessionId, stream, latestTodoToolId, onAddStep],
+    [sessionId, stream, latestTodoToolId],
   );
 
   const keyExtractor = useCallback((item: Row): string => {
@@ -787,46 +772,47 @@ export default function ChatScreen() {
             <SkeletonChat count={5} />
           </View>
         ) : (
-          <View style={{ flex: 1 }}>
-            {pinnedToolId && pinnedTodoData && sessionId ? (
-              <View
-                style={{
-                  paddingTop: 4,
-                  paddingBottom: 4,
-                  backgroundColor: tokens.bg,
-                  borderBottomWidth: 1,
-                  borderBottomColor: tokens.lineSoft,
-                  shadowColor: "#000",
-                  shadowOpacity: 0.08,
-                  shadowRadius: 6,
-                  shadowOffset: { width: 0, height: 2 },
-                  elevation: 2,
-                  zIndex: 10,
-                }}
-              >
-                <TodoPlanCard
-                  toolCallId={pinnedToolId}
-                  sessionId={sessionId}
-                  todos={pinnedTodoData.todos}
-                  status={pinnedTodoData.status}
-                  isLatest={latestTodoToolId === pinnedToolId}
-                  createdAt={pinnedTodoData.createdAt}
-                  onAddStep={onAddStep}
-                />
-              </View>
-            ) : null}
-            <FlatList
-              inverted
-              data={reversed}
-              keyExtractor={keyExtractor}
-              renderItem={renderItem}
-              contentContainerStyle={{ paddingVertical: 12 }}
-              keyboardDismissMode="interactive"
-              keyboardShouldPersistTaps="handled"
-              style={{ flex: 1 }}
+          <FlatList
+            inverted
+            data={reversed}
+            keyExtractor={keyExtractor}
+            renderItem={renderItem}
+            contentContainerStyle={{ paddingVertical: 12 }}
+            keyboardDismissMode="interactive"
+            keyboardShouldPersistTaps="handled"
+            style={{ flex: 1 }}
+          />
+        )}
+
+        {/* Pinned plan card sits between the message list and the composer
+            (above the keyboard) so the active plan is always visible
+            without scrolling. */}
+        {pinnedToolId && pinnedTodoData && sessionId ? (
+          <View
+            style={{
+              paddingTop: 4,
+              paddingBottom: 4,
+              backgroundColor: tokens.bg,
+              borderTopWidth: 1,
+              borderTopColor: tokens.lineSoft,
+              shadowColor: "#000",
+              shadowOpacity: 0.08,
+              shadowRadius: 6,
+              shadowOffset: { width: 0, height: -2 },
+              elevation: 4,
+              zIndex: 10,
+            }}
+          >
+            <TodoPlanCard
+              toolCallId={pinnedToolId}
+              sessionId={sessionId}
+              todos={pinnedTodoData.todos}
+              status={pinnedTodoData.status}
+              isLatest={latestTodoToolId === pinnedToolId}
+              createdAt={pinnedTodoData.createdAt}
             />
           </View>
-        )}
+        ) : null}
 
         {sessionId ? <ComposerAttachments appSessionId={sessionId} /> : null}
         {sendHint ? (

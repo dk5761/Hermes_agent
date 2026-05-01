@@ -99,6 +99,3 @@ export type { TodoPlanCardProps } from "./TodoPlanCard";
 
 export { TodoStepRow } from "./TodoStepRow";
 export type { TodoItem, TodoStatus, TodoStepRowProps } from "./TodoStepRow";
-
-export { AddStepSheet } from "./AddStepSheet";
-export type { AddStepSheetProps } from "./AddStepSheet";

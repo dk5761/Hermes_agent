@@ -1,15 +1,15 @@
 /**
  * TodoPlanCard — specialized renderer for tool.call rows where name === "todo".
  *
- * Three pieces of UI state, all local/persisted:
+ * Two pieces of UI state, both local/persisted:
  *   - `collapsedByCard` (per cardKey) → hides body + footer, shows 1-line summary
  *   - `pinnedByCard` (per cardKey, max one per session) → caller can render this
- *      same component sticky above the chat list
- *   - `addOpen` (transient) → drives AddStepSheet visibility
+ *      same component sticky above the composer
  *
- * Footer (Add step / Pin) is only shown for the latest todo in the session.
+ * Footer (Pin button) is only shown for the latest todo in the session.
+ * Step edits / mark-done / reorder are agent-driven (user prompts the agent).
  */
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo } from "react";
 import { Pressable, View } from "react-native";
 import Animated, {
   Easing,
@@ -21,7 +21,6 @@ import Animated, {
 } from "react-native-reanimated";
 import Svg, { Path } from "react-native-svg";
 
-import { AddStepSheet } from "./AddStepSheet";
 import { Icon } from "./Icon";
 import { Row } from "./Row";
 import { Text } from "./Text";
@@ -38,7 +37,6 @@ export interface TodoPlanCardProps {
   status: "running" | "complete" | "error";
   isLatest: boolean;
   createdAt: string;
-  onAddStep?: (content: string) => void;
 }
 
 // ─── helpers ────────────────────────────────────────────────────────────────
@@ -149,7 +147,6 @@ export function TodoPlanCard({
   sessionId,
   todos,
   isLatest,
-  onAddStep,
 }: TodoPlanCardProps) {
   const tokens = useThemeTokens();
   const cardKey = `${sessionId}:${toolCallId}`;
@@ -158,8 +155,6 @@ export function TodoPlanCard({
   const collapsed = useTodosUi((s) => !!s.collapsedByCard[cardKey]);
   const togglePinned = useTodosUi((s) => s.togglePinned);
   const toggleCollapsed = useTodosUi((s) => s.toggleCollapsed);
-
-  const [addOpen, setAddOpen] = useState(false);
 
   const title = useMemo(() => deriveTitle(todos), [todos]);
   const progress = useMemo(() => deriveProgress(todos), [todos]);
@@ -255,26 +250,9 @@ export function TodoPlanCard({
           <Row
             gap={8}
             align="center"
-            justify="space-between"
+            justify="flex-end"
             style={{ paddingHorizontal: 10, paddingVertical: 10 }}
           >
-            <Pressable
-              onPress={() => setAddOpen(true)}
-              disabled={!onAddStep}
-              hitSlop={6}
-              style={{
-                paddingHorizontal: 8,
-                paddingVertical: 6,
-                opacity: onAddStep ? 1 : 0.4,
-              }}
-            >
-              <Row gap={6} align="center">
-                <Icon name="plus" size={14} color={tokens.ink2} />
-                <Text kind="label" color={tokens.ink2}>
-                  Add step
-                </Text>
-              </Row>
-            </Pressable>
             <Pressable
               onPress={() => togglePinned(cardKey, sessionId)}
               hitSlop={6}
@@ -295,17 +273,6 @@ export function TodoPlanCard({
             </Pressable>
           </Row>
         </>
-      ) : null}
-
-      {onAddStep ? (
-        <AddStepSheet
-          visible={addOpen}
-          onCancel={() => setAddOpen(false)}
-          onSubmit={(content) => {
-            setAddOpen(false);
-            onAddStep(content);
-          }}
-        />
       ) : null}
     </View>
   );
