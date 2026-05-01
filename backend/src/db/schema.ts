@@ -36,6 +36,12 @@ export const appSessions = sqliteTable(
     hermesSessionId: text("hermes_session_id"),
     titleOverride: text("title_override"),
     archivedAt: integer("archived_at"),
+    // Per-session model override. When set, gateway-ws issues a `config.set`
+    // (key=model) on Hermes for this session before each prompt.submit, so
+    // the chat uses this model instead of the global default. Both fields
+    // are required together (we can't pick a model without a provider).
+    modelOverride: text("model_override"),
+    providerOverride: text("provider_override"),
     createdAt: integer("created_at").notNull(),
     updatedAt: integer("updated_at").notNull(),
   },

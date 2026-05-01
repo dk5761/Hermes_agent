@@ -353,6 +353,13 @@ class GatewayClientHandler {
       }
     }
 
+    // Apply per-session model override (if any) before forwarding the prompt.
+    // Hermes' tui_gateway accepts `config.set` with key=model, value="<model>
+    // --provider <provider>" — it's an in-memory swap scoped to the session.
+    // Failures here are non-fatal; we log and continue with the prior model
+    // so the user still gets a response, just without the override applied.
+    await this.maybeApplySessionModelOverride(sid, hermesSessionId, sharedClient);
+
     // image.attach must precede prompt.submit so Hermes binds the image to the
     // current turn (per HERMES_CONTRACT.md). Failures here are surfaced as
     // control.error and abort the turn rather than silently dropping images.
@@ -553,6 +560,48 @@ class GatewayClientHandler {
     if (stale) this.reverse.invalidate(stale);
   }
 
+  private async maybeApplySessionModelOverride(
+    appSessionId: string,
+    hermesSessionId: string,
+    sharedClient: import("../hermes/ws-client.js").HermesWsClient,
+  ): Promise<void> {
+    let row: { modelOverride: string | null; providerOverride: string | null } | undefined;
+    try {
+      const rows = await this.deps.db
+        .select({
+          modelOverride: appSessions.modelOverride,
+          providerOverride: appSessions.providerOverride,
+        })
+        .from(appSessions)
+        .where(eq(appSessions.id, appSessionId))
+        .limit(1);
+      row = rows[0];
+    } catch (err) {
+      this.log.warn({ err }, "model_override lookup failed");
+      return;
+    }
+    if (!row?.modelOverride) return;
+
+    // Hermes' parse_model_flags accepts "<model> --provider <provider>".
+    const value = row.providerOverride
+      ? `${row.modelOverride} --provider ${row.providerOverride}`
+      : row.modelOverride;
+    try {
+      await sharedClient.request("config.set", {
+        session_id: hermesSessionId,
+        key: "model",
+        value,
+      });
+    } catch (err) {
+      this.log.warn({ err, hermesSessionId }, "config.set model override failed");
+      // Surface a non-fatal warning to the client so the chat header can flag
+      // that the override didn't apply this turn.
+      this.sendControl("control.warning", {
+        warning: "model_override_apply_failed",
+      });
+    }
+  }
+
   private async maybeAutoTitle(appSessionId: string, userText: string): Promise<void> {
     const trimmed = userText.trim();
     if (!trimmed) return;
@@ -589,7 +638,12 @@ class GatewayClientHandler {
   }
 
   private sendControl(
-    type: "gateway.ready" | "sync.required" | "ack" | "control.error",
+    type:
+      | "gateway.ready"
+      | "sync.required"
+      | "ack"
+      | "control.error"
+      | "control.warning",
     payload?: unknown,
   ): void {
     if (this.socket.readyState !== this.socket.OPEN) return;

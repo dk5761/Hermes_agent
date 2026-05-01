@@ -31,6 +31,15 @@ const patchBody = z
   });
 const idParams = z.object({ id: z.string().min(1) });
 const searchQuery = z.object({ q: z.string().min(1).max(200) });
+const modelOverrideBody = z.union([
+  z.object({
+    clear: z.literal(true),
+  }),
+  z.object({
+    provider: z.string().min(1).max(80),
+    model: z.string().min(1).max(200),
+  }),
+]);
 
 export async function registerSessionsRoutes(
   app: FastifyInstance,
@@ -64,6 +73,8 @@ export async function registerSessionsRoutes(
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
       preview: previews.get(row.id) ?? null,
+      modelOverride: row.modelOverride,
+      providerOverride: row.providerOverride,
     }));
     return reply.send({ sessions: enriched });
   });
@@ -123,6 +134,50 @@ export async function registerSessionsRoutes(
     await db.update(appSessions).set(update).where(eq(appSessions.id, row.id));
     return reply.send({ id: row.id, updated: true });
   });
+
+  // Per-session model override. PUT { provider, model } sets it; PUT { clear: true }
+  // removes it. Override takes effect on the next chat.send (gateway-ws issues a
+  // `config.set` to Hermes for that session before forwarding prompt.submit).
+  app.put(
+    "/sessions/:id/model",
+    { preHandler: requireAuth },
+    async (request, reply) => {
+      const user = request.user;
+      if (!user) return reply.code(401).send({ error: "unauthenticated" });
+      const params = idParams.safeParse(request.params);
+      if (!params.success) return reply.code(400).send({ error: "invalid_params" });
+      const body = modelOverrideBody.safeParse(request.body ?? {});
+      if (!body.success) {
+        return reply
+          .code(400)
+          .send({ error: "invalid_body", details: body.error.flatten() });
+      }
+
+      const rows = await db
+        .select()
+        .from(appSessions)
+        .where(and(eq(appSessions.id, params.data.id), eq(appSessions.userId, user.id)))
+        .limit(1);
+      const row = rows[0];
+      if (!row) return reply.code(404).send({ error: "not_found" });
+
+      const now = Math.floor(Date.now() / 1000);
+      const update: Partial<typeof appSessions.$inferInsert> = { updatedAt: now };
+      if ("clear" in body.data) {
+        update.modelOverride = null;
+        update.providerOverride = null;
+      } else {
+        update.modelOverride = body.data.model;
+        update.providerOverride = body.data.provider;
+      }
+      await db.update(appSessions).set(update).where(eq(appSessions.id, row.id));
+      return reply.send({
+        id: row.id,
+        modelOverride: update.modelOverride ?? null,
+        providerOverride: update.providerOverride ?? null,
+      });
+    },
+  );
 
   app.delete("/sessions/:id", { preHandler: requireAuth }, async (request, reply) => {
     const user = request.user;

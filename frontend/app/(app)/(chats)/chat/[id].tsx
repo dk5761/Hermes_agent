@@ -889,6 +889,27 @@ export default function ChatScreen() {
             <Text kind="caption" color={tokens.ink3}>
               {statusLabel(stream.status, stream.retryInMs)}
             </Text>
+            {session?.modelOverride ? (
+              <View
+                className="bg-accent-bg"
+                style={{
+                  paddingHorizontal: 6,
+                  paddingVertical: 2,
+                  borderRadius: 4,
+                  marginLeft: 4,
+                }}
+              >
+                <Text
+                  kind="micro"
+                  mono
+                  color={tokens.accent}
+                  numberOfLines={1}
+                  style={{ maxWidth: 90 }}
+                >
+                  {session.modelOverride}
+                </Text>
+              </View>
+            ) : null}
           </Row>
         }
         trailing={
@@ -1178,13 +1199,25 @@ export default function ChatScreen() {
       </KeyboardAvoidingView>
 
       {/* Quick-actions menu — standardized to 35%. */}
-      <Sheet ref={sheetRef} snapPoints={["42%"]}>
+      <Sheet ref={sheetRef} snapPoints={["50%"]}>
         <Stack gap={2} style={{ paddingVertical: 8 }}>
           <SheetItem
             label="Search in chat"
             onPress={() => {
               dismissSheet();
               onSearchOpen();
+            }}
+          />
+          <SheetItem
+            label="Switch model for this chat"
+            onPress={() => {
+              dismissSheet();
+              if (sessionId) {
+                router.push({
+                  pathname: "/(settings)/model" as never,
+                  params: { sessionId },
+                } as never);
+              }
             }}
           />
           <SheetItem

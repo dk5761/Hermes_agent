@@ -14,7 +14,7 @@
  */
 import React, { useCallback, useMemo, useRef, useState } from "react";
 import { Pressable, ScrollView, View } from "react-native";
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
@@ -41,6 +41,7 @@ import {
   updateMainModel,
   type ModelListEntry,
 } from "@/api/settings";
+import { listSessions, setSessionModel } from "@/api/sessions";
 
 interface FilterFlags {
   vision: boolean;
@@ -186,6 +187,16 @@ export default function ModelPickerScreen() {
   const qc = useQueryClient();
   const tokens = useThemeTokens();
 
+  // When `?sessionId=…` is present, the picker writes a per-session override
+  // (PUT /sessions/:id/model) instead of the global default. The "Currently
+  // using" hero card and confirm sheet swap to session-scoped copy too.
+  const params = useLocalSearchParams<{ sessionId?: string }>();
+  const sessionId =
+    typeof params.sessionId === "string" && params.sessionId.length > 0
+      ? params.sessionId
+      : null;
+  const isSessionMode = !!sessionId;
+
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState<FilterFlags>({
     vision: false,
@@ -203,6 +214,26 @@ export default function ModelPickerScreen() {
     queryKey: ["settings", "model", "providers"],
     queryFn: getModelProviders,
   });
+  // For session mode, the override comes from the session list cache.
+  const sessionsQ = useQuery({
+    queryKey: ["sessions"] as const,
+    queryFn: listSessions,
+    enabled: isSessionMode,
+  });
+  const sessionRow = useMemo(
+    () =>
+      isSessionMode
+        ? sessionsQ.data?.sessions.find((s) => s.id === sessionId)
+        : undefined,
+    [sessionsQ.data, sessionId, isSessionMode],
+  );
+  const sessionOverride = useMemo(() => {
+    if (!sessionRow?.modelOverride) return null;
+    return {
+      provider: sessionRow.providerOverride ?? "",
+      model: sessionRow.modelOverride,
+    };
+  }, [sessionRow]);
 
   const filterStr = filterToString(filter);
   const listQ = useQuery({
@@ -213,13 +244,36 @@ export default function ModelPickerScreen() {
   // Inline error text in the sheet handles failures — silence the global toast
   // to avoid duplicating the same message in two places.
   const save = useMutation({
-    mutationFn: (m: ModelListEntry) =>
-      updateMainModel(m.provider ?? inferProvider(m, providersQ.data ?? []), m.id),
+    mutationFn: async (m: ModelListEntry) => {
+      const provider = m.provider ?? inferProvider(m, providersQ.data ?? []);
+      if (isSessionMode && sessionId) {
+        await setSessionModel(sessionId, { provider, model: m.id });
+        return { kind: "session" as const, model: m.id, provider };
+      }
+      const updated = await updateMainModel(provider, m.id);
+      return { kind: "global" as const, ...updated };
+    },
     onSuccess: (data) => {
-      qc.setQueryData(["settings", "model"], data);
+      if (data.kind === "global") {
+        qc.setQueryData(["settings", "model"], data);
+      } else {
+        void qc.invalidateQueries({ queryKey: ["sessions"] });
+      }
       sheetRef.current?.dismiss();
       setPending(null);
       showToast(`Model set to ${data.model}`, "success");
+    },
+    meta: { silent: true },
+  });
+
+  const clearOverride = useMutation({
+    mutationFn: () => {
+      if (!sessionId) throw new Error("no sessionId");
+      return setSessionModel(sessionId, { clear: true });
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["sessions"] });
+      showToast("Using global default", "success");
     },
     meta: { silent: true },
   });
@@ -273,9 +327,20 @@ export default function ModelPickerScreen() {
   if (caps?.supports_tools) capsList.push("tools");
   if (caps?.supports_reasoning) capsList.push("reasoning");
 
+  // Header + hero copy adapt to session-mode.
+  const heroLabel = isSessionMode ? "This chat uses" : "Currently using";
+  const heroModel = isSessionMode
+    ? (sessionOverride?.model ?? cur?.model ?? "—")
+    : (cur?.model ?? "—");
+  const heroProvider = isSessionMode
+    ? (sessionOverride?.provider || cur?.provider || "—")
+    : (cur?.provider ?? "—");
+  const navTitle = isSessionMode ? "Model for this chat" : "Main model";
+  const overrideActive = isSessionMode && !!sessionOverride;
+
   return (
     <PhoneSafeArea>
-      <NavBar title="Main model" onBack={() => router.back()} />
+      <NavBar title={navTitle} onBack={() => router.back()} />
       <ScrollView contentContainerStyle={{ paddingBottom: 80 }}>
         <Stack gap={12} style={{ paddingHorizontal: 16, paddingTop: 8, paddingBottom: 12 }}>
           {/* Current */}
@@ -286,13 +351,14 @@ export default function ModelPickerScreen() {
             <Row justify="space-between" align="flex-start">
               <Stack gap={4} style={{ flex: 1, minWidth: 0 }}>
                 <Text kind="micro" className="text-ink-3 uppercase">
-                  Currently using
+                  {heroLabel}
                 </Text>
                 <Text kind="h2" numberOfLines={1}>
-                  {cur?.model ?? "—"}
+                  {heroModel}
                 </Text>
                 <Text kind="caption" mono className="text-ink-3">
-                  {cur?.provider ?? "—"} · {formatCtx(cur?.contextWindow ?? null)} ctx
+                  {heroProvider} ·{" "}
+                  {overrideActive ? "session override" : `${formatCtx(cur?.contextWindow ?? null)} ctx`}
                 </Text>
               </Stack>
               <Row
@@ -330,6 +396,18 @@ export default function ModelPickerScreen() {
               Reasoning
             </Chip>
           </Row>
+
+          {overrideActive ? (
+            <Button
+              kind="secondary"
+              size="sm"
+              full
+              onPress={() => clearOverride.mutate()}
+              disabled={clearOverride.isPending}
+            >
+              {clearOverride.isPending ? "Clearing…" : "Use global default"}
+            </Button>
+          ) : null}
         </Stack>
 
         <Stack gap={18}>
@@ -350,13 +428,19 @@ export default function ModelPickerScreen() {
                   className="bg-surface border border-line overflow-hidden"
                   style={{ marginHorizontal: 16, borderRadius: 12 }}
                 >
-                  {group.models.map((m, i) => (
+                  {group.models.map((m, i) => {
+                    const selectedModel = isSessionMode && sessionOverride
+                      ? sessionOverride.model
+                      : cur?.model;
+                    const selectedProvider = isSessionMode && sessionOverride
+                      ? sessionOverride.provider || group.providerId
+                      : (cur?.provider ?? group.providerId);
+                    return (
                     <ModelRow
                       key={`${group.providerId}:${m.id}`}
                       m={{ ...m, provider: m.provider ?? group.providerId }}
                       selected={
-                        cur?.model === m.id &&
-                        (cur?.provider ?? group.providerId) === group.providerId
+                        selectedModel === m.id && selectedProvider === group.providerId
                       }
                       onPick={onPickModel}
                       accent={tokens.accent}
@@ -368,7 +452,8 @@ export default function ModelPickerScreen() {
                       ink3={tokens.ink3}
                       isLast={i === group.models.length - 1}
                     />
-                  ))}
+                  );
+                  })}
                 </View>
               </Section>
             ))
@@ -380,10 +465,14 @@ export default function ModelPickerScreen() {
       <Sheet ref={sheetRef} snapPoints={["35%"]}>
         <Stack gap={16} style={{ padding: 20 }}>
           <Stack gap={4}>
-            <Text kind="h3">Switch main model?</Text>
+            <Text kind="h3">
+              {isSessionMode ? "Use this model for this chat?" : "Switch main model?"}
+            </Text>
             <Text kind="body" className="text-ink-3">
               {pending
-                ? `New conversations will use ${pending.label || pending.id}. Existing chats keep their current model.`
+                ? isSessionMode
+                  ? `${pending.label || pending.id} will be used for this chat only. Other chats keep their current model.`
+                  : `New conversations will use ${pending.label || pending.id}. Existing chats keep their current model.`
                 : ""}
             </Text>
           </Stack>

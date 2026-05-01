@@ -34,6 +34,22 @@ export async function deleteSession(id: string): Promise<void> {
   await apiFetch(`/sessions/${id}`, { method: "DELETE" });
 }
 
+export interface SessionModelOverrideResponse {
+  id: string;
+  modelOverride: string | null;
+  providerOverride: string | null;
+}
+
+export async function setSessionModel(
+  id: string,
+  body: { provider: string; model: string } | { clear: true },
+): Promise<SessionModelOverrideResponse> {
+  return apiFetch<SessionModelOverrideResponse>(`/sessions/${id}/model`, {
+    method: "PUT",
+    body,
+  });
+}
+
 export async function getMessages(id: string): Promise<HistoryResponse> {
   return apiFetch<HistoryResponse>(`/sessions/${id}/messages`);
 }

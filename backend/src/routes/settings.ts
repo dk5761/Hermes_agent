@@ -140,8 +140,14 @@ const modelUpdateBody = z.object({
 });
 
 const modelListQuery = z.object({
-  provider: z.string().min(1).max(40),
-  filter: z.enum(["vision", "tools", "reasoning"]).optional(),
+  // Optional — when omitted, the endpoint returns the union across every
+  // provider. The frontend picker uses that mode and groups by provider on
+  // the client.
+  provider: z.string().min(1).max(40).optional(),
+  // Comma-separated capability flags. Accepts any non-empty subset of
+  // {vision, tools, reasoning}. Multiple flags AND together (model must
+  // support every selected capability).
+  filter: z.string().max(80).optional(),
   q: z.string().max(80).optional(),
 });
 
@@ -202,13 +208,17 @@ export async function registerSettingsRoutes(
     { preHandler: requireAuth },
     async (_req, reply) => {
       const cat = await cache.get();
+      const envSet = await safeGetEnv(hermesHttp, logger);
+      const available = availableProviderIds(cat, envSet);
       const merged = mergeProviders(cat.providers);
-      const out = merged.map((p) => ({
-        id: p.id,
-        label: p.label,
-        ...(p.envKey ? { envKey: p.envKey } : {}),
-        modelCount: cat.modelsByProvider.get(p.id)?.length ?? 0,
-      }));
+      const out = merged
+        .filter((p) => available.has(p.id))
+        .map((p) => ({
+          id: p.id,
+          label: p.label,
+          ...(p.envKey ? { envKey: p.envKey } : {}),
+          modelCount: cat.modelsByProvider.get(p.id)?.length ?? 0,
+        }));
       return reply.send({ providers: out });
     },
   );
@@ -220,14 +230,39 @@ export async function registerSettingsRoutes(
       const parsed = modelListQuery.safeParse(request.query);
       if (!parsed.success) return reply.code(400).send({ error: "invalid_query" });
       const cat = await cache.get();
-      const list = cat.modelsByProvider.get(parsed.data.provider) ?? [];
-      let filtered = list;
-      if (parsed.data.filter === "vision") {
-        filtered = filtered.filter((m) => m.supportsVision);
-      } else if (parsed.data.filter === "tools") {
-        filtered = filtered.filter((m) => m.supportsTools);
-      } else if (parsed.data.filter === "reasoning") {
-        filtered = filtered.filter((m) => m.supportsReasoning);
+      const envSet = await safeGetEnv(hermesHttp, logger);
+      const available = availableProviderIds(cat, envSet);
+      // No provider → flatten every *available* provider's list (those whose
+      // env keys are set in Hermes). Filtering at the gateway keeps the
+      // payload tight (~4k models → ~tens) and prevents the picker from
+      // surfacing models we can't actually call.
+      type Entry = CatalogModel & { provider: string };
+      let list: Entry[];
+      if (parsed.data.provider) {
+        const p = parsed.data.provider;
+        if (!available.has(p)) {
+          list = [];
+        } else {
+          list = (cat.modelsByProvider.get(p) ?? []).map((m) => ({ ...m, provider: p }));
+        }
+      } else {
+        list = [];
+        for (const [provider, models] of cat.modelsByProvider) {
+          if (!available.has(provider)) continue;
+          for (const m of models) list.push({ ...m, provider });
+        }
+      }
+      let filtered: Entry[] = list;
+      const filterFlags = (parsed.data.filter ?? "")
+        .split(",")
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0);
+      for (const f of filterFlags) {
+        if (f === "vision") filtered = filtered.filter((m) => m.supportsVision);
+        else if (f === "tools") filtered = filtered.filter((m) => m.supportsTools);
+        else if (f === "reasoning") filtered = filtered.filter((m) => m.supportsReasoning);
+        // Unknown tokens are ignored — keeps the API forward-compatible if
+        // the frontend adds new flags before the backend knows about them.
       }
       if (parsed.data.q) {
         const q = parsed.data.q.toLowerCase();
@@ -718,6 +753,28 @@ function mergeProviders(dynamic: ReadonlyArray<CatalogProvider>): CatalogProvide
 // /api/env parser (defensive)
 // ---------------------------------------------------------------------------
 
+// A provider is "available" (i.e. can actually be used to call a model)
+// iff every env key it declares is present in Hermes' env, OR it declares
+// no keys at all (e.g. local Ollama). Used to filter the model picker so
+// users don't see thousands of models from providers they haven't keyed.
+function availableProviderIds(
+  cat: { providers: ReadonlyArray<{ id: string }>; providerEnvKeys: Map<string, string[]> },
+  envSet: ReadonlySet<string>,
+): Set<string> {
+  const out = new Set<string>();
+  for (const p of cat.providers) {
+    const keys = cat.providerEnvKeys.get(p.id);
+    if (!keys || keys.length === 0) {
+      out.add(p.id);
+      continue;
+    }
+    if (keys.every((k) => envSet.has(k))) {
+      out.add(p.id);
+    }
+  }
+  return out;
+}
+
 async function safeGetEnv(http: HermesHttpClient, log: AppLogger): Promise<Set<string>> {
   try {
     const raw = await http.getEnv();
@@ -753,8 +810,9 @@ function parseEnvResponse(raw: unknown): Set<string> {
       if (v.length > 0) result.add(k);
     } else if (v && typeof v === "object" && !Array.isArray(v)) {
       const o = v as Record<string, unknown>;
-      const setFlag = o["set"];
-      const value = o["value"];
+      // Newer Hermes uses `is_set`; older builds used `set`. Accept both.
+      const setFlag = o["set"] ?? o["is_set"];
+      const value = o["value"] ?? o["redacted_value"];
       if (setFlag === true) result.add(k);
       else if (typeof value === "string" && value.length > 0) result.add(k);
     }

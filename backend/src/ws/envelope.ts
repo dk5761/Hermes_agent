@@ -12,7 +12,12 @@ export interface GatewayEventEnvelope<T = unknown> {
 
 export interface GatewayControlMessage {
   // No id — control envelopes are not part of the resumable log.
-  type: "gateway.ready" | "sync.required" | "ack" | "control.error";
+  type:
+    | "gateway.ready"
+    | "sync.required"
+    | "ack"
+    | "control.error"
+    | "control.warning";
   payload?: unknown;
 }
 

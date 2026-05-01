@@ -1,6 +1,6 @@
 import { loadConfig } from "./config.js";
 import { buildLogger } from "./logger.js";
-import { openDb } from "./db/client.js";
+import { openDb, runMigrations } from "./db/client.js";
 import { buildBlobStore } from "./storage/factory.js";
 import { buildServer } from "./server.js";
 import { bootstrapSingleUserIfEmpty } from "./auth/bootstrap.js";
@@ -18,6 +18,18 @@ async function main(): Promise<void> {
   const config = loadConfig();
   const logger = buildLogger(config);
   const dbHandle = openDb(config.DATABASE_URL);
+
+  // Apply pending migrations on every boot. drizzle's migrator is idempotent
+  // — it tracks applied versions in __drizzle_migrations. This makes
+  // `pnpm db:migrate` redundant in Docker (still in the CMD as a belt-and-
+  // braces) and removes the manual step for host-mode dev.
+  try {
+    runMigrations(dbHandle.db);
+    logger.info("db migrations up to date");
+  } catch (err) {
+    logger.error({ err }, "db migrations failed");
+    throw err;
+  }
 
   await bootstrapSingleUserIfEmpty({
     db: dbHandle.db,

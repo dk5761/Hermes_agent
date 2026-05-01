@@ -26,6 +26,9 @@ export interface SessionDto {
   createdAt: number;
   updatedAt: number;
   preview: string | null;
+  // Per-session model override. Both null = use the global default.
+  modelOverride: string | null;
+  providerOverride: string | null;
 }
 
 export interface SessionsListResponse {
