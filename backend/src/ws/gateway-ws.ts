@@ -402,6 +402,28 @@ class GatewayClientHandler {
         text: finalText,
       });
     } catch (err) {
+      // Hermes' tui_gateway sessions live in-memory only — they vanish on
+      // Hermes restart or after idle eviction, but our app_sessions row still
+      // holds the stale 8-char hex id. Detect that case and re-create the
+      // upstream session, then retry prompt.submit once.
+      const reason = errorMessage(err);
+      const sessionGone = /session not found|unknown session|no session/i.test(reason);
+      if (sessionGone) {
+        this.log.warn({ err, hermesSessionId }, "upstream session evicted, recreating and retrying");
+        try {
+          await this.clearHermesSessionMapping(sid);
+          const fresh = await this.createHermesSession(sid);
+          await sharedClient.request("prompt.submit", {
+            session_id: fresh,
+            text: finalText,
+          });
+          return;
+        } catch (retryErr) {
+          this.log.error({ err: retryErr }, "prompt.submit retry after recreate failed");
+          this.sendControl("control.error", { error: "prompt_submit_failed" });
+          return;
+        }
+      }
       this.log.error({ err }, "prompt.submit failed");
       this.sendControl("control.error", { error: "prompt_submit_failed" });
     }
@@ -512,6 +534,23 @@ class GatewayClientHandler {
       .where(eq(appSessions.id, appSessionId));
     this.reverse.set(hsid, appSessionId);
     return hsid;
+  }
+
+  // Drop the stale hermes_session_id from the app_sessions row + reverse cache.
+  // Used when upstream rejects a session id that no longer exists in tui_gateway
+  // (e.g. after Hermes restart or idle eviction).
+  private async clearHermesSessionMapping(appSessionId: string): Promise<void> {
+    const rows = await this.deps.db
+      .select({ hermesSessionId: appSessions.hermesSessionId })
+      .from(appSessions)
+      .where(eq(appSessions.id, appSessionId))
+      .limit(1);
+    const stale = rows[0]?.hermesSessionId;
+    await this.deps.db
+      .update(appSessions)
+      .set({ hermesSessionId: null, updatedAt: Math.floor(Date.now() / 1000) })
+      .where(eq(appSessions.id, appSessionId));
+    if (stale) this.reverse.invalidate(stale);
   }
 
   private async maybeAutoTitle(appSessionId: string, userText: string): Promise<void> {
@@ -663,4 +702,15 @@ async function maybePersistHistory(
   } catch (err) {
     log.warn({ err, kind, upstreamType }, "failed to persist chat history row");
   }
+}
+
+// Best-effort string extraction from arbitrary thrown values for log + match.
+function errorMessage(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (typeof err === "string") return err;
+  if (err && typeof err === "object" && "message" in err) {
+    const m = (err as { message: unknown }).message;
+    if (typeof m === "string") return m;
+  }
+  return String(err);
 }

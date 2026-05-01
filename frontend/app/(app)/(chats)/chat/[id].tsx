@@ -297,7 +297,39 @@ export default function ChatScreen() {
     const apiRows: HistoryRow[] = messagesQuery.data?.rows ?? [];
     if (!apiRows.length) return [];
     const out: Row[] = [];
+    // Fold each `reasoning` row into the *next* `assistant.message` row's
+    // reasoning field so we render a single bubble with a "Show reasoning"
+    // toggle instead of two stacked cards. If the reasoning text is identical
+    // to the assistant text (some models echo the answer into reasoning),
+    // drop it entirely.
+    let pendingReasoning: string | null = null;
     for (const r of apiRows) {
+      if (r.kind === "reasoning") {
+        const text = pickString(r.payload, "text");
+        if (text) pendingReasoning = text;
+        continue;
+      }
+      if (r.kind === "assistant.message" && pendingReasoning) {
+        const text = pickString(r.payload, "text");
+        const explicitReasoning =
+          pickString(r.payload, "reasoning") ||
+          pickString(r.payload, "reasoning_content");
+        // Prefer reasoning embedded in the assistant payload; else attach the
+        // pending one. Drop if it duplicates the visible text.
+        const merged = explicitReasoning || (pendingReasoning !== text ? pendingReasoning : "");
+        const synthetic: HistoryRow = {
+          ...r,
+          payload: { ...r.payload, reasoning: merged },
+        };
+        const ui = historyRowToUiRow(synthetic);
+        if (ui) out.push(ui);
+        pendingReasoning = null;
+        continue;
+      }
+      // Non-assistant follow-up — pending reasoning has no anchor; discard it.
+      if (pendingReasoning && r.kind !== "assistant.message") {
+        pendingReasoning = null;
+      }
       const ui = historyRowToUiRow(r);
       if (ui) out.push(ui);
     }

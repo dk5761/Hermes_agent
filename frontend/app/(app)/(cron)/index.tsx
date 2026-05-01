@@ -20,7 +20,7 @@ import {
   View,
   type ListRenderItem,
 } from "react-native";
-import { useRouter } from "expo-router";
+import { useFocusEffect, useRouter } from "expo-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as Haptics from "expo-haptics";
 
@@ -71,11 +71,22 @@ export default function CronListScreen() {
   const jobsQuery = useQuery({
     queryKey: cronKeys.jobs(),
     queryFn: listJobs,
+    // Refetch on every mount (back-pop or first open) and when the data goes
+    // stale on focus (see useFocusEffect below). When a job is currently
+    // running, poll every 5s so its state pill updates without manual refresh.
+    refetchOnMount: "always",
+    refetchInterval: (query) => {
+      const data = query.state.data as { jobs: CronJob[] } | undefined;
+      const running = data?.jobs?.some((j) => isRunning(j)) ?? false;
+      return running ? 5_000 : false;
+    },
   });
 
   const invalidateJobs = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: cronKeys.jobs() });
   }, [queryClient]);
+
+  useFocusEffect(useCallback(() => invalidateJobs(), [invalidateJobs]));
 
   // Long-press actions are wired here so the row can stay a pure presentation
   // component. Each mutation is fire-and-forget — the global toast handler

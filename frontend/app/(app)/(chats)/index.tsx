@@ -22,7 +22,8 @@ import {
   View,
   type ListRenderItem,
 } from "react-native";
-import { useRouter } from "expo-router";
+import { useFocusEffect, useRouter } from "expo-router";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as Haptics from "expo-haptics";
 
@@ -70,13 +71,30 @@ export default function SessionsScreen() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const tokens = useThemeTokens();
+  const insets = useSafeAreaInsets();
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<FilterKey>("all");
+
+  // Floating tab bar consumes ~60pt above the safe-area home indicator.
+  // FAB sits 16pt above that.
+  const fabBottom = Math.max(insets.bottom, 12) + 60 + 16;
 
   const sessionsQuery = useQuery({
     queryKey: QUERY_KEY,
     queryFn: listSessions,
+    // Refetch every time the screen mounts (i.e. user navigates back to the
+    // tab). Catches title/preview changes from the chat screen even if the
+    // chat-screen-side invalidation didn't fire.
+    refetchOnMount: "always",
   });
+
+  // Refetch on tab focus too — covers the case where the screen is mounted
+  // but the user was on a different tab and just switched back.
+  useFocusEffect(
+    useCallback(() => {
+      void queryClient.invalidateQueries({ queryKey: QUERY_KEY });
+    }, [queryClient]),
+  );
 
   // Reach into the chat-store directly so we re-render when streaming or
   // approvals change. We only need a thin derived view, not the full state.
@@ -376,7 +394,7 @@ export default function SessionsScreen() {
         style={{
           position: "absolute",
           right: 20,
-          bottom: 80,
+          bottom: fabBottom,
           width: 56,
           height: 56,
           borderRadius: 28,

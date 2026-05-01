@@ -18,7 +18,7 @@
  */
 import { useCallback, useMemo } from "react";
 import { Alert, RefreshControl, ScrollView, View } from "react-native";
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
@@ -64,12 +64,26 @@ export default function CronJobDetailScreen() {
     queryKey: cronKeys.job(jobId),
     queryFn: () => getJob(jobId),
     enabled: jobId.length > 0,
+    refetchOnMount: "always",
+    // While the job is running, refetch every 3s so the state pill flips
+    // from "running" → "enabled" automatically when execution completes.
+    refetchInterval: (query) => {
+      const data = query.state.data as CronJob | undefined;
+      return data?.state === "running" ? 3_000 : false;
+    },
   });
 
   const outputsQuery = useQuery({
     queryKey: cronKeys.outputs(jobId),
     queryFn: () => listOutputs(jobId),
     enabled: jobId.length > 0,
+    refetchOnMount: "always",
+    // Same gating as jobQuery — only poll while a run is active so a fresh
+    // output appears in the list within ~5s of completing.
+    refetchInterval: () => {
+      const job = queryClient.getQueryData<CronJob>(cronKeys.job(jobId));
+      return job?.state === "running" ? 5_000 : false;
+    },
   });
 
   const job = jobQuery.data;
@@ -77,7 +91,10 @@ export default function CronJobDetailScreen() {
   const invalidateJob = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: cronKeys.jobs() });
     void queryClient.invalidateQueries({ queryKey: cronKeys.job(jobId) });
+    void queryClient.invalidateQueries({ queryKey: cronKeys.outputs(jobId) });
   }, [jobId, queryClient]);
+
+  useFocusEffect(useCallback(() => invalidateJob(), [invalidateJob]));
 
   const pauseMut = useMutation({
     mutationFn: () => pauseJob(jobId),

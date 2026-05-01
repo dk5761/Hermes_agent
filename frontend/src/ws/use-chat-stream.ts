@@ -54,6 +54,12 @@ export function useChatStream(appSessionId: string | null): ChatStreamApi {
 
     const offEvent = client.onEvent((env) => {
       applyEnvelope(appSessionId, env);
+      // Invalidate the sessions list when a turn completes so the list's
+      // preview/title reflects the latest message without a manual refresh.
+      // (Sessions list also refetches on tab focus as a safety net.)
+      if (env.type === "message.complete" || env.type === "gateway.user.message") {
+        void queryClient.invalidateQueries({ queryKey: ["sessions"] });
+      }
     });
     const offStatus = client.onStatus((s, info) => {
       setStatus(s);
