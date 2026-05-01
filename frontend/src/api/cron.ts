@@ -87,6 +87,77 @@ export async function listNotifyPrefs(): Promise<CronNotifyPrefsResponse> {
   return data;
 }
 
+// ─── mutations (Stage 7) ────────────────────────────────────────────────
+//
+// Hermes accepts arbitrary additional fields on create/update; we expose only
+// the ones the UI actively writes (name, prompt, schedule, deliver, model,
+// enabled_toolsets, workdir). Unknown fields are dropped client-side rather
+// than leaked through.
+
+export interface CronJobInput {
+  name: string;
+  prompt: string;
+  /** Cron expression string (e.g. "0 9 * * 1-5"). */
+  schedule: string;
+  /** "origin" | "local" | "telegram" | "discord" — backend validates. */
+  deliver?: string | null;
+  model?: string | null;
+  enabled_toolsets?: string[] | null;
+  workdir?: string | null;
+  notifyOnComplete?: boolean;
+}
+
+export type CronJobUpdate = Partial<CronJobInput>;
+
+export async function createJob(input: CronJobInput): Promise<CronJob> {
+  const data = await apiFetch<CronJob>("/cron/jobs", {
+    method: "POST",
+    body: input,
+  });
+  return asJob(data);
+}
+
+export async function updateJob(
+  id: string,
+  patch: CronJobUpdate,
+): Promise<CronJob> {
+  const data = await apiFetch<CronJob>(`/cron/jobs/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    body: patch,
+  });
+  return asJob(data);
+}
+
+export async function pauseJob(id: string): Promise<CronJob> {
+  const data = await apiFetch<CronJob>(
+    `/cron/jobs/${encodeURIComponent(id)}/pause`,
+    { method: "POST" },
+  );
+  return asJob(data);
+}
+
+export async function resumeJob(id: string): Promise<CronJob> {
+  const data = await apiFetch<CronJob>(
+    `/cron/jobs/${encodeURIComponent(id)}/resume`,
+    { method: "POST" },
+  );
+  return asJob(data);
+}
+
+export async function triggerJob(id: string): Promise<CronJob> {
+  const data = await apiFetch<CronJob>(
+    `/cron/jobs/${encodeURIComponent(id)}/trigger`,
+    { method: "POST" },
+  );
+  return asJob(data);
+}
+
+export async function deleteJob(id: string): Promise<void> {
+  await apiFetch<void>(`/cron/jobs/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+}
+
 // Centralized React Query keys — co-located with the client so callers can't
 // drift from the actual endpoints.
 export const cronKeys = {

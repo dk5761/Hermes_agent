@@ -1,12 +1,11 @@
-import { Text, View } from "react-native";
-import { Screen } from "@/components/Screen";
+/**
+ * /cron/[jobId]/edit — thin route wrapper around the shared CronEditor.
+ * Hydrates the form from the existing job's detail query.
+ */
+import { useLocalSearchParams } from "expo-router";
+import { CronEditor } from "@/components/cron/CronEditor";
 
-export default function CronEditStub() {
-  return (
-    <Screen>
-      <View style={{ padding: 16 }}>
-        <Text style={{ color: "#888" }}>(stub — built in Stage 7)</Text>
-      </View>
-    </Screen>
-  );
+export default function CronEditScreen(): React.ReactElement {
+  const params = useLocalSearchParams<{ jobId: string }>();
+  return <CronEditor mode="edit" jobId={params.jobId ?? ""} />;
 }

@@ -1,12 +1,9 @@
-import { Text, View } from "react-native";
-import { Screen } from "@/components/Screen";
+/**
+ * /cron/new — thin route wrapper around the shared CronEditor.
+ * The component owns all the state, validation, and mutations.
+ */
+import { CronEditor } from "@/components/cron/CronEditor";
 
-export default function CronNewStub() {
-  return (
-    <Screen>
-      <View style={{ padding: 16 }}>
-        <Text style={{ color: "#888" }}>(stub — built in Stage 7)</Text>
-      </View>
-    </Screen>
-  );
+export default function CronNewScreen(): React.ReactElement {
+  return <CronEditor mode="create" />;
 }

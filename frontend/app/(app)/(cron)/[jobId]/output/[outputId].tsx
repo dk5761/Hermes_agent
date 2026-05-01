@@ -1,23 +1,36 @@
+/**
+ * Cron output viewer — Stage 7 redesign.
+ *
+ * Visual target: design/screens-2.jsx::CronOutput (lines 151-188).
+ *
+ * Renders a single cron output as Markdown using the shared MarkdownView
+ * component. The "Re-run with this output as context" button is a
+ * placeholder — backend doesn't yet expose that endpoint, so we surface
+ * a clear "Coming soon" alert rather than ship a dead control.
+ */
 import { useCallback } from "react";
+import { Alert, RefreshControl, ScrollView, View } from "react-native";
+import { useLocalSearchParams, useRouter } from "expo-router";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+
 import {
-  RefreshControl,
-  ScrollView,
-  StyleSheet,
+  Button,
+  EmptyState,
+  MarkdownView,
+  NavBar,
+  PhoneSafeArea,
+  Row,
+  Stack,
   Text,
-  View,
-} from "react-native";
-import { Stack, useLocalSearchParams, useRouter } from "expo-router";
-import { useQuery } from "@tanstack/react-query";
-import { Screen } from "@/components/Screen";
-import { Spinner } from "@/components/Spinner";
-import { Button } from "@/components/Button";
-import { MarkdownView } from "@/components/ui";
-import { cronKeys, getOutput } from "@/api/cron";
-import { BORDER, MUTED, PANEL, TEXT } from "@/config";
-import { toDate } from "@/util/time";
+  useThemeTokens,
+} from "@/components/ui";
+import { cronKeys, getOutput, triggerJob } from "@/api/cron";
+import { formatRelative, toDate } from "@/util/time";
 
 export default function CronOutputDetailScreen() {
   const router = useRouter();
+  const queryClient = useQueryClient();
+  const tokens = useThemeTokens();
   const params = useLocalSearchParams<{ jobId: string; outputId: string }>();
   const jobId = params.jobId ?? "";
   const outputId = params.outputId ?? "";
@@ -28,80 +41,115 @@ export default function CronOutputDetailScreen() {
     enabled: jobId.length > 0 && outputId.length > 0,
   });
 
-  const onOpenJob = useCallback(() => {
-    router.push({ pathname: "/(cron)/[jobId]", params: { jobId } });
-  }, [jobId, router]);
+  const reRunMut = useMutation({
+    mutationFn: () => triggerJob(jobId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: cronKeys.outputs(jobId) });
+      void queryClient.invalidateQueries({ queryKey: cronKeys.jobs() });
+      void queryClient.invalidateQueries({ queryKey: cronKeys.job(jobId) });
+    },
+  });
 
-  const created = outputQuery.data ? toDate(outputQuery.data.createdAt) : null;
+  const onReRun = useCallback(() => {
+    reRunMut.mutate();
+  }, [reRunMut]);
+
+  const onReRunWithContext = useCallback(() => {
+    Alert.alert(
+      "Coming soon",
+      "Re-running with this output as context isn't supported yet.",
+    );
+  }, []);
+
+  const data = outputQuery.data;
+  const created = data ? toDate(data.createdAt) : null;
+  const subtitle =
+    created && data ? formatRelative(data.createdAt) : "Output";
+
+  if (!data) {
+    return (
+      <PhoneSafeArea>
+        <NavBar title="Output" onBack={() => router.back()} />
+        {outputQuery.isError ? (
+          <EmptyState
+            icon="close"
+            title="Failed to load output"
+            body={(outputQuery.error as Error | undefined)?.message}
+            action={
+              <Button kind="secondary" onPress={() => outputQuery.refetch()}>
+                Retry
+              </Button>
+            }
+          />
+        ) : null}
+      </PhoneSafeArea>
+    );
+  }
 
   return (
-    <Screen flat>
-      <Stack.Screen options={{ title: "Output" }} />
-      {outputQuery.isLoading ? (
-        <Spinner />
-      ) : outputQuery.isError || !outputQuery.data ? (
-        <View style={styles.errorWrap}>
-          <Text style={styles.error}>Failed to load output.</Text>
-          <Button label="Retry" onPress={() => outputQuery.refetch()} />
-        </View>
-      ) : (
-        <ScrollView
-          contentContainerStyle={styles.scroll}
-          refreshControl={
-            <RefreshControl
-              refreshing={outputQuery.isFetching}
-              onRefresh={() => outputQuery.refetch()}
-              tintColor={MUTED}
-            />
-          }
-        >
-          <View style={styles.topBar}>
-            <View style={styles.topMeta}>
-              <Text style={styles.metaLabel}>generated</Text>
-              <Text style={styles.metaValue}>
-                {created ? created.toLocaleString() : "(unknown)"}
-              </Text>
-            </View>
-            <Button label="Open job" variant="secondary" compact onPress={onOpenJob} />
+    <PhoneSafeArea>
+      <NavBar
+        title="Output"
+        subtitle={subtitle}
+        onBack={() => router.back()}
+        trailing={
+          <Button
+            size="sm"
+            kind="ghost"
+            onPress={onReRun}
+            disabled={reRunMut.isPending}
+          >
+            {reRunMut.isPending ? "Running…" : "Re-run"}
+          </Button>
+        }
+      />
+      <ScrollView
+        contentContainerStyle={{
+          paddingHorizontal: 16,
+          paddingTop: 8,
+          paddingBottom: 60,
+        }}
+        refreshControl={
+          <RefreshControl
+            refreshing={outputQuery.isFetching}
+            onRefresh={() => outputQuery.refetch()}
+            tintColor={tokens.ink3}
+          />
+        }
+      >
+        <Stack gap={12}>
+          {/* Top metadata strip — timestamp + length. Mirrors the design's
+              compact "From job" card minus the job-name line, which would
+              be redundant here (the user just navigated from the job). */}
+          <Row gap={8} align="center" justify="space-between">
+            <Text kind="caption" mono color={tokens.ink3}>
+              {created ? created.toLocaleString() : "(unknown time)"}
+            </Text>
+            <Text kind="caption" mono color={tokens.ink3}>
+              {data.content.length.toLocaleString()} chars
+            </Text>
+          </Row>
+          <View
+            style={{
+              backgroundColor: tokens.surface,
+              borderRadius: 14,
+              borderWidth: 1,
+              borderColor: tokens.line,
+              padding: 14,
+            }}
+          >
+            <MarkdownView text={data.content} />
           </View>
-          <View style={styles.body}>
-            <MarkdownView text={outputQuery.data.content} />
-          </View>
-        </ScrollView>
-      )}
-    </Screen>
+          <Button
+            kind="secondary"
+            full
+            leftIcon="refresh"
+            onPress={onReRunWithContext}
+          >
+            Re-run with this output as context
+          </Button>
+        </Stack>
+      </ScrollView>
+    </PhoneSafeArea>
   );
 }
-
-const styles = StyleSheet.create({
-  scroll: { padding: 16, paddingBottom: 32, gap: 12 },
-  topBar: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    backgroundColor: PANEL,
-    borderColor: BORDER,
-    borderWidth: 1,
-    borderRadius: 10,
-    padding: 12,
-    gap: 12,
-  },
-  topMeta: { flex: 1 },
-  metaLabel: {
-    color: MUTED,
-    fontSize: 11,
-    fontWeight: "700",
-    textTransform: "uppercase",
-    letterSpacing: 0.5,
-  },
-  metaValue: { color: TEXT, fontSize: 14 },
-  body: {
-    backgroundColor: PANEL,
-    borderColor: BORDER,
-    borderWidth: 1,
-    borderRadius: 10,
-    padding: 12,
-  },
-  errorWrap: { padding: 16, gap: 12 },
-  error: { color: "#FCA5A5", fontSize: 14 },
-});
