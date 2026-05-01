@@ -114,7 +114,14 @@ function pickString(p: Record<string, unknown>, key: string): string {
 }
 
 // Convert a permanent chat_history row into a UI Row.
-function historyRowToUiRow(r: HistoryRow): Row | null {
+//
+// `resolvedApproval` flags whether an approval.* row should be rendered as
+// resolved (compact pill) vs. still-pending (full ApprovalCard). The chat
+// screen passes `true` for any approval row that has *any* row after it in
+// history — Hermes can't continue past an open approval, so anything after
+// proves the request was answered. Live `pendingApprovals` overlays the
+// last-row case and replaces the history version via requestId match.
+function historyRowToUiRow(r: HistoryRow, resolvedApproval: boolean): Row | null {
   const iso = new Date(r.createdAt * 1000).toISOString();
   const p = r.payload;
   switch (r.kind) {
@@ -206,6 +213,7 @@ function historyRowToUiRow(r: HistoryRow): Row | null {
           prompt,
           raw: p,
           createdAt: iso,
+          resolved: resolvedApproval,
         },
       };
     }
@@ -346,48 +354,97 @@ export default function ChatScreen() {
     const apiRows: HistoryRow[] = messagesQuery.data?.rows ?? [];
     if (!apiRows.length) return [];
     const out: Row[] = [];
-    // Fold each `reasoning` row into the *next* `assistant.message` row's
-    // reasoning field so we render a single bubble with a "Show reasoning"
-    // toggle instead of two stacked cards. If the reasoning text is identical
-    // to the assistant text (some models echo the answer into reasoning),
-    // drop it entirely.
+    // Reasoning placement (option B): a `reasoning` row folds into the bubble
+    // of the *immediately next* `assistant.message` (becomes its
+    // collapsible "Show reasoning"). Otherwise it renders inline at its own
+    // position — so mid-turn thinking around tool calls stays visible.
     let pendingReasoning: string | null = null;
-    for (const r of apiRows) {
+    for (let i = 0; i < apiRows.length; i++) {
+      const r = apiRows[i];
       if (r.kind === "reasoning") {
         const text = pickString(r.payload, "text");
-        if (text) pendingReasoning = text;
+        if (!text) continue;
+        const next = apiRows[i + 1];
+        if (next && next.kind === "assistant.message") {
+          // Defer — attach to the next assistant.message.
+          pendingReasoning = text;
+        } else {
+          // Render inline as its own reasoning-only block.
+          const ui = historyRowToUiRow(r, false);
+          if (ui) out.push(ui);
+        }
         continue;
       }
-      if (r.kind === "assistant.message" && pendingReasoning) {
+      if (r.kind === "assistant.message") {
         const text = pickString(r.payload, "text");
         const explicitReasoning =
           pickString(r.payload, "reasoning") ||
           pickString(r.payload, "reasoning_content");
-        // Prefer reasoning embedded in the assistant payload; else attach the
-        // pending one. Drop if it duplicates the visible text.
-        const merged = explicitReasoning || (pendingReasoning !== text ? pendingReasoning : "");
+        // Prefer reasoning embedded in the payload; else use the pending one.
+        // Drop if it duplicates the visible text.
+        const merged =
+          explicitReasoning ||
+          (pendingReasoning && pendingReasoning !== text ? pendingReasoning : "");
         const synthetic: HistoryRow = {
           ...r,
           payload: { ...r.payload, reasoning: merged },
         };
-        const ui = historyRowToUiRow(synthetic);
+        const ui = historyRowToUiRow(synthetic, false);
         if (ui) out.push(ui);
         pendingReasoning = null;
         continue;
       }
-      // Non-assistant follow-up — pending reasoning has no anchor; discard it.
-      if (pendingReasoning && r.kind !== "assistant.message") {
+      // Defensive: look-ahead said next was assistant.message but we got
+      // something else (shouldn't happen since look-ahead is exact). Flush
+      // the pending reasoning inline so we don't lose it.
+      if (pendingReasoning) {
+        out.push({
+          rowKind: "msg",
+          data: {
+            kind: "assistant",
+            id: `hist-r-orphan-${i}`,
+            text: "",
+            reasoning: pendingReasoning,
+            createdAt: new Date(r.createdAt * 1000).toISOString(),
+          },
+        });
         pendingReasoning = null;
       }
-      const ui = historyRowToUiRow(r);
+      // Approval rows are resolved iff anything exists after them in history.
+      const isLast = i === apiRows.length - 1;
+      const resolvedApproval = !isLast;
+      const ui = historyRowToUiRow(r, resolvedApproval);
       if (ui) out.push(ui);
+    }
+    // Tail: a reasoning row at the very end with nothing after it. Surface
+    // inline rather than dropping silently.
+    if (pendingReasoning) {
+      out.push({
+        rowKind: "msg",
+        data: {
+          kind: "assistant",
+          id: "hist-r-tail",
+          text: "",
+          reasoning: pendingReasoning,
+          createdAt: new Date().toISOString(),
+        },
+      });
     }
     return out;
   }, [messagesQuery.data]);
 
   const rows = useMemo<Row[]>(() => {
     const live = buildRows(sessionState);
-    return [...historyRows, ...live];
+    // Live `pendingApprovals` is the source of truth for any approval still
+    // open. If the same requestId also appears in history, drop the history
+    // copy so we don't double-render the card.
+    const liveApprovalIds = new Set(
+      sessionState?.pendingApprovals.map((a) => a.requestId) ?? [],
+    );
+    const filteredHistory = historyRows.filter(
+      (r) => r.rowKind !== "approval" || !liveApprovalIds.has(r.data.requestId),
+    );
+    return [...filteredHistory, ...live];
   }, [historyRows, sessionState]);
 
   // Resolve the pinned card's payload — search live messages first (they hold

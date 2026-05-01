@@ -29,6 +29,25 @@ function titleFor(kind: ApprovalRequest["kind"]): string {
 function ApprovalCardInner({ request, onApproval, onClarify, onSudo, onSecret }: Props) {
   const [text, setText] = useState("");
 
+  // History-derived approvals come back with `resolved: true` — Hermes can't
+  // continue past an open approval, so anything that came after this row in
+  // chat_history proves it was answered. We don't know *what* the user picked
+  // (Hermes never persists responses), so render a single neutral pill.
+  if (request.resolved) {
+    return (
+      <View style={styles.row}>
+        <View style={styles.resolvedCard}>
+          <Text style={styles.resolvedKind}>{titleFor(request.kind)} · resolved</Text>
+          {request.prompt.length > 0 ? (
+            <Text style={styles.resolvedPrompt} numberOfLines={2}>
+              {request.prompt}
+            </Text>
+          ) : null}
+        </View>
+      </View>
+    );
+  }
+
   return (
     <View style={styles.row}>
       <View style={styles.card}>
@@ -44,10 +63,14 @@ function ApprovalCardInner({ request, onApproval, onClarify, onSudo, onSecret }:
               onPress={() => onApproval(request.requestId, "allow")}
             />
             <Button
-              label="Allow all"
+              label="Allow always"
               variant="secondary"
               compact
-              onPress={() => onApproval(request.requestId, "allow", true)}
+              // choice="session" tells Hermes to add this command pattern to
+              // the session allowlist (tools/approval.py:1138). `all=true`
+              // also batch-resolves any other approvals queued behind this
+              // one with the same scope.
+              onPress={() => onApproval(request.requestId, "session", true)}
             />
             <Button
               label="Deny"
@@ -148,5 +171,26 @@ const styles = StyleSheet.create({
   },
   inputBlock: {
     gap: 8,
+  },
+  resolvedCard: {
+    backgroundColor: PANEL,
+    borderWidth: 1,
+    borderColor: "#2a2a2a",
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    gap: 4,
+    opacity: 0.55,
+  },
+  resolvedKind: {
+    color: "#7d7d7d",
+    fontSize: 11,
+    fontWeight: "600",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
+  resolvedPrompt: {
+    color: "#9a9a9a",
+    fontSize: 12,
   },
 });

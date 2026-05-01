@@ -74,6 +74,10 @@ export interface ApprovalRequest {
   // Free-form passthrough of upstream payload — UI may surface choices etc.
   raw: Record<string, unknown>;
   createdAt: string;
+  // True when this row was reconstructed from chat_history and we know the
+  // request was already answered (something exists after it in history).
+  // Drives the compact "resolved" pill in ApprovalCard.
+  resolved?: boolean;
 }
 
 export interface ChatSessionState {
@@ -291,6 +295,11 @@ function reduce(state: ChatSessionState, env: GatewayEventEnvelope): ChatSession
           : env.type.startsWith("sudo")
             ? "sudo"
             : "secret";
+      // Dedupe by requestId — replay on reconnect/sync would otherwise push
+      // the same prompt twice.
+      if (next.pendingApprovals.some((p) => p.requestId === requestId)) {
+        return next;
+      }
       const req: ApprovalRequest = {
         kind,
         requestId,
