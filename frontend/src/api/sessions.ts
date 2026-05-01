@@ -37,3 +37,34 @@ export async function deleteSession(id: string): Promise<void> {
 export async function getMessages(id: string): Promise<HistoryResponse> {
   return apiFetch<HistoryResponse>(`/sessions/${id}/messages`);
 }
+
+// Loosely-typed search response — the upstream Hermes payload shape is not
+// strictly defined (HERMES_CONTRACT.md flags it explicitly). We model the
+// most common variants and let the renderer normalize defensively.
+export interface SearchHit {
+  // Both shapes appear depending on whether the match is a session title or
+  // a message body. The screen normalizes by checking which fields exist.
+  sessionId?: string;
+  appSessionId?: string;
+  hermesSessionId?: string;
+  title?: string;
+  preview?: string;
+  text?: string;
+  snippet?: string;
+  match?: [number, number] | null;
+  line?: number;
+  createdAt?: number | string;
+  updatedAt?: number | string;
+  [key: string]: unknown;
+}
+
+export interface SearchResponse {
+  results?: SearchHit[];
+  sessions?: SearchHit[];
+  matches?: SearchHit[];
+  [key: string]: unknown;
+}
+
+export async function searchSessions(q: string): Promise<SearchResponse> {
+  return apiFetch<SearchResponse>("/sessions/search", { query: { q } });
+}

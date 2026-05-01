@@ -11,7 +11,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Screen } from "@/components/Screen";
 import { Spinner } from "@/components/Spinner";
 import { Button } from "@/components/Button";
-import { Markdown } from "@/components/Markdown";
+import { MarkdownView } from "@/components/ui";
 import { cronKeys, getOutput } from "@/api/cron";
 import { BORDER, MUTED, PANEL, TEXT } from "@/config";
 import { toDate } from "@/util/time";
@@ -65,7 +65,7 @@ export default function CronOutputDetailScreen() {
             <Button label="Open job" variant="secondary" compact onPress={onOpenJob} />
           </View>
           <View style={styles.body}>
-            <Markdown content={outputQuery.data.content} />
+            <MarkdownView text={outputQuery.data.content} />
           </View>
         </ScrollView>
       )}

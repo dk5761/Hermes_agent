@@ -1,3 +1,19 @@
+/**
+ * Chat screen — Stage 6 redesign.
+ *
+ * Visual target: design/screens-1.jsx::ChatScreen (lines 167-237).
+ *
+ * Major rebuild of the layout (NavBar with status row, pill composer, sheet
+ * menu, new Message renderer) but ALL business logic (useChatStream,
+ * chat-store, attachment uploads, history hydration, send-gating) is preserved
+ * verbatim from the legacy screen.
+ *
+ * Coordination with Agent B:
+ *   - Tap on a tool card row pushes /chat/[id]/tool/[toolId] (Message owns this)
+ *   - Tap on an image attachment thumbnail pushes /chat/[id]/image/[attachmentId]
+ *   - Inline ApprovalCard stays here. Push-notification opening of an
+ *     approval routes to /chat/[id]/approval/[requestId] which Agent B builds.
+ */
 import { useCallback, useMemo, useRef, useState } from "react";
 import {
   ActionSheetIOS,
@@ -6,41 +22,53 @@ import {
   KeyboardAvoidingView,
   Platform,
   Pressable,
-  StyleSheet,
-  Text,
   TextInput,
   View,
   type ListRenderItem,
 } from "react-native";
-import { Stack, useLocalSearchParams } from "expo-router";
-import { useQuery } from "@tanstack/react-query";
-import { Screen } from "@/components/Screen";
-import { MessageBubble } from "@/components/MessageBubble";
-import { ToolCallCard } from "@/components/ToolCallCard";
+import { useLocalSearchParams, useRouter } from "expo-router";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+
+import {
+  Icon,
+  Message as MessageRow,
+  NavBar,
+  NavIcon,
+  PhoneSafeArea,
+  Row,
+  Sheet,
+  StatusDot,
+  Stack,
+  Text,
+  useThemeTokens,
+  type SheetHandle,
+} from "@/components/ui";
 import { ApprovalCard } from "@/components/ApprovalCard";
-import { ConnectionStatus } from "@/components/ConnectionStatus";
-import { Spinner } from "@/components/Spinner";
 import { ComposerAttachments } from "@/components/ComposerAttachments";
 import { useChatStream } from "@/ws/use-chat-stream";
 import { useChatStore } from "@/state/chat-store";
 import { usePendingAttachments } from "@/state/pending-attachments";
 import { pickDocument, pickImage, PickerError } from "@/attachments/picker";
-import type { AttachmentDTO } from "@/api/types";
+import {
+  archiveSession,
+  deleteSession,
+  getMessages,
+  listSessions,
+  renameSession,
+} from "@/api/sessions";
+import type { AttachmentDTO, HistoryRow, SessionDto } from "@/api/types";
 import type {
   ApprovalRequest,
   AssistantMessage,
   ChatSessionState,
   Message,
-  ToolCallCard as ToolCallCardData,
   ToolCallState,
 } from "@/state/chat-store";
-import { getMessages } from "@/api/sessions";
-import { ACCENT, BG, BORDER, MUTED, PANEL, TEXT } from "@/config";
-import type { HistoryRow } from "@/api/types";
+import type { ConnectionStatus } from "@/ws/client";
+import type { StatusDotKind } from "@/components/ui";
 
-// FlatList items are a discriminated union. Streaming bubble + tool calls live
-// at the tail (rendered as inverted=false bottom-of-list); we keep a single
-// sourceOfTruth ordered list for predictable inverted rendering.
+// ─── row model (carried over from legacy) ───────────────────────────────────
+
 type Row =
   | { rowKind: "msg"; data: Message }
   | { rowKind: "stream-tool"; data: ToolCallState }
@@ -73,8 +101,6 @@ function buildRows(state: ChatSessionState | undefined): Row[] {
   return rows;
 }
 
-// Stable empty list keeps the pending-attachments selector reference-equal
-// when no attachments exist for the session.
 const EMPTY_PENDING: never[] = [];
 
 function pickString(p: Record<string, unknown>, key: string): string {
@@ -82,8 +108,7 @@ function pickString(p: Record<string, unknown>, key: string): string {
   return typeof v === "string" ? v : "";
 }
 
-// Convert a permanent chat_history row into a UI Row. Returns null when the
-// row is empty/uninteresting (e.g. assistant message with no text or reasoning).
+// Convert a permanent chat_history row into a UI Row.
 function historyRowToUiRow(r: HistoryRow): Row | null {
   const iso = new Date(r.createdAt * 1000).toISOString();
   const p = r.payload;
@@ -194,9 +219,51 @@ function historyRowToUiRow(r: HistoryRow): Row | null {
   }
 }
 
+function statusToDotKind(s: ConnectionStatus): StatusDotKind {
+  switch (s) {
+    case "open":
+      return "online";
+    case "connecting":
+    case "reconnecting":
+      return "connecting";
+    case "auth_required":
+    case "sync_required":
+    case "closed":
+      return "offline";
+    case "idle":
+      return "idle";
+  }
+}
+
+function statusLabel(s: ConnectionStatus, retryInMs: number | null): string {
+  switch (s) {
+    case "open":
+      return "online";
+    case "connecting":
+      return "connecting";
+    case "reconnecting":
+      return retryInMs ? `retry ${Math.ceil(retryInMs / 1000)}s` : "reconnecting";
+    case "auth_required":
+      return "auth required";
+    case "sync_required":
+      return "sync required";
+    case "closed":
+      return "offline";
+    case "idle":
+      return "idle";
+  }
+}
+
+// ─── screen ─────────────────────────────────────────────────────────────────
+
 export default function ChatScreen() {
   const params = useLocalSearchParams<{ id: string }>();
   const sessionId = typeof params.id === "string" ? params.id : null;
+  const router = useRouter();
+  const tokens = useThemeTokens();
+  const queryClient = useQueryClient();
+  const sheetRef = useRef<SheetHandle>(null);
+
   const sessionState = useChatStore((s) => (sessionId ? s.byId[sessionId] : undefined));
   const stream = useChatStream(sessionId);
   const [input, setInput] = useState("");
@@ -207,8 +274,18 @@ export default function ChatScreen() {
   const addPending = usePendingAttachments((s) => s.add);
   const clearPending = usePendingAttachments((s) => s.clearSession);
 
-  // Cold-load history from the gateway's permanent chat_history table.
-  // Returns rich rows (user, assistant, tool, reasoning, approvals, errors).
+  // Session metadata (title/archive). We pull it from the cached sessions
+  // list so navigating from the list shows the correct title immediately.
+  const sessionsQuery = useQuery({
+    queryKey: ["sessions"] as const,
+    queryFn: listSessions,
+  });
+  const session: SessionDto | undefined = useMemo(
+    () => sessionsQuery.data?.sessions.find((s) => s.id === sessionId),
+    [sessionsQuery.data, sessionId],
+  );
+
+  // Cold-load history.
   const messagesQuery = useQuery({
     queryKey: ["session-messages", sessionId],
     queryFn: () => (sessionId ? getMessages(sessionId) : Promise.resolve({ rows: [] })),
@@ -226,20 +303,16 @@ export default function ChatScreen() {
     return out;
   }, [messagesQuery.data]);
 
-  // Combined list: stored history first, then in-memory chat-store messages.
-  // Note: chat-store messages re-add user messages we sent post-mount, while
-  // the REST history covers anything before we connected.
   const rows = useMemo<Row[]>(() => {
     const live = buildRows(sessionState);
     return [...historyRows, ...live];
   }, [historyRows, sessionState]);
 
-  // FlatList inverted: data must be reversed so newest is at the bottom visually.
+  // Inverted FlatList: newest at the bottom visually, so the underlying data
+  // array is reversed.
   const reversed = useMemo(() => rows.slice().reverse(), [rows]);
 
-  // Counts and gating: send is held until every queued/in-flight upload reaches
-  // a terminal state. Failed uploads are not auto-skipped — the user retries or
-  // removes them explicitly.
+  // Send-gating: hold sends while uploads are in flight.
   const uploadingCount = pendingList.filter(
     (p) => p.status === "queued" || p.status === "uploading",
   ).length;
@@ -251,6 +324,19 @@ export default function ChatScreen() {
     }
     return out;
   }, [pendingList]);
+
+  const isStreaming = sessionState?.isStreaming ?? false;
+  const hasUploaded = uploadedAttachments.length > 0;
+  const sendDisabled =
+    isStreaming ||
+    uploadingCount > 0 ||
+    (input.trim().length === 0 && !hasUploaded);
+  const sendHint =
+    uploadingCount > 0
+      ? `uploading ${uploadingCount}…`
+      : failedCount > 0
+        ? `${failedCount} failed`
+        : null;
 
   const onSend = useCallback(() => {
     if (!sessionId) return;
@@ -323,8 +409,6 @@ export default function ChatScreen() {
       );
       return;
     }
-    // Android fallback uses Alert as a lightweight chooser; replace with a
-    // proper bottom-sheet UI later.
     Alert.alert("Add attachment", undefined, [
       { text: "Photo Library", onPress: () => void onPickImage() },
       { text: "Document", onPress: () => void onPickDocument() },
@@ -332,17 +416,84 @@ export default function ChatScreen() {
     ]);
   }, [sessionId, onPickImage, onPickDocument]);
 
+  // ─── menu sheet actions ───────────────────────────────────────────────────
+
+  const onRename = useCallback(() => {
+    if (!sessionId || !session) return;
+    Alert.prompt?.(
+      "Rename session",
+      "New title",
+      (text) => {
+        if (text && text.trim()) {
+          void renameSession(sessionId, text.trim()).then(() => {
+            void queryClient.invalidateQueries({ queryKey: ["sessions"] });
+          });
+        }
+      },
+      "plain-text",
+      session.title,
+    );
+  }, [sessionId, session, queryClient]);
+
+  const onArchive = useCallback(() => {
+    if (!sessionId || !session) return;
+    void archiveSession(sessionId, !session.archived).then(() => {
+      void queryClient.invalidateQueries({ queryKey: ["sessions"] });
+    });
+  }, [sessionId, session, queryClient]);
+
+  const onDelete = useCallback(() => {
+    if (!sessionId) return;
+    Alert.alert("Delete session?", "This cannot be undone.", [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Delete",
+        style: "destructive",
+        onPress: () => {
+          void deleteSession(sessionId).then(() => {
+            void queryClient.invalidateQueries({ queryKey: ["sessions"] });
+            router.back();
+          });
+        },
+      },
+    ]);
+  }, [sessionId, queryClient, router]);
+
+  const openSheet = useCallback(() => {
+    sheetRef.current?.present();
+  }, []);
+
+  const dismissSheet = useCallback(() => {
+    sheetRef.current?.dismiss();
+  }, []);
+
+  // ─── render ───────────────────────────────────────────────────────────────
+
   const renderItem = useCallback<ListRenderItem<Row>>(
     ({ item }) => {
       if (item.rowKind === "msg") {
-        if (item.data.kind === "tool") return <ToolCallCard data={item.data as ToolCallCardData} />;
-        return <MessageBubble message={item.data} />;
+        return <MessageRow message={item.data} sessionId={sessionId} />;
       }
       if (item.rowKind === "stream-tool") {
-        return <ToolCallCard data={item.data} />;
+        // Streaming tool calls share the same renderer as completed ones.
+        // The Message component takes a ToolCallCard but a ToolCallState has
+        // the same shape minus the discriminator — synth one.
+        return (
+          <MessageRow
+            message={{
+              kind: "tool",
+              id: item.data.id,
+              name: item.data.name,
+              status: item.data.status,
+              detail: item.data.detail,
+              createdAt: item.data.createdAt,
+            }}
+            sessionId={sessionId}
+          />
+        );
       }
       if (item.rowKind === "stream-msg") {
-        return <MessageBubble message={item.data} streaming />;
+        return <MessageRow message={item.data} sessionId={sessionId} />;
       }
       if (item.rowKind === "approval") {
         return (
@@ -385,167 +536,240 @@ export default function ChatScreen() {
     }
   }, []);
 
-  const isStreaming = sessionState?.isStreaming ?? false;
-  const hasUploaded = uploadedAttachments.length > 0;
-  const sendDisabled =
-    isStreaming ||
-    uploadingCount > 0 ||
-    (input.trim().length === 0 && !hasUploaded);
-  const sendHint =
-    uploadingCount > 0
-      ? `uploading ${uploadingCount}...`
-      : failedCount > 0
-        ? `${failedCount} failed`
-        : null;
+  const headerTitle = session?.title || "New chat";
+  const showStatusBanner = stream.status !== "open" && stream.status !== "idle";
 
   return (
-    <Screen flat>
-      <Stack.Screen options={{ title: "Chat" }} />
-      <View style={styles.root}>
-        <ConnectionStatus
-          status={stream.status}
-          retryInMs={stream.retryInMs}
-          onReload={stream.acknowledgeSyncRequired}
-        />
-        {messagesQuery.isLoading ? <Spinner /> : null}
+    <PhoneSafeArea>
+      <NavBar
+        title={headerTitle}
+        onBack={() => router.back()}
+        leading={
+          <Row gap={6} align="center" style={{ marginLeft: 4 }}>
+            <StatusDot kind={statusToDotKind(stream.status)} />
+            <Text kind="caption" color={tokens.ink3}>
+              {statusLabel(stream.status, stream.retryInMs)}
+            </Text>
+          </Row>
+        }
+        trailing={<NavIcon name="more" onPress={openSheet} />}
+      />
+
+      {showStatusBanner ? (
+        <View
+          style={{
+            paddingHorizontal: 12,
+            paddingVertical: 6,
+            backgroundColor: tokens.sunken,
+            borderBottomWidth: 1,
+            borderBottomColor: tokens.lineSoft,
+          }}
+        >
+          <Row gap={8} align="center">
+            <StatusDot kind={statusToDotKind(stream.status)} />
+            <Text kind="caption" color={tokens.ink2} style={{ flex: 1 }}>
+              {statusLabel(stream.status, stream.retryInMs)}
+            </Text>
+            {stream.status === "sync_required" ? (
+              <Pressable
+                onPress={stream.acknowledgeSyncRequired}
+                style={{
+                  paddingHorizontal: 10,
+                  paddingVertical: 4,
+                  borderRadius: 8,
+                  backgroundColor: tokens.ink,
+                }}
+              >
+                <Text kind="caption" color={tokens.surface}>
+                  Reload
+                </Text>
+              </Pressable>
+            ) : null}
+          </Row>
+        </View>
+      ) : null}
+
+      <KeyboardAvoidingView
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        keyboardVerticalOffset={Platform.OS === "ios" ? 88 : 0}
+        style={{ flex: 1 }}
+      >
         <FlatList
           inverted
           data={reversed}
           keyExtractor={keyExtractor}
           renderItem={renderItem}
-          contentContainerStyle={styles.listContent}
+          contentContainerStyle={{ paddingVertical: 12 }}
           keyboardDismissMode="interactive"
           keyboardShouldPersistTaps="handled"
+          style={{ flex: 1 }}
         />
-        <KeyboardAvoidingView
-          behavior={Platform.OS === "ios" ? "padding" : undefined}
-          keyboardVerticalOffset={Platform.OS === "ios" ? 88 : 0}
+
+        {sessionId ? <ComposerAttachments appSessionId={sessionId} /> : null}
+        {sendHint ? (
+          <View style={{ paddingHorizontal: 16, paddingTop: 4 }}>
+            <Text kind="caption" color={tokens.ink3}>
+              {sendHint}
+            </Text>
+          </View>
+        ) : null}
+
+        {/* Pill composer */}
+        <View
+          style={{
+            paddingHorizontal: 10,
+            paddingTop: 8,
+            paddingBottom: 10,
+            backgroundColor: tokens.bg,
+          }}
         >
-          {sessionId ? <ComposerAttachments appSessionId={sessionId} /> : null}
-          {sendHint ? (
-            <View style={styles.hintRow}>
-              <Text style={styles.hintText}>{sendHint}</Text>
-            </View>
-          ) : null}
-          <View style={styles.composer}>
+          <Row
+            gap={8}
+            align="flex-end"
+            className="bg-surface border border-line"
+            style={{
+              paddingLeft: 6,
+              paddingRight: 6,
+              paddingVertical: 6,
+              borderRadius: 22,
+            }}
+          >
             <Pressable
               onPress={onAttachPress}
               disabled={!sessionId || isStreaming}
-              accessibilityRole="button"
-              accessibilityLabel="add attachment"
-              style={[
-                styles.attachBtn,
-                (!sessionId || isStreaming) && styles.attachBtnDisabled,
-              ]}
+              style={{
+                width: 32,
+                height: 32,
+                borderRadius: 16,
+                alignItems: "center",
+                justifyContent: "center",
+                opacity: !sessionId || isStreaming ? 0.4 : 1,
+              }}
             >
-              <Text style={styles.attachBtnText}>+</Text>
+              <Icon name="plus" size={18} color={tokens.ink2} />
             </Pressable>
             <TextInput
               ref={inputRef}
               value={input}
               onChangeText={setInput}
-              placeholder={isStreaming ? "Streaming..." : "Send a message"}
-              placeholderTextColor={MUTED}
-              style={styles.input}
+              placeholder={isStreaming ? "Streaming…" : "Message Hermes…"}
+              placeholderTextColor={tokens.ink3}
               multiline
               editable={!!sessionId}
+              style={{
+                flex: 1,
+                color: tokens.ink,
+                fontFamily: "Inter_400Regular",
+                fontSize: 15,
+                lineHeight: 20,
+                paddingTop: 8,
+                paddingBottom: 8,
+                paddingHorizontal: 4,
+                maxHeight: 120,
+              }}
             />
             {isStreaming ? (
               <Pressable
                 onPress={onAbort}
-                style={[styles.sendBtn, styles.stopBtn]}
-                accessibilityRole="button"
+                style={{
+                  width: 32,
+                  height: 32,
+                  borderRadius: 16,
+                  alignItems: "center",
+                  justifyContent: "center",
+                  backgroundColor: tokens.ink,
+                }}
               >
-                <Text style={styles.sendBtnText}>stop</Text>
+                <Icon name="pause" size={14} color={tokens.surface} />
               </Pressable>
             ) : (
               <Pressable
                 onPress={onSend}
                 disabled={sendDisabled}
-                style={[styles.sendBtn, sendDisabled && styles.sendBtnDisabled]}
-                accessibilityRole="button"
+                style={{
+                  width: 32,
+                  height: 32,
+                  borderRadius: 16,
+                  alignItems: "center",
+                  justifyContent: "center",
+                  backgroundColor: sendDisabled ? tokens.chip : tokens.ink,
+                }}
               >
-                <Text style={styles.sendBtnText}>send</Text>
+                <Icon
+                  name="send"
+                  size={16}
+                  color={sendDisabled ? tokens.ink3 : tokens.surface}
+                />
               </Pressable>
             )}
-          </View>
-        </KeyboardAvoidingView>
-      </View>
-    </Screen>
+          </Row>
+        </View>
+      </KeyboardAvoidingView>
+
+      <Sheet ref={sheetRef} snapPoints={["32%"]}>
+        <Stack gap={2} style={{ paddingVertical: 8 }}>
+          <SheetItem
+            label="Search in chat"
+            onPress={() => {
+              dismissSheet();
+              // Placeholder — search-in-chat is not built yet.
+            }}
+          />
+          <SheetItem
+            label="Rename"
+            onPress={() => {
+              dismissSheet();
+              onRename();
+            }}
+          />
+          <SheetItem
+            label={session?.archived ? "Unarchive" : "Archive"}
+            onPress={() => {
+              dismissSheet();
+              onArchive();
+            }}
+          />
+          <SheetItem
+            label="Delete"
+            danger
+            onPress={() => {
+              dismissSheet();
+              onDelete();
+            }}
+          />
+        </Stack>
+      </Sheet>
+    </PhoneSafeArea>
   );
 }
 
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: BG },
-  listContent: { paddingVertical: 8 },
-  composer: {
-    flexDirection: "row",
-    alignItems: "flex-end",
-    gap: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderTopWidth: 1,
-    borderColor: BORDER,
-    backgroundColor: BG,
-  },
-  input: {
-    flex: 1,
-    minHeight: 40,
-    maxHeight: 120,
-    backgroundColor: PANEL,
-    borderWidth: 1,
-    borderColor: BORDER,
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    color: TEXT,
-    fontSize: 15,
-  },
-  sendBtn: {
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    backgroundColor: ACCENT,
-    borderRadius: 10,
-    minWidth: 64,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  sendBtnDisabled: {
-    opacity: 0.4,
-  },
-  stopBtn: {
-    backgroundColor: "#5A1A22",
-  },
-  sendBtnText: {
-    color: "#FFFFFF",
-    fontWeight: "700",
-    fontSize: 14,
-  },
-  attachBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 10,
-    backgroundColor: PANEL,
-    borderWidth: 1,
-    borderColor: BORDER,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  attachBtnDisabled: {
-    opacity: 0.4,
-  },
-  attachBtnText: {
-    color: TEXT,
-    fontSize: 20,
-    fontWeight: "600",
-    lineHeight: 22,
-  },
-  hintRow: {
-    paddingHorizontal: 14,
-    paddingTop: 6,
-  },
-  hintText: {
-    color: MUTED,
-    fontSize: 12,
-  },
-});
+// ─── sheet item helper ──────────────────────────────────────────────────────
+
+function SheetItem({
+  label,
+  danger,
+  onPress,
+}: {
+  label: string;
+  danger?: boolean;
+  onPress: () => void;
+}) {
+  const tokens = useThemeTokens();
+  return (
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => ({
+        paddingHorizontal: 20,
+        paddingVertical: 14,
+        opacity: pressed ? 0.7 : 1,
+      })}
+    >
+      <Text
+        kind="body-lg"
+        color={danger ? tokens.danger : tokens.ink}
+      >
+        {label}
+      </Text>
+    </Pressable>
+  );
+}

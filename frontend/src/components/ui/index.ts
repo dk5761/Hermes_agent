@@ -81,3 +81,8 @@ export { useThemeTokens } from "./tokens";
 export type { ThemeTokens } from "./tokens";
 
 export { AppTabBar } from "./AppTabBar";
+
+export { MarkdownView } from "./Markdown";
+export type { MarkdownViewProps } from "./Markdown";
+
+export { Message, StreamingToolRow, StreamingAssistantRow } from "./Message";
