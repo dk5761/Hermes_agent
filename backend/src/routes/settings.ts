@@ -565,6 +565,98 @@ export async function registerSettingsRoutes(
     }
     return reply.code(204).send();
   });
+
+  // =========================================================================
+  // 4. APPROVAL POLICY (command_allowlist)
+  // =========================================================================
+  // Hermes stores permanent approvals as a flat string array under
+  // `config.command_allowlist`. Each entry is a *pattern key* (e.g. "rm",
+  // "find", "git push") — when the agent encounters a dangerous command
+  // matching the pattern, it skips the prompt and runs immediately.
+  //
+  // We expose this as a CRUD-style resource so the picker UI can show, add,
+  // and remove entries. Session-scoped allowlist (`_session_approved`) is
+  // ephemeral on Hermes' side and intentionally not surfaced here — it's
+  // managed by the inline approval card (choice="session").
+
+  app.get("/settings/approvals", { preHandler: requireAuth }, async (_req, reply) => {
+    let cfg: Record<string, unknown>;
+    try {
+      cfg = await hermesHttp.getConfig();
+    } catch (err) {
+      logger.error({ err }, "approvals: getConfig failed");
+      return reply.code(502).send({ error: "upstream_config_read_failed" });
+    }
+    const raw = cfg["command_allowlist"];
+    const patterns = Array.isArray(raw)
+      ? raw.filter((v): v is string => typeof v === "string")
+      : [];
+    return reply.send({ patterns: patterns.slice().sort() });
+  });
+
+  app.post("/settings/approvals", { preHandler: requireAuth }, async (request, reply) => {
+    const parsed = z
+      .object({ pattern: z.string().min(1).max(200) })
+      .safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ error: "invalid_body", details: parsed.error.flatten() });
+    }
+    const next = parsed.data.pattern.trim();
+    if (!next) return reply.code(400).send({ error: "empty_pattern" });
+
+    let cfg: Record<string, unknown>;
+    try {
+      cfg = await hermesHttp.getConfig();
+    } catch (err) {
+      logger.error({ err }, "approvals: getConfig failed");
+      return reply.code(502).send({ error: "upstream_config_read_failed" });
+    }
+    const raw = cfg["command_allowlist"];
+    const list = Array.isArray(raw)
+      ? raw.filter((v): v is string => typeof v === "string")
+      : [];
+    if (!list.includes(next)) list.push(next);
+    cfg["command_allowlist"] = list;
+    try {
+      await hermesHttp.putConfig(cfg);
+    } catch (err) {
+      logger.error({ err }, "approvals: putConfig failed");
+      return reply.code(502).send({ error: "upstream_config_write_failed" });
+    }
+    return reply.code(201).send({ patterns: list.slice().sort() });
+  });
+
+  app.delete(
+    "/settings/approvals/:pattern",
+    { preHandler: requireAuth },
+    async (request, reply) => {
+      const parsed = z
+        .object({ pattern: z.string().min(1).max(200) })
+        .safeParse(request.params);
+      if (!parsed.success) return reply.code(400).send({ error: "invalid_param" });
+      const target = parsed.data.pattern;
+
+      let cfg: Record<string, unknown>;
+      try {
+        cfg = await hermesHttp.getConfig();
+      } catch (err) {
+        logger.error({ err }, "approvals: getConfig failed");
+        return reply.code(502).send({ error: "upstream_config_read_failed" });
+      }
+      const raw = cfg["command_allowlist"];
+      const list = Array.isArray(raw)
+        ? raw.filter((v): v is string => typeof v === "string" && v !== target)
+        : [];
+      cfg["command_allowlist"] = list;
+      try {
+        await hermesHttp.putConfig(cfg);
+      } catch (err) {
+        logger.error({ err }, "approvals: putConfig failed");
+        return reply.code(502).send({ error: "upstream_config_write_failed" });
+      }
+      return reply.send({ patterns: list.slice().sort() });
+    },
+  );
 }
 
 // ---------------------------------------------------------------------------

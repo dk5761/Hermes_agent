@@ -228,6 +228,12 @@ export default function SettingsIndexScreen() {
               onPress={goto("/(settings)/notifications")}
             />
             <ListRow
+              icon="shieldCheck"
+              title="Approval policy"
+              chevron
+              onPress={goto("/(settings)/approvals")}
+            />
+            <ListRow
               icon="bell"
               title="Notifications inbox"
               detail={inboxUnread > 0 ? `${inboxUnread} unread` : undefined}

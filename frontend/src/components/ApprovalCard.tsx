@@ -63,14 +63,23 @@ function ApprovalCardInner({ request, onApproval, onClarify, onSudo, onSecret }:
               onPress={() => onApproval(request.requestId, "allow")}
             />
             <Button
-              label="Allow always"
+              label="Allow this session"
               variant="secondary"
               compact
-              // choice="session" tells Hermes to add this command pattern to
-              // the session allowlist (tools/approval.py:1138). `all=true`
-              // also batch-resolves any other approvals queued behind this
-              // one with the same scope.
+              // choice="session" → Hermes adds the pattern to the session
+              // allowlist (tools/approval.py:1138). all=true also batch-
+              // resolves any other prompts queued behind this one with the
+              // same scope.
               onPress={() => onApproval(request.requestId, "session", true)}
+            />
+            <Button
+              label="Allow forever"
+              variant="secondary"
+              compact
+              // choice="always" → session + permanent allowlist (config
+              // command_allowlist). Survives restarts. Mirrors the
+              // Approval policy editor at /(settings)/approvals.
+              onPress={() => onApproval(request.requestId, "always", true)}
             />
             <Button
               label="Deny"
