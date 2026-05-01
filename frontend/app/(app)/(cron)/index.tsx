@@ -67,6 +67,10 @@ export default function CronListScreen() {
   const queryClient = useQueryClient();
   const tokens = useThemeTokens();
   const [filter, setFilter] = useState<FilterKey>("all");
+  // RefreshControl spinner is bound to user pulls only (see comment in
+  // (chats)/index.tsx) — binding to `isFetching` causes a stuck spinner on
+  // focus-driven invalidation.
+  const [pullRefreshing, setPullRefreshing] = useState(false);
 
   const jobsQuery = useQuery({
     queryKey: cronKeys.jobs(),
@@ -266,8 +270,15 @@ export default function CronListScreen() {
         }
         refreshControl={
           <RefreshControl
-            refreshing={jobsQuery.isFetching && !jobsQuery.isLoading}
-            onRefresh={() => jobsQuery.refetch()}
+            refreshing={pullRefreshing}
+            onRefresh={async () => {
+              setPullRefreshing(true);
+              try {
+                await jobsQuery.refetch();
+              } finally {
+                setPullRefreshing(false);
+              }
+            }}
             tintColor={tokens.accent}
             colors={[tokens.accent]}
           />

@@ -16,7 +16,7 @@
  * list + this job's detail key on success so the list screen reflects the
  * new state when the user navigates back.
  */
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { Alert, RefreshControl, ScrollView, View } from "react-native";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -59,6 +59,9 @@ export default function CronJobDetailScreen() {
   const tokens = useThemeTokens();
   const params = useLocalSearchParams<{ jobId: string }>();
   const jobId = params.jobId ?? "";
+  // RefreshControl spinner is bound to user pulls only — see comment in
+  // (chats)/index.tsx for why we don't bind to isFetching.
+  const [pullRefreshing, setPullRefreshing] = useState(false);
 
   const jobQuery = useQuery({
     queryKey: cronKeys.job(jobId),
@@ -241,10 +244,14 @@ export default function CronJobDetailScreen() {
         contentContainerStyle={{ paddingBottom: 60, paddingTop: 8 }}
         refreshControl={
           <RefreshControl
-            refreshing={jobQuery.isFetching || outputsQuery.isFetching}
-            onRefresh={() => {
-              void jobQuery.refetch();
-              void outputsQuery.refetch();
+            refreshing={pullRefreshing}
+            onRefresh={async () => {
+              setPullRefreshing(true);
+              try {
+                await Promise.all([jobQuery.refetch(), outputsQuery.refetch()]);
+              } finally {
+                setPullRefreshing(false);
+              }
             }}
             tintColor={tokens.accent}
             colors={[tokens.accent]}

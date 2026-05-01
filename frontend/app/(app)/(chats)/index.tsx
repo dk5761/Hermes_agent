@@ -76,6 +76,11 @@ export default function SessionsScreen() {
   const insets = useSafeAreaInsets();
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<FilterKey>("all");
+  // RefreshControl spinner is bound to user-initiated pulls only — binding to
+  // `isFetching` causes a stuck spinner whenever useFocusEffect or the WS
+  // event listener invalidates the sessions query in the background, because
+  // the spinner appears before the user even sees the screen.
+  const [pullRefreshing, setPullRefreshing] = useState(false);
 
   // Floating tab bar consumes ~60pt above the safe-area home indicator.
   // FAB sits 16pt above that.
@@ -387,8 +392,15 @@ export default function SessionsScreen() {
         }
         refreshControl={
           <RefreshControl
-            refreshing={sessionsQuery.isFetching && !sessionsQuery.isLoading}
-            onRefresh={() => sessionsQuery.refetch()}
+            refreshing={pullRefreshing}
+            onRefresh={async () => {
+              setPullRefreshing(true);
+              try {
+                await sessionsQuery.refetch();
+              } finally {
+                setPullRefreshing(false);
+              }
+            }}
             tintColor={tokens.accent}
             colors={[tokens.accent]}
           />
