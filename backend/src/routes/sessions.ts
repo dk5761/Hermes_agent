@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, max } from "drizzle-orm";
 import type { FastifyInstance, preHandlerHookHandler } from "fastify";
 import { z } from "zod";
 import type { Db } from "../db/client.js";
@@ -260,19 +260,23 @@ export async function registerSessionsRoutes(
   );
 }
 
-// Returns the latest message-y event text per session, scanning the most recent
-// rows of ws_events. SQLite is fine for the small N we have on personal use.
+// Returns the latest message-y event text per session.
+//
+// Naive `ORDER BY id DESC LIMIT N*8` was wrong: any session whose most-
+// recent message.delta/complete sat outside the global top-N (i.e. an
+// older but still-valid chat) would show "no messages yet". Instead we
+// resolve each session's max(id) for the preview-eligible types, then
+// fetch those exact rows. Cost: 2 small indexed queries.
 async function loadPreviewsForSessions(
   db: Db,
   sessionIds: ReadonlyArray<string>,
 ): Promise<Map<string, string>> {
   const out = new Map<string, string>();
   if (sessionIds.length === 0) return out;
-  const rows = await db
+  const latestPerSession = await db
     .select({
       appSessionId: wsEvents.appSessionId,
-      type: wsEvents.type,
-      payloadJson: wsEvents.payloadJson,
+      maxId: max(wsEvents.id),
     })
     .from(wsEvents)
     .where(
@@ -281,10 +285,19 @@ async function loadPreviewsForSessions(
         inArray(wsEvents.type, [...PREVIEW_EVENT_TYPES]),
       ),
     )
-    .orderBy(desc(wsEvents.id))
-    .limit(sessionIds.length * 8);
+    .groupBy(wsEvents.appSessionId);
+  const ids = latestPerSession
+    .map((r) => r.maxId)
+    .filter((v): v is number => typeof v === "number");
+  if (ids.length === 0) return out;
+  const rows = await db
+    .select({
+      appSessionId: wsEvents.appSessionId,
+      payloadJson: wsEvents.payloadJson,
+    })
+    .from(wsEvents)
+    .where(inArray(wsEvents.id, ids));
   for (const r of rows) {
-    if (out.has(r.appSessionId)) continue;
     const text = extractPreviewText(r.payloadJson);
     if (text) out.set(r.appSessionId, text);
   }
