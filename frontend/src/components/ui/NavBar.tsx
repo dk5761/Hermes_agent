@@ -53,10 +53,9 @@ export function NavBar({
       {hasToolbar ? (
         <Row
           align="center"
-          justify="space-between"
-          style={{ paddingHorizontal: 16, minHeight: 36 }}
+          style={{ paddingHorizontal: 16, minHeight: 36, gap: 8 }}
         >
-          <Row gap={4} style={{ minWidth: 0 }}>
+          <Row gap={4} style={{ flexShrink: 0 }}>
             {onBack ? (
               <Pressable
                 onPress={onBack}
@@ -73,21 +72,26 @@ export function NavBar({
             {leading}
           </Row>
           {!large && title ? (
-            // Absolute-centered title so trailing/leading slot widths don't
-            // bias horizontal placement.
-            <View
-              pointerEvents="none"
-              style={{
-                position: "absolute",
-                left: 0,
-                right: 0,
-                alignItems: "center",
-              }}
-            >
-              <Text kind="h3">{title}</Text>
+            // Title takes the slack between leading + trailing and
+            // ellipsizes when long. Centered text alignment keeps it
+            // visually balanced on screens where leading/trailing are
+            // similar in width.
+            <View style={{ flex: 1, minWidth: 0, alignItems: "center" }}>
+              <Text
+                kind="h3"
+                numberOfLines={1}
+                ellipsizeMode="tail"
+                style={{ textAlign: "center" }}
+              >
+                {title}
+              </Text>
             </View>
-          ) : null}
-          <Row gap={4}>{trailing}</Row>
+          ) : (
+            <View style={{ flex: 1 }} />
+          )}
+          <Row gap={4} style={{ flexShrink: 0 }}>
+            {trailing}
+          </Row>
         </Row>
       ) : null}
       {large && title ? (

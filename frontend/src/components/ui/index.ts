@@ -97,5 +97,8 @@ export { Message, StreamingToolRow, StreamingAssistantRow } from "./Message";
 export { TodoPlanCard, deriveTitle, deriveProgress, isAnyRunning } from "./TodoPlanCard";
 export type { TodoPlanCardProps } from "./TodoPlanCard";
 
+export { CitationCardRow, isWebTool } from "./CitationCard";
+export type { CitationCardRowProps } from "./CitationCard";
+
 export { TodoStepRow } from "./TodoStepRow";
 export type { TodoItem, TodoStatus, TodoStepRowProps } from "./TodoStepRow";

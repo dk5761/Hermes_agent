@@ -40,6 +40,7 @@ import { Stack } from "./Stack";
 import { Text } from "./Text";
 import { TodoPlanCard } from "./TodoPlanCard";
 import type { TodoItem, TodoStatus } from "./TodoStepRow";
+import { CitationCardRow, isWebTool } from "./CitationCard";
 import { useThemeTokens } from "./tokens";
 
 const TODO_STATUSES: ReadonlySet<TodoStatus> = new Set([
@@ -686,6 +687,27 @@ function MessageInner({
           );
           break;
         }
+      }
+      // Web tool calls render as link cards (favicon + title + domain) so
+      // citations surface inline instead of as opaque tool rows.
+      if (isWebTool(message.name)) {
+        const durMs =
+          typeof message.detail?.["durationMs"] === "number"
+            ? (message.detail["durationMs"] as number)
+            : typeof message.detail?.["duration_ms"] === "number"
+              ? (message.detail["duration_ms"] as number)
+              : typeof message.detail?.["duration_s"] === "number"
+                ? (message.detail["duration_s"] as number) * 1000
+                : undefined;
+        inner = (
+          <CitationCardRow
+            toolName={message.name}
+            status={message.status}
+            detail={message.detail}
+            durationMs={durMs}
+          />
+        );
+        break;
       }
       inner = <ToolRow data={message} sessionId={sessionId} />;
       break;
