@@ -15,6 +15,7 @@ import {
   isPersistedEventType,
 } from "./event-log.js";
 import { appendHistory, type HistoryKind } from "./chat-history.js";
+import { deriveTitleFromTurn } from "../util/auto-title.js";
 import type { HermesWsPool } from "../hermes/ws-pool.js";
 import type { HermesEventParams, JsonValue } from "../hermes/types.js";
 import {
@@ -874,9 +875,94 @@ async function handleUpstreamEvent(
     });
     registry.emit(appSessionId, env);
     await maybePersistHistory(db, appSessionId, ev.type, ev.payload, log);
+    // After the first assistant turn lands in chat_history, replace the
+    // truncated-first-message title with a heuristic 4-6 word summary.
+    if (ev.type === "message.complete") {
+      void maybeReplaceFirstTurnTitle(db, appSessionId, ev.payload, log).catch(
+        (err: unknown) => log.warn({ err }, "auto-title (smart) failed"),
+      );
+    }
   } catch (err) {
     log.error({ err, type: ev.type }, "failed to persist upstream event");
   }
+}
+
+// Detect "this was the first assistant turn" by counting assistant.message
+// rows in chat_history; the row we just appended is included, so first turn
+// → count === 1. On hit, derive a smarter title from the user's first
+// message and write it to app_sessions.title_override (overwriting the
+// truncated-first-message default `maybeAutoTitle` set on chat.send).
+async function maybeReplaceFirstTurnTitle(
+  db: Db,
+  appSessionId: string,
+  payload: unknown,
+  log: AppLogger,
+): Promise<void> {
+  // Bail early if Hermes' message.complete didn't carry assistant text.
+  const assistantText =
+    payload && typeof payload === "object"
+      ? typeof (payload as Record<string, unknown>).text === "string"
+        ? ((payload as Record<string, unknown>).text as string)
+        : ""
+      : "";
+
+  const rows = await db
+    .select({ id: chatHistory.id, payloadJson: chatHistory.payloadJson })
+    .from(chatHistory)
+    .where(
+      and(
+        eq(chatHistory.appSessionId, appSessionId),
+        eq(chatHistory.kind, "assistant.message"),
+      ),
+    );
+  if (rows.length !== 1) return; // not the first assistant turn
+
+  const userRows = await db
+    .select({ payloadJson: chatHistory.payloadJson })
+    .from(chatHistory)
+    .where(
+      and(
+        eq(chatHistory.appSessionId, appSessionId),
+        eq(chatHistory.kind, "user.message"),
+      ),
+    )
+    .orderBy(chatHistory.id)
+    .limit(1);
+  const firstUserPayloadJson = userRows[0]?.payloadJson;
+  if (!firstUserPayloadJson) return;
+  let firstUserText = "";
+  try {
+    const parsed = JSON.parse(firstUserPayloadJson) as Record<string, unknown>;
+    const t = parsed["text"];
+    if (typeof t === "string") firstUserText = t;
+  } catch {
+    return;
+  }
+  const smart = deriveTitleFromTurn(firstUserText, assistantText);
+  if (!smart) return;
+
+  // Only overwrite when the existing title is the truncated first-message
+  // default (or unset). If the user manually renamed already, leave it.
+  const sessionRows = await db
+    .select({
+      titleOverride: appSessions.titleOverride,
+    })
+    .from(appSessions)
+    .where(eq(appSessions.id, appSessionId))
+    .limit(1);
+  const cur = sessionRows[0]?.titleOverride ?? null;
+  const truncatedDefault = firstUserText.length <= 60
+    ? firstUserText.trim()
+    : firstUserText.trim().slice(0, 57) + "…";
+  const isAutoDefault = cur === truncatedDefault || cur === null;
+  if (!isAutoDefault) return;
+
+  const now = Math.floor(Date.now() / 1000);
+  await db
+    .update(appSessions)
+    .set({ titleOverride: smart, updatedAt: now })
+    .where(eq(appSessions.id, appSessionId));
+  log.info({ appSessionId, title: smart }, "auto-titled session");
 }
 
 // Clear every cached hermes_session_id in the DB and reverse cache. Called
