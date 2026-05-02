@@ -10,6 +10,18 @@ interface Props {
   onRetry: (localId: string) => void;
 }
 
+function nonImageGlyph(mime: string, name: string): string {
+  const m = mime.toLowerCase();
+  const lower = name.toLowerCase();
+  if (m === "application/pdf" || lower.endsWith(".pdf")) return "PDF";
+  if (m.includes("spreadsheet") || m.includes("excel") || lower.endsWith(".xlsx") || lower.endsWith(".xls"))
+    return "XLS";
+  if (m.includes("csv") || lower.endsWith(".csv")) return "CSV";
+  if (m.includes("tab-separated") || lower.endsWith(".tsv")) return "TSV";
+  if (m.startsWith("text/") || lower.endsWith(".txt")) return "TXT";
+  return "FILE";
+}
+
 function statusLabel(p: PendingAttachment): string {
   switch (p.status) {
     case "queued":
@@ -35,6 +47,7 @@ function AttachmentChipInner({ pending, onRemove, onRetry }: Props) {
 
   const isImage = pending.input.kind === "image";
   const failed = pending.status === "failed";
+  const glyph = nonImageGlyph(pending.input.mime, pending.input.name);
 
   return (
     <View style={styles.chip}>
@@ -49,7 +62,7 @@ function AttachmentChipInner({ pending, onRemove, onRetry }: Props) {
           />
         ) : (
           <View style={styles.pdfTile}>
-            <Text style={styles.pdfText}>PDF</Text>
+            <Text style={styles.pdfText}>{glyph}</Text>
           </View>
         )}
         <Pressable

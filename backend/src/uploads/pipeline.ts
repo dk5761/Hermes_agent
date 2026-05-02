@@ -5,9 +5,10 @@ import { attachments, blobObjects, derivedArtifacts } from "../db/schema.js";
 import type { AppLogger } from "../logger.js";
 import type { BlobStore } from "../storage/blob-store.js";
 import { buildObjectKey } from "../storage/keys.js";
-import { mimeToKind } from "./classify.js";
+import { isCsvMime, isSpreadsheetMime, mimeToKind } from "./classify.js";
 import { buildHermesReady, buildThumbnail } from "./image.js";
 import { extractText, type PdfOcrOptions } from "./pdf.js";
+import { csvToText, spreadsheetToText } from "./spreadsheet.js";
 import { checkSizeForKind, type UploadLimits } from "./limits.js";
 import type {
   AttachmentKind,
@@ -151,8 +152,31 @@ export class UploadPipeline {
         warnings.push("pdf_extract_failed");
         this.log.warn({ err }, "pdf text extraction failed");
       }
-    } else {
-      warnings.push("file_kind_not_supported_in_phase_4");
+    } else if (kind === "file") {
+      // CSV / Excel → derived text. Agent reads the prepended block from
+      // chat.send via the same prompt-prefix path PDFs use.
+      try {
+        let text: string | null = null;
+        if (isCsvMime(input.declaredMime)) text = csvToText(input.body);
+        else if (isSpreadsheetMime(input.declaredMime)) text = spreadsheetToText(input.body);
+        if (text && text.trim().length > 0) {
+          extractedText = text;
+          derivedText = await this.persistDerivative({
+            userId: input.userId,
+            bucket: input.bucket,
+            parentBlobId: primary.blobId,
+            buffer: Buffer.from(text, "utf8"),
+            mimeType: "text/plain; charset=utf-8",
+            kind: "extracted_text",
+            metaJson: JSON.stringify({ sourceMime: input.declaredMime }),
+          });
+        } else {
+          warnings.push("file_no_text_extracted");
+        }
+      } catch (err) {
+        warnings.push("file_extract_failed");
+        this.log.warn({ err, mime: input.declaredMime }, "file text extraction failed");
+      }
     }
 
     const attachmentId = crypto.randomUUID();

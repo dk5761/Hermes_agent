@@ -15,14 +15,33 @@ const IMAGE_MIMES: ReadonlySet<string> = new Set([
 
 const PDF_MIMES: ReadonlySet<string> = new Set(["application/pdf"]);
 
-// Phase 4 rejects unknown kinds outright; populate via env in a later phase.
-const OTHER_ALLOWED_MIMES: ReadonlySet<string> = new Set();
+// CSV / TSV — uploaded as kind=file; pipeline stores the raw bytes as
+// derivedText so the bridge can prepend them like a PDF text block.
+const CSV_MIMES: ReadonlySet<string> = new Set([
+  "text/csv",
+  "application/csv",
+  "text/tab-separated-values",
+  "text/plain",
+]);
+
+// Excel (xls/xlsx + Apple Numbers' xlsx export). Pipeline parses to a
+// CSV-equivalent text dump and stores that as derivedText.
+const SPREADSHEET_MIMES: ReadonlySet<string> = new Set([
+  "application/vnd.ms-excel",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/vnd.ms-excel.sheet.macroenabled.12",
+]);
+
+const FILE_MIMES: ReadonlySet<string> = new Set([
+  ...CSV_MIMES,
+  ...SPREADSHEET_MIMES,
+]);
 
 export function mimeToKind(mime: string): AttachmentKind | null {
   const m = mime.toLowerCase();
   if (IMAGE_MIMES.has(m)) return "image";
   if (PDF_MIMES.has(m)) return "pdf";
-  if (OTHER_ALLOWED_MIMES.has(m)) return "file";
+  if (FILE_MIMES.has(m)) return "file";
   return null;
 }
 
@@ -32,4 +51,12 @@ export function isImageMime(mime: string): boolean {
 
 export function isPdfMime(mime: string): boolean {
   return PDF_MIMES.has(mime.toLowerCase());
+}
+
+export function isCsvMime(mime: string): boolean {
+  return CSV_MIMES.has(mime.toLowerCase());
+}
+
+export function isSpreadsheetMime(mime: string): boolean {
+  return SPREADSHEET_MIMES.has(mime.toLowerCase());
 }

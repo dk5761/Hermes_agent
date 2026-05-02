@@ -13,13 +13,27 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function glyphForAttachment(mime: string | undefined, name: string): string {
+  const m = (mime ?? "").toLowerCase();
+  const lower = name.toLowerCase();
+  if (m === "application/pdf" || lower.endsWith(".pdf")) return "PDF";
+  if (m.includes("spreadsheet") || m.includes("excel") || lower.endsWith(".xlsx") || lower.endsWith(".xls"))
+    return "XLS";
+  if (m.includes("csv") || lower.endsWith(".csv")) return "CSV";
+  if (m.includes("tab-separated") || lower.endsWith(".tsv")) return "TSV";
+  if (m.startsWith("text/") || lower.endsWith(".txt")) return "TXT";
+  return "FILE";
+}
+
 function PdfAttachmentRowInner({ attachment }: Props) {
-  const name = attachment.originalName ?? "document.pdf";
+  const fallbackName = attachment.kind === "pdf" ? "document.pdf" : "attachment";
+  const name = attachment.originalName ?? fallbackName;
   const preview = attachment.extractedTextPreview;
+  const glyph = glyphForAttachment(attachment.mime, name);
   return (
     <View style={styles.row}>
       <View style={styles.glyphBox}>
-        <Text style={styles.glyphText}>PDF</Text>
+        <Text style={styles.glyphText}>{glyph}</Text>
       </View>
       <View style={styles.body}>
         <Text style={styles.name} numberOfLines={1}>

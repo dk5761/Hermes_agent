@@ -65,7 +65,8 @@ export interface AttachmentBridgeWarning {
     | "pdf_no_text_layer"
     | "pdf_text_read_failed"
     | "image_materialize_failed"
-    | "file_kind_not_supported";
+    | "file_no_text_extracted"
+    | "file_text_read_failed";
   message: string;
 }
 
@@ -132,13 +133,16 @@ export class AttachmentBridge {
           }
           break;
         }
-        case "file":
-          warnings.push({
-            attachmentId: id,
-            code: "file_kind_not_supported",
-            message: "file kind not supported in this phase",
-          });
+        case "file": {
+          // CSV / Excel — same prompt-prefix shape as PDFs. Pipeline already
+          // wrote a derivedText blob containing the extracted text.
+          const block = await this.handleFile(id, att, pdfBudgetRemaining, warnings);
+          if (block) {
+            pdfBlocks.push(block.text);
+            pdfBudgetRemaining -= block.bytes;
+          }
           break;
+        }
       }
     }
 
@@ -226,6 +230,46 @@ export class AttachmentBridge {
     const slice = truncated ? raw.slice(0, perFile) + "\n[…truncated]" : raw;
     const filename = att.primary.originalName ?? "document.pdf";
     const block = `[attached: ${filename}]\n${slice}`;
+    return { text: block, bytes: Buffer.byteLength(block, "utf8") };
+  }
+
+  // CSV / Excel attachments. Pipeline already extracted the text on upload
+  // and stored it as derivedText, so this is the same shape as handlePdf —
+  // we just label the block with the original filename + mime hint so the
+  // agent knows what it's looking at.
+  private async handleFile(
+    id: string,
+    att: AttachmentLookupResult,
+    budget: number,
+    warnings: AttachmentBridgeWarning[],
+  ): Promise<{ text: string; bytes: number } | null> {
+    if (!att.derivedText) {
+      warnings.push({
+        attachmentId: id,
+        code: "file_no_text_extracted",
+        message: "[attached file with no extractable text]",
+      });
+      return null;
+    }
+    if (budget <= 0) return null;
+    let raw: string;
+    try {
+      raw = await readBlobText(this.blobStore, att.derivedText.objectKey);
+    } catch (err) {
+      this.log.warn({ err, blobId: att.derivedText.blobId }, "file text read failed");
+      warnings.push({
+        attachmentId: id,
+        code: "file_text_read_failed",
+        message: "could not read extracted file text",
+      });
+      return null;
+    }
+    const perFile = Math.min(this.cfg.perPdfBytes, budget);
+    const truncated = raw.length > perFile;
+    const slice = truncated ? raw.slice(0, perFile) + "\n[…truncated]" : raw;
+    const filename = att.primary.originalName ?? "file";
+    const mimeLabel = att.primary.mimeType.split(";")[0]?.trim() ?? "file";
+    const block = `[attached: ${filename} (${mimeLabel})]\n${slice}`;
     return { text: block, bytes: Buffer.byteLength(block, "utf8") };
   }
 }

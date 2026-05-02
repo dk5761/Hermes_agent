@@ -16,6 +16,36 @@ const IMAGE_MIMES = new Set<string>([
   "image/gif",
 ]);
 const PDF_MIME = "application/pdf";
+// Files that flow through as kind="file" — gateway extracts text on upload.
+const FILE_MIMES = new Set<string>([
+  "text/csv",
+  "application/csv",
+  "text/tab-separated-values",
+  "text/plain",
+  "application/vnd.ms-excel",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/vnd.ms-excel.sheet.macroenabled.12",
+]);
+const DOCUMENT_PICKER_TYPES = [PDF_MIME, ...FILE_MIMES];
+
+function inferFileMime(uri: string, fallback: string | undefined): string | null {
+  if (fallback) {
+    const m = fallback.toLowerCase();
+    if (m === PDF_MIME || FILE_MIMES.has(m)) return m;
+  }
+  // Fall back to extension when the OS picker doesn't surface mimeType.
+  const lower = uri.toLowerCase().split("?")[0] ?? "";
+  if (lower.endsWith(".pdf")) return PDF_MIME;
+  if (lower.endsWith(".csv")) return "text/csv";
+  if (lower.endsWith(".tsv")) return "text/tab-separated-values";
+  if (lower.endsWith(".txt")) return "text/plain";
+  if (lower.endsWith(".xlsx"))
+    return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+  if (lower.endsWith(".xlsm"))
+    return "application/vnd.ms-excel.sheet.macroenabled.12";
+  if (lower.endsWith(".xls")) return "application/vnd.ms-excel";
+  return null;
+}
 
 export class PickerError extends Error {
   constructor(message: string) {
@@ -46,6 +76,7 @@ function deriveName(uri: string, provided: string | null | undefined): string {
 function kindFromMime(mime: string): AttachmentKind | null {
   if (IMAGE_MIMES.has(mime)) return "image";
   if (mime === PDF_MIME) return "pdf";
+  if (FILE_MIMES.has(mime)) return "file";
   return null;
 }
 
@@ -117,21 +148,21 @@ function replaceExt(name: string, newExt: string): string {
 
 export async function pickDocument(): Promise<LocalFileInput[]> {
   const res = await DocumentPicker.getDocumentAsync({
-    type: [PDF_MIME],
+    type: DOCUMENT_PICKER_TYPES,
     multiple: false,
     copyToCacheDirectory: true,
   });
   if (res.canceled) return [];
   const out: LocalFileInput[] = [];
   for (const a of res.assets) {
-    const mime = a.mimeType ?? PDF_MIME;
-    const kind = kindFromMime(mime);
-    if (!kind) {
-      throw new PickerError(`Unsupported file type: ${mime}`);
+    const mime = inferFileMime(a.uri, a.mimeType ?? undefined) ?? a.mimeType;
+    const kind = mime ? kindFromMime(mime) : null;
+    if (!mime || !kind) {
+      throw new PickerError(`Unsupported file type: ${a.mimeType ?? "unknown"}`);
     }
     out.push({
       uri: a.uri,
-      name: a.name || "document.pdf",
+      name: a.name || "attachment",
       mime,
       kind,
       sizeBytes: a.size,

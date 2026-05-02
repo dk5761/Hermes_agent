@@ -32,7 +32,25 @@ export type MimeValidation =
 const MIME_ALIASES: ReadonlyArray<ReadonlySet<string>> = [
   new Set(["image/heic", "image/heif"]),
   new Set(["image/jpeg", "image/jpg"]),
+  // Office Open XML files are zip-based; file-type usually returns the
+  // specific mime, but older versions or trimmed builds can return raw zip.
+  new Set([
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.ms-excel.sheet.macroenabled.12",
+    "application/zip",
+    "application/x-zip-compressed",
+  ]),
 ];
+
+// MIMEs that file-type cannot detect because they have no magic bytes (plain
+// text formats). We trust the client's declared type for these — abuse window
+// is small since the gateway re-extracts text on the server side anyway.
+const UNDETECTABLE_TEXT_MIMES: ReadonlySet<string> = new Set([
+  "text/plain",
+  "text/csv",
+  "application/csv",
+  "text/tab-separated-values",
+]);
 
 function sameOrAlias(a: string, b: string): boolean {
   if (a === b) return true;
@@ -59,8 +77,9 @@ export async function validateDeclaredVsDetected(
   const detected = await sniffMime(body);
 
   if (detected.detectedMime === null) {
-    // file-type cannot detect plain text reliably (no magic bytes); accept it.
-    if (declaredLc === "text/plain" || declaredLc.startsWith("text/plain;")) {
+    // file-type cannot detect text formats reliably (no magic bytes).
+    const declaredBase = declaredLc.split(";")[0]?.trim() ?? declaredLc;
+    if (UNDETECTABLE_TEXT_MIMES.has(declaredBase)) {
       return { ok: true, detected };
     }
     return { ok: false, reason: "undetectable", declared: declaredLc };
