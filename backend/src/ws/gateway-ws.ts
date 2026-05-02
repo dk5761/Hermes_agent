@@ -1,9 +1,9 @@
-import { and, eq, isNotNull } from "drizzle-orm";
+import { and, desc, eq, gte, isNotNull } from "drizzle-orm";
 import { z } from "zod";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { WebSocket } from "ws";
 import type { Db } from "../db/client.js";
-import { appSessions } from "../db/schema.js";
+import { appSessions, chatHistory, wsEvents } from "../db/schema.js";
 import type { AppLogger } from "../logger.js";
 import type { JwtConfig } from "../auth/jwt.js";
 import { verifyWsAuth } from "../middleware/require-auth-ws.js";
@@ -100,7 +100,16 @@ const wsQuerySchema = z.object({
 
 type ClientFrame =
   | { type: "resume"; lastEventId: number }
-  | { type: "chat.send"; text: string; attachmentIds?: string[] | undefined }
+  | {
+      type: "chat.send";
+      text: string;
+      attachmentIds?: string[] | undefined;
+      // When true, truncate the last turn (latest user.message + every row
+      // after it) from chat_history and ws_events, call session.undo on
+      // Hermes, then proceed with a normal prompt.submit. UX matches
+      // ChatGPT/Claude's "Regenerate" — old assistant response is replaced.
+      regenerate?: boolean | undefined;
+    }
   | { type: "chat.abort" }
   | { type: "approval.respond"; requestId: string; choice: string; all?: boolean | undefined }
   | { type: "clarify.respond"; requestId: string; text: string }
@@ -114,6 +123,7 @@ const clientFrameSchema: z.ZodType<ClientFrame> = z.discriminatedUnion("type", [
     type: z.literal("chat.send"),
     text: z.string().min(1),
     attachmentIds: z.array(z.string().min(1)).max(20).optional(),
+    regenerate: z.boolean().optional(),
   }),
   z.object({ type: z.literal("chat.abort") }),
   z.object({
@@ -294,7 +304,11 @@ class GatewayClientHandler {
         await this.handleResume(frame.lastEventId);
         return;
       case "chat.send":
-        await this.handleChatSend(frame.text, frame.attachmentIds ?? []);
+        await this.handleChatSend(
+          frame.text,
+          frame.attachmentIds ?? [],
+          !!frame.regenerate,
+        );
         return;
       case "chat.abort":
         await this.handleChatAbort();
@@ -325,10 +339,23 @@ class GatewayClientHandler {
     for (const env of missed) this.sendJson(env);
   }
 
-  private async handleChatSend(text: string, attachmentIds: readonly string[]): Promise<void> {
+  private async handleChatSend(
+    text: string,
+    attachmentIds: readonly string[],
+    regenerate: boolean,
+  ): Promise<void> {
     const sid = this.appSessionId;
     const userId = this.userId;
     if (!sid || !userId) return;
+
+    if (regenerate) {
+      // Drop the last turn so the new submission replaces it. Order matters:
+      // truncate our local logs first, then ask Hermes to undo so its
+      // in-memory history matches what the agent will see on the next
+      // prompt.submit. Failures here are non-fatal — worst case the new
+      // turn appends after the old one (still functional, just messy).
+      await this.truncateLastTurn(sid);
+    }
 
     // Auto-title from the first user message when no manual override exists.
     // Hermes' /api/sessions/{id} uses a different id namespace from session.create,
@@ -602,6 +629,86 @@ class GatewayClientHandler {
       .set({ hermesSessionId: null, updatedAt: Math.floor(Date.now() / 1000) })
       .where(eq(appSessions.id, appSessionId));
     if (stale) this.reverse.invalidate(stale);
+  }
+
+  private async truncateLastTurn(appSessionId: string): Promise<void> {
+    // chat_history: drop the last user.message row + everything after it.
+    try {
+      const rows = await this.deps.db
+        .select({ id: chatHistory.id })
+        .from(chatHistory)
+        .where(
+          and(
+            eq(chatHistory.appSessionId, appSessionId),
+            eq(chatHistory.kind, "user.message"),
+          ),
+        )
+        .orderBy(desc(chatHistory.id))
+        .limit(1);
+      const fromId = rows[0]?.id;
+      if (typeof fromId === "number") {
+        await this.deps.db
+          .delete(chatHistory)
+          .where(
+            and(
+              eq(chatHistory.appSessionId, appSessionId),
+              gte(chatHistory.id, fromId),
+            ),
+          );
+      }
+    } catch (err) {
+      this.log.warn({ err }, "regenerate: chat_history truncation failed");
+    }
+
+    // ws_events: drop the last gateway.user.message envelope + everything
+    // after it. Replay window may shrink for other devices listening on
+    // this session — they'll see sync.required and cold-load fresh.
+    try {
+      const rows = await this.deps.db
+        .select({ id: wsEvents.id })
+        .from(wsEvents)
+        .where(
+          and(
+            eq(wsEvents.appSessionId, appSessionId),
+            eq(wsEvents.type, "gateway.user.message"),
+          ),
+        )
+        .orderBy(desc(wsEvents.id))
+        .limit(1);
+      const fromId = rows[0]?.id;
+      if (typeof fromId === "number") {
+        await this.deps.db
+          .delete(wsEvents)
+          .where(
+            and(
+              eq(wsEvents.appSessionId, appSessionId),
+              gte(wsEvents.id, fromId),
+            ),
+          );
+      }
+    } catch (err) {
+      this.log.warn({ err }, "regenerate: ws_events truncation failed");
+    }
+
+    // Hermes-side: roll back its in-memory history one turn so the next
+    // prompt.submit doesn't include the (now-gone) prior assistant
+    // response in the conversation context. session.undo removes the last
+    // assistant + tool messages AND the last user.message; we'll re-issue
+    // both via the chat.send flow that follows.
+    try {
+      const sharedClient = this.deps.wsPool.getOrCreateShared();
+      const rows = await this.deps.db
+        .select({ hsid: appSessions.hermesSessionId })
+        .from(appSessions)
+        .where(eq(appSessions.id, appSessionId))
+        .limit(1);
+      const hsid = rows[0]?.hsid;
+      if (hsid) {
+        await sharedClient.request("session.undo", { session_id: hsid });
+      }
+    } catch (err) {
+      this.log.warn({ err }, "regenerate: session.undo failed");
+    }
   }
 
   private async maybeApplySessionModelOverride(

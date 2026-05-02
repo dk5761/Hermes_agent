@@ -14,6 +14,11 @@ export interface ChatStreamApi {
   status: ConnectionStatus;
   retryInMs: number | null;
   send: (text: string, attachments?: AttachmentDTO[]) => void;
+  // Re-runs the last user turn with the same input. Locally truncates the
+  // chat-store from the last user message and tells the backend to drop the
+  // last turn from chat_history + ws_events + Hermes' history before re-
+  // submitting the prompt.
+  regenerate: (text: string, attachments?: AttachmentDTO[]) => void;
   abort: () => void;
   respondApproval: (requestId: string, choice: string, all?: boolean) => void;
   respondClarify: (requestId: string, text: string) => void;
@@ -30,6 +35,7 @@ export function useChatStream(appSessionId: string | null): ChatStreamApi {
   const ensure = useChatStore((s) => s.ensure);
   const applyEnvelope = useChatStore((s) => s.applyEnvelope);
   const pushUserMessage = useChatStore((s) => s.pushUserMessage);
+  const truncateLastTurn = useChatStore((s) => s.truncateLastTurn);
   const resetSession = useChatStore((s) => s.reset);
   const queryClient = useQueryClient();
 
@@ -94,6 +100,27 @@ export function useChatStream(appSessionId: string | null): ChatStreamApi {
     [appSessionId, pushUserMessage],
   );
 
+  const regenerate = useCallback(
+    (text: string, attachments?: AttachmentDTO[]) => {
+      if (!appSessionId) return;
+      const trimmed = text.trim();
+      const hasAttachments = (attachments?.length ?? 0) > 0;
+      if (!trimmed && !hasAttachments) return;
+      // Locally drop the prior turn first so the user sees the old answer
+      // disappear immediately; the new one will stream into its place once
+      // the backend acks the re-submission.
+      truncateLastTurn(appSessionId);
+      pushUserMessage(appSessionId, trimmed, attachments);
+      const attachmentIds = attachments?.map((a) => a.id);
+      const frame: ClientFrame =
+        hasAttachments && attachmentIds && attachmentIds.length > 0
+          ? { type: "chat.send", text: trimmed, attachmentIds, regenerate: true }
+          : { type: "chat.send", text: trimmed, regenerate: true };
+      clientRef.current?.send(frame);
+    },
+    [appSessionId, pushUserMessage, truncateLastTurn],
+  );
+
   const abort = useCallback(() => {
     clientRef.current?.send({ type: "chat.abort" });
   }, []);
@@ -129,6 +156,7 @@ export function useChatStream(appSessionId: string | null): ChatStreamApi {
     status,
     retryInMs,
     send,
+    regenerate,
     abort,
     respondApproval,
     respondClarify,

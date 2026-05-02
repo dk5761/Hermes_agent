@@ -299,13 +299,21 @@ function ReasoningInline({
 function AssistantRow({
   message,
   streaming,
+  onCopy,
+  onRegenerate,
 }: {
   message: AssistantMessage;
   streaming?: boolean;
+  onCopy?: () => void;
+  onRegenerate?: () => void;
 }) {
   const tokens = useThemeTokens();
   const hasText = message.text.length > 0;
   const hasReasoning = !!message.reasoning && message.reasoning.length > 0;
+  // Hide the action row while a turn is streaming — it's pointless to copy
+  // a half-written response, and regenerate would just kill the in-flight
+  // turn we're watching.
+  const showActions = !streaming && (onCopy || onRegenerate) && hasText;
   return (
     <View style={{ paddingHorizontal: 8, paddingVertical: 4, maxWidth: "92%" }}>
       {/* Reasoning lives above the answer (matches Claude/ChatGPT pattern):
@@ -346,7 +354,51 @@ function AssistantRow({
           </Text>
         </Row>
       ) : null}
+      {showActions ? (
+        <Row gap={4} align="center" style={{ marginTop: 6, marginLeft: -4 }}>
+          {onCopy ? (
+            <ActionIconButton name="copy" label="Copy" onPress={onCopy} />
+          ) : null}
+          {onRegenerate ? (
+            <ActionIconButton
+              name="refresh"
+              label="Regenerate"
+              onPress={onRegenerate}
+            />
+          ) : null}
+        </Row>
+      ) : null}
     </View>
+  );
+}
+
+function ActionIconButton({
+  name,
+  label,
+  onPress,
+}: {
+  name: IconName;
+  label: string;
+  onPress: () => void;
+}) {
+  const tokens = useThemeTokens();
+  return (
+    <Pressable
+      onPress={onPress}
+      hitSlop={6}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      style={({ pressed }) => ({
+        width: 28,
+        height: 28,
+        borderRadius: 14,
+        alignItems: "center",
+        justifyContent: "center",
+        opacity: pressed ? 0.5 : 1,
+      })}
+    >
+      <Icon name={name} size={14} color={tokens.ink3} />
+    </Pressable>
   );
 }
 
@@ -565,6 +617,12 @@ interface MessageProps {
   // True when this row is the in-flight streaming AssistantMessage. Drives
   // the auto-expanded "Thinking…" reasoning header.
   streaming?: boolean;
+  // Inline action affordances rendered below an assistant message — copy
+  // text, regenerate (= replay the last user turn). Pass undefined to hide.
+  // Regenerate is typically only enabled on the latest assistant message
+  // because it truncates the last turn server-side.
+  onCopy?: () => void;
+  onRegenerate?: () => void;
 }
 
 function MessageInner({
@@ -575,6 +633,8 @@ function MessageInner({
   isMatch,
   isActiveMatch,
   streaming,
+  onCopy,
+  onRegenerate,
 }: MessageProps) {
   let inner: React.ReactNode = null;
   switch (message.kind) {
@@ -590,7 +650,14 @@ function MessageInner({
       ) {
         inner = <ReasoningOnlyRow text={message.reasoning} />;
       } else {
-        inner = <AssistantRow message={message} streaming={streaming} />;
+        inner = (
+          <AssistantRow
+            message={message}
+            streaming={streaming}
+            onCopy={onCopy}
+            onRegenerate={onRegenerate}
+          />
+        );
       }
       break;
     }

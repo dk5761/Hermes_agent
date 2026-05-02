@@ -110,6 +110,10 @@ interface ChatStore {
   get: (id: string) => ChatSessionState | undefined;
   reset: (id: string) => void;
   pushUserMessage: (id: string, text: string, attachments?: AttachmentDTO[]) => void;
+  // Drop the last turn — every message from the latest user message onwards.
+  // Used by Regenerate before re-issuing the prompt so the UI doesn't show
+  // both the old and the new responses while the new turn streams in.
+  truncateLastTurn: (id: string) => void;
   applyEnvelope: (id: string, env: GatewayEventEnvelope) => void;
   resolveApproval: (id: string, requestId: string) => void;
   setLatestTodoToolId: (sessionId: string, toolCallId: string | null) => void;
@@ -408,6 +412,31 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           [id]: { ...cur, messages: [...cur.messages, msg] },
         },
       };
+    });
+  },
+
+  truncateLastTurn(id) {
+    set((s) => {
+      const cur = s.byId[id];
+      if (!cur) return s;
+      // Find the LAST user message; everything from there on (the user msg
+      // itself, any tool cards, the assistant message) goes away. Streaming
+      // state is also cleared since the turn it described is gone.
+      let cutIndex = -1;
+      for (let i = cur.messages.length - 1; i >= 0; i--) {
+        if (cur.messages[i].kind === "user") {
+          cutIndex = i;
+          break;
+        }
+      }
+      if (cutIndex < 0) return s;
+      const next: ChatSessionState = {
+        ...cur,
+        messages: cur.messages.slice(0, cutIndex),
+        streaming: null,
+        isStreaming: false,
+      };
+      return { byId: { ...s.byId, [id]: next } };
     });
   },
 

@@ -49,6 +49,7 @@ import {
 } from "@/components/ui";
 import { ApprovalCard } from "@/components/ApprovalCard";
 import { ComposerAttachments } from "@/components/ComposerAttachments";
+import * as Clipboard from "expo-clipboard";
 import { exportChat } from "@/util/export-chat";
 import { useChatStream } from "@/ws/use-chat-stream";
 import { useChatStore } from "@/state/chat-store";
@@ -586,6 +587,58 @@ export default function ChatScreen() {
     setMatchIdx((i) => (i + 1) % totalMatches);
   }, [totalMatches]);
 
+  // ─── inline assistant actions ───────────────────────────────────────────
+  // ChatGPT/Claude pattern: a small icon row below every assistant reply.
+  // Copy is universal; Regenerate is only enabled on the latest assistant
+  // because it truncates the last turn server-side (chat_history,
+  // ws_events, Hermes' in-memory history all align on that).
+  const lastAssistantId = useMemo<string | null>(() => {
+    for (let i = rows.length - 1; i >= 0; i--) {
+      const r = rows[i];
+      if (r.rowKind === "msg" && r.data.kind === "assistant") return r.data.id;
+    }
+    return null;
+  }, [rows]);
+
+  const findPairedUserMessage = useCallback(
+    (assistantId: string): { text: string; attachments?: AttachmentDTO[] } | null => {
+      let assistantIdx = -1;
+      for (let i = 0; i < rows.length; i++) {
+        const r = rows[i];
+        if (r.rowKind === "msg" && r.data.id === assistantId) {
+          assistantIdx = i;
+          break;
+        }
+      }
+      if (assistantIdx < 0) return null;
+      for (let i = assistantIdx - 1; i >= 0; i--) {
+        const r = rows[i];
+        if (r.rowKind !== "msg" || r.data.kind !== "user") continue;
+        return {
+          text: r.data.text,
+          attachments: r.data.attachments,
+        };
+      }
+      return null;
+    },
+    [rows],
+  );
+
+  const onCopyAssistant = useCallback(
+    (text: string) => {
+      if (text) void Clipboard.setStringAsync(text);
+    },
+    [],
+  );
+
+  const onRegenerateAssistant = useCallback(
+    (assistantId: string) => {
+      const paired = findPairedUserMessage(assistantId);
+      if (paired) stream.regenerate(paired.text, paired.attachments);
+    },
+    [findPairedUserMessage, stream],
+  );
+
   // Send-gating: hold sends while uploads are in flight.
   const uploadingCount = pendingList.filter(
     (p) => p.status === "queued" || p.status === "uploading",
@@ -781,14 +834,25 @@ export default function ChatScreen() {
     ({ item }) => {
       if (item.rowKind === "msg") {
         const isMatch = matchIdSet.has(item.data.id);
+        const m = item.data;
+        const isAssistant = m.kind === "assistant";
+        const isLastAssistant = isAssistant && m.id === lastAssistantId;
         return (
           <MessageRow
-            message={item.data}
+            message={m}
             sessionId={sessionId}
             latestTodoToolId={latestTodoToolId}
             searchActive={searchActive}
             isMatch={isMatch}
-            isActiveMatch={searchActive && item.data.id === activeMatchId}
+            isActiveMatch={searchActive && m.id === activeMatchId}
+            onCopy={
+              isAssistant && m.kind === "assistant"
+                ? () => onCopyAssistant(m.text)
+                : undefined
+            }
+            onRegenerate={
+              isLastAssistant ? () => onRegenerateAssistant(m.id) : undefined
+            }
           />
         );
       }
@@ -845,7 +909,17 @@ export default function ChatScreen() {
       }
       return null;
     },
-    [sessionId, stream, latestTodoToolId, searchActive, activeMatchId, matchIdSet],
+    [
+      sessionId,
+      stream,
+      latestTodoToolId,
+      searchActive,
+      activeMatchId,
+      matchIdSet,
+      lastAssistantId,
+      onCopyAssistant,
+      onRegenerateAssistant,
+    ],
   );
 
   const keyExtractor = useCallback((item: Row): string => {
@@ -890,19 +964,18 @@ export default function ChatScreen() {
         title={headerTitle}
         onBack={() => router.back()}
         leading={
-          <Row gap={6} align="center" style={{ marginLeft: 4 }}>
-            <StatusDot kind={statusToDotKind(stream.status)} />
-            <Text kind="caption" color={tokens.ink3}>
-              {statusLabel(stream.status, stream.retryInMs)}
-            </Text>
-            {session?.modelOverride ? (
+          // Connection status moved to the dedicated banner below the
+          // NavBar — keeping it here too was redundant and crowded the
+          // title. Only the per-chat model-override pill remains in the
+          // leading slot, and only when an override is actually active.
+          session?.modelOverride ? (
+            <Row gap={6} align="center" style={{ marginLeft: 4 }}>
               <View
                 className="bg-accent-bg"
                 style={{
                   paddingHorizontal: 6,
                   paddingVertical: 2,
                   borderRadius: 4,
-                  marginLeft: 4,
                 }}
               >
                 <Text
@@ -915,8 +988,8 @@ export default function ChatScreen() {
                   {session.modelOverride}
                 </Text>
               </View>
-            ) : null}
-          </Row>
+            </Row>
+          ) : null
         }
         trailing={
           <>
