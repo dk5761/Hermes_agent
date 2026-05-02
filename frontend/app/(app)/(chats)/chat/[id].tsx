@@ -16,7 +16,6 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ActionSheetIOS,
   Alert,
   FlatList,
   KeyboardAvoidingView,
@@ -30,6 +29,7 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
+  ActionSheet,
   Icon,
   Message as MessageRow,
   NavBar,
@@ -43,6 +43,7 @@ import {
   Text,
   TodoPlanCard,
   useThemeTokens,
+  type ActionSheetHandle,
   type SheetHandle,
   type TodoItem,
   type TodoStatus,
@@ -721,26 +722,16 @@ export default function ChatScreen() {
     }
   }, [sessionId, addPending]);
 
+  const actionSheetRef = useRef<ActionSheetHandle>(null);
   const onAttachPress = useCallback(() => {
     if (!sessionId) return;
-    if (Platform.OS === "ios") {
-      ActionSheetIOS.showActionSheetWithOptions(
-        {
-          options: ["Cancel", "Photo Library", "Document"],
-          cancelButtonIndex: 0,
-        },
-        (idx) => {
-          if (idx === 1) void onPickImage();
-          else if (idx === 2) void onPickDocument();
-        },
-      );
-      return;
-    }
-    Alert.alert("Add attachment", undefined, [
-      { text: "Photo Library", onPress: () => void onPickImage() },
-      { text: "Document", onPress: () => void onPickDocument() },
-      { text: "Cancel", style: "cancel" },
-    ]);
+    actionSheetRef.current?.present({
+      title: "Add attachment",
+      actions: [
+        { id: "photo", label: "Photo Library", icon: "image", onPress: onPickImage },
+        { id: "doc", label: "Document", icon: "doc", onPress: onPickDocument },
+      ],
+    });
   }, [sessionId, onPickImage, onPickDocument]);
 
   // ─── menu sheet actions ───────────────────────────────────────────────────
@@ -807,25 +798,14 @@ export default function ChatScreen() {
         Alert.alert("Export failed", msg);
       });
     };
-    if (Platform.OS === "ios") {
-      ActionSheetIOS.showActionSheetWithOptions(
-        {
-          title: "Export format",
-          options: ["Cancel", "Markdown", "JSON"],
-          cancelButtonIndex: 0,
-        },
-        (idx) => {
-          if (idx === 1) run("markdown");
-          else if (idx === 2) run("json");
-        },
-      );
-      return;
-    }
-    Alert.alert("Export format", undefined, [
-      { text: "Markdown", onPress: () => run("markdown") },
-      { text: "JSON", onPress: () => run("json") },
-      { text: "Cancel", style: "cancel" },
-    ]);
+    actionSheetRef.current?.present({
+      title: "Export chat",
+      subtitle: session.title,
+      actions: [
+        { id: "md", label: "Markdown", icon: "doc", onPress: () => run("markdown") },
+        { id: "json", label: "JSON", icon: "doc", onPress: () => run("json") },
+      ],
+    });
   }, [sessionId, session, messagesQuery.data]);
 
   // ─── render ───────────────────────────────────────────────────────────────
@@ -1285,6 +1265,8 @@ export default function ChatScreen() {
       </KeyboardAvoidingView>
 
       {/* Quick-actions menu — standardized to 35%. */}
+      <ActionSheet ref={actionSheetRef} />
+
       <Sheet ref={sheetRef} snapPoints={["50%"]}>
         <Stack gap={2} style={{ paddingVertical: 8 }}>
           <SheetItem

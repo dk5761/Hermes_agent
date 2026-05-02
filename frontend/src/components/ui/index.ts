@@ -71,6 +71,13 @@ export type { HermesMarkProps } from "./HermesMark";
 export { Sheet } from "./Sheet";
 export type { SheetHandle, SheetProps } from "./Sheet";
 
+export { ActionSheet } from "./ActionSheet";
+export type {
+  ActionSheetHandle,
+  ActionSheetConfig,
+  ActionSheetItem,
+} from "./ActionSheet";
+
 export { ToastProvider, useToast, showToast } from "./Toast";
 export type { ToastKind } from "./Toast";
 

@@ -8,12 +8,9 @@
  * Filter chips (Notify on / Sort: name) are intentional placeholders per the
  * stage spec; their state is local but no-op until backend support exists.
  */
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import {
-  ActionSheetIOS,
-  Alert,
   FlatList,
-  Platform,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -25,6 +22,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as Haptics from "expo-haptics";
 
 import {
+  ActionSheet,
   Chip,
   EmptyState,
   Icon,
@@ -38,6 +36,7 @@ import {
   Text,
   Button,
   useThemeTokens,
+  type ActionSheetHandle,
 } from "@/components/ui";
 import {
   cronKeys,
@@ -158,32 +157,30 @@ export default function CronListScreen() {
       );
       const paused = isPaused(job);
       const pauseLabel = paused ? "Resume" : "Pause";
-      const opts = ["Cancel", "Run now", pauseLabel];
-      if (Platform.OS === "ios") {
-        ActionSheetIOS.showActionSheetWithOptions(
-          { title: job.name, options: opts, cancelButtonIndex: 0 },
-          (idx) => {
-            if (idx === 1) triggerMut.mutate(job.id);
-            else if (idx === 2) {
-              if (paused) resumeMut.mutate(job.id);
-              else pauseMut.mutate(job.id);
-            }
+      actionSheetRef.current?.present({
+        title: job.name,
+        subtitle: paused ? "paused" : undefined,
+        actions: [
+          {
+            id: "run",
+            label: "Run now",
+            icon: "play",
+            onPress: () => triggerMut.mutate(job.id),
           },
-        );
-        return;
-      }
-      Alert.alert(job.name, undefined, [
-        { text: "Run now", onPress: () => triggerMut.mutate(job.id) },
-        {
-          text: pauseLabel,
-          onPress: () =>
-            (paused ? resumeMut : pauseMut).mutate(job.id),
-        },
-        { text: "Cancel", style: "cancel" },
-      ]);
+          {
+            id: "pause",
+            label: pauseLabel,
+            icon: paused ? "play" : "pause",
+            onPress: () =>
+              (paused ? resumeMut : pauseMut).mutate(job.id),
+          },
+        ],
+      });
     },
     [pauseMut, resumeMut, triggerMut],
   );
+
+  const actionSheetRef = useRef<ActionSheetHandle>(null);
 
   const subtitle = useMemo(() => {
     if (counts.total === 0) return "No jobs yet";
@@ -284,6 +281,7 @@ export default function CronListScreen() {
           />
         }
       />
+      <ActionSheet ref={actionSheetRef} />
     </PhoneSafeArea>
   );
 }

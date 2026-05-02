@@ -10,12 +10,10 @@
  * in-flight stream, and `awaiting` if its pendingApprovals queue is non-empty.
  * Sessions not yet present in the chat-store are treated as idle.
  */
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import {
-  ActionSheetIOS,
   Alert,
   FlatList,
-  Platform,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -28,6 +26,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as Haptics from "expo-haptics";
 
 import {
+  ActionSheet,
+  Button,
   Chip,
   EmptyState,
   HermesMark,
@@ -37,11 +37,14 @@ import {
   NavIcon,
   PhoneSafeArea,
   Row,
+  Sheet,
   SkeletonGroup,
   Stack,
   StatusPill,
   Text,
   useThemeTokens,
+  type ActionSheetHandle,
+  type SheetHandle,
 } from "@/components/ui";
 import {
   archiveSession,
@@ -53,15 +56,19 @@ import {
 import type { SessionDto } from "@/api/types";
 import { useChatStore } from "@/state/chat-store";
 import { usePinnedSessions } from "@/state/pinned-sessions";
+import { useSessionTags } from "@/state/session-tags";
 import { formatRelative } from "@/util/time";
 
 const QUERY_KEY = ["sessions"] as const;
 
-type FilterKey = "all" | "running" | "awaiting" | "archived";
+// Filter chips: presets first, then any user-defined tags get rendered as
+// `tag:<name>` selections. Stored as a single string for easy useState.
+type FilterKey = "all" | "running" | "awaiting" | "archived" | `tag:${string}`;
 
 interface SessionRow extends SessionDto {
   badge: "running" | "approval" | null;
   pinned: boolean;
+  tags: string[];
 }
 
 function tabBarBottomPadding(): number {
@@ -108,6 +115,8 @@ export default function SessionsScreen() {
   const byId = useChatStore((s) => s.byId);
   const pinnedMap = usePinnedSessions((s) => s.pinned);
   const togglePinned = usePinnedSessions((s) => s.togglePinned);
+  const tagsBySession = useSessionTags((s) => s.tagsBySession);
+  const setSessionTags = useSessionTags((s) => s.setTags);
 
   const create = useMutation({
     mutationFn: () => createSession(),
@@ -146,9 +155,14 @@ export default function SessionsScreen() {
           : cs?.isStreaming
             ? "running"
             : null;
-      return { ...s, badge, pinned: !!pinnedMap[s.id] };
+      return {
+        ...s,
+        badge,
+        pinned: !!pinnedMap[s.id],
+        tags: tagsBySession[s.id] ?? [],
+      };
     });
-  }, [allSessions, byId, pinnedMap]);
+  }, [allSessions, byId, pinnedMap, tagsBySession]);
 
   // Counts shown in the filter chips. Computed off the un-filtered list so
   // chip labels stay stable across filter toggles.
@@ -173,6 +187,7 @@ export default function SessionsScreen() {
   // that order within each partition (pinned vs unpinned).
   const filtered: SessionRow[] = useMemo(() => {
     const q = query.trim().toLowerCase();
+    const tagFilter = filter.startsWith("tag:") ? filter.slice(4) : null;
     const matched = decorated.filter((s) => {
       if (filter === "archived") {
         if (!s.archived) return false;
@@ -180,9 +195,10 @@ export default function SessionsScreen() {
         if (s.archived) return false;
         if (filter === "running" && s.badge !== "running") return false;
         if (filter === "awaiting" && s.badge !== "approval") return false;
+        if (tagFilter && !s.tags.includes(tagFilter)) return false;
       }
       if (q.length === 0) return true;
-      const hay = `${s.title.toLowerCase()} ${(s.preview ?? "").toLowerCase()}`;
+      const hay = `${s.title.toLowerCase()} ${(s.preview ?? "").toLowerCase()} ${s.tags.join(" ")}`;
       return hay.includes(q);
     });
     if (filter === "archived") return matched;
@@ -191,6 +207,54 @@ export default function SessionsScreen() {
     return [...pinned, ...rest];
   }, [decorated, filter, query]);
 
+  // Distinct tags across all sessions, used to render the per-tag filter
+  // chips after the four built-in presets.
+  const distinctTags = useMemo<string[]>(() => {
+    const seen = new Set<string>();
+    for (const s of decorated) {
+      for (const t of s.tags) seen.add(t);
+    }
+    return Array.from(seen).sort();
+  }, [decorated]);
+
+  // Long-press opens our themed ActionSheet (cross-platform, replaces the
+  // native iOS ActionSheetIOS + Android cascading Alerts).
+  const [tagsEditTarget, setTagsEditTarget] = useState<SessionRow | null>(null);
+  const tagsSheetRef = useRef<SheetHandle>(null);
+  const actionSheetRef = useRef<ActionSheetHandle>(null);
+  const openTagsEditor = useCallback((s: SessionRow) => {
+    setTagsEditTarget(s);
+    setTimeout(() => tagsSheetRef.current?.present(), 50);
+  }, []);
+  const promptRename = useCallback(
+    (s: SessionRow) => {
+      Alert.prompt?.(
+        "Rename session",
+        "New title",
+        (text) => {
+          if (text && text.trim()) {
+            rename.mutate({ id: s.id, title: text.trim() });
+          }
+        },
+        "plain-text",
+        s.title,
+      );
+    },
+    [rename],
+  );
+  const confirmDelete = useCallback(
+    (s: SessionRow) => {
+      Alert.alert("Delete session?", "This cannot be undone.", [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: () => remove.mutate(s.id),
+        },
+      ]);
+    },
+    [remove],
+  );
   const onLongPress = useCallback(
     (s: SessionRow) => {
       void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(
@@ -198,91 +262,54 @@ export default function SessionsScreen() {
       );
       const archiveLabel = s.archived ? "Unarchive" : "Archive";
       const pinLabel = s.pinned ? "Unpin" : "Pin";
-      if (Platform.OS === "ios") {
-        ActionSheetIOS.showActionSheetWithOptions(
+      const subtitle =
+        s.badge === "running"
+          ? "running"
+          : s.badge === "approval"
+            ? "awaiting approval"
+            : s.archived
+              ? "archived"
+              : undefined;
+      actionSheetRef.current?.present({
+        title: s.title,
+        subtitle,
+        actions: [
           {
-            title: s.title,
-            options: ["Cancel", pinLabel, "Rename", archiveLabel, "Delete"],
-            destructiveButtonIndex: 4,
-            cancelButtonIndex: 0,
+            id: "pin",
+            label: pinLabel,
+            icon: "pin",
+            onPress: () => togglePinned(s.id),
           },
-          (idx) => {
-            if (idx === 1) {
-              togglePinned(s.id);
-              return;
-            }
-            if (idx === 2) {
-              Alert.prompt?.(
-                "Rename session",
-                "New title",
-                (text) => {
-                  if (text && text.trim()) {
-                    rename.mutate({ id: s.id, title: text.trim() });
-                  }
-                },
-                "plain-text",
-                s.title,
-              );
-              return;
-            }
-            if (idx === 3) {
-              archive.mutate({ id: s.id, archived: !s.archived });
-              return;
-            }
-            if (idx === 4) {
-              Alert.alert("Delete session?", "This cannot be undone.", [
-                { text: "Cancel", style: "cancel" },
-                {
-                  text: "Delete",
-                  style: "destructive",
-                  onPress: () => remove.mutate(s.id),
-                },
-              ]);
-            }
+          {
+            id: "tags",
+            label: "Edit tags",
+            icon: "hash",
+            onPress: () => openTagsEditor(s),
           },
-        );
-        return;
-      }
-      // Android: cascading Alerts. ActionSheet equivalent isn't built-in.
-      Alert.alert(s.title, undefined, [
-        { text: pinLabel, onPress: () => togglePinned(s.id) },
-        {
-          text: "Rename",
-          onPress: () => {
-            Alert.prompt?.(
-              "Rename session",
-              "New title",
-              (text) => {
-                if (text && text.trim()) {
-                  rename.mutate({ id: s.id, title: text.trim() });
-                }
-              },
-              "plain-text",
-              s.title,
-            );
+          {
+            id: "rename",
+            label: "Rename",
+            icon: "edit",
+            onPress: () => promptRename(s),
           },
-        },
-        {
-          text: archiveLabel,
-          onPress: () => archive.mutate({ id: s.id, archived: !s.archived }),
-        },
-        {
-          text: "Delete",
-          style: "destructive",
-          onPress: () =>
-            Alert.alert("Delete session?", "This cannot be undone.", [
-              { text: "Cancel", style: "cancel" },
-              {
-                text: "Delete",
-                style: "destructive",
-                onPress: () => remove.mutate(s.id),
-              },
-            ]),
-        },
-        { text: "Cancel", style: "cancel" },
-      ]);
+          {
+            id: "archive",
+            label: archiveLabel,
+            icon: "archive",
+            onPress: () =>
+              archive.mutate({ id: s.id, archived: !s.archived }),
+          },
+          {
+            id: "delete",
+            label: "Delete",
+            icon: "trash",
+            destructive: true,
+            onPress: () => confirmDelete(s),
+          },
+        ],
+      });
     },
-    [archive, remove, rename, togglePinned],
+    [archive, togglePinned, openTagsEditor, promptRename, confirmDelete],
   );
 
   const onSettings = useCallback(() => {
@@ -368,6 +395,16 @@ export default function SessionsScreen() {
             active={filter === "archived"}
             onPress={() => setFilter("archived")}
           >{`Archived · ${counts.archived}`}</Chip>
+          {distinctTags.map((t) => {
+            const key: FilterKey = `tag:${t}`;
+            return (
+              <Chip
+                key={key}
+                active={filter === key}
+                onPress={() => setFilter(key)}
+              >{`#${t}`}</Chip>
+            );
+          })}
         </ScrollView>
       </Stack>
 
@@ -433,7 +470,114 @@ export default function SessionsScreen() {
       >
         <Icon name="plus" size={22} color={tokens.surface} />
       </Pressable>
+
+      <ActionSheet ref={actionSheetRef} />
+
+      <Sheet
+        ref={tagsSheetRef}
+        snapPoints={["55%"]}
+        onChange={(idx) => {
+          if (idx < 0) setTagsEditTarget(null);
+        }}
+      >
+        {tagsEditTarget ? (
+          <TagsEditor
+            sessionId={tagsEditTarget.id}
+            sessionTitle={tagsEditTarget.title}
+            initialTags={tagsEditTarget.tags}
+            onSave={(tags) => {
+              setSessionTags(tagsEditTarget.id, tags);
+              tagsSheetRef.current?.dismiss();
+            }}
+            onClose={() => tagsSheetRef.current?.dismiss()}
+          />
+        ) : null}
+      </Sheet>
     </PhoneSafeArea>
+  );
+}
+
+function TagsEditor({
+  sessionTitle,
+  initialTags,
+  onSave,
+  onClose,
+}: {
+  sessionId: string;
+  sessionTitle: string;
+  initialTags: string[];
+  onSave: (tags: string[]) => void;
+  onClose: () => void;
+}) {
+  const tokens = useThemeTokens();
+  const [tags, setTags] = useState<string[]>(initialTags);
+  const [draft, setDraft] = useState("");
+  const onAdd = useCallback(() => {
+    const trimmed = draft.trim().toLowerCase();
+    if (!trimmed) return;
+    if (tags.includes(trimmed)) {
+      setDraft("");
+      return;
+    }
+    setTags((prev) => [...prev, trimmed]);
+    setDraft("");
+  }, [draft, tags]);
+  const onRemove = useCallback((t: string) => {
+    setTags((prev) => prev.filter((x) => x !== t));
+  }, []);
+  return (
+    <Stack gap={14} style={{ paddingHorizontal: 20, paddingTop: 8, paddingBottom: 12 }}>
+      <Stack gap={4}>
+        <Text kind="h3">Tags</Text>
+        <Text kind="caption" color={tokens.ink3} numberOfLines={1}>
+          {sessionTitle}
+        </Text>
+      </Stack>
+
+      {tags.length > 0 ? (
+        <Row gap={6} style={{ flexWrap: "wrap" }}>
+          {tags.map((t) => (
+            <Pressable
+              key={t}
+              onPress={() => onRemove(t)}
+              style={({ pressed }) => ({
+                flexDirection: "row",
+                alignItems: "center",
+                gap: 4,
+                paddingHorizontal: 10,
+                paddingVertical: 5,
+                borderRadius: 999,
+                backgroundColor: pressed ? tokens.line : tokens.chip,
+              })}
+            >
+              <Text kind="caption" color={tokens.ink2}>
+                {t}
+              </Text>
+              <Icon name="close" size={10} color={tokens.ink3} />
+            </Pressable>
+          ))}
+        </Row>
+      ) : (
+        <Text kind="caption" color={tokens.ink3}>
+          No tags yet. Add a few to organize this chat.
+        </Text>
+      )}
+
+      <Input
+        value={draft}
+        onChange={setDraft}
+        placeholder="Add a tag (e.g. work, research)"
+        onSubmit={onAdd}
+      />
+      <Row gap={8}>
+        <Button kind="secondary" full onPress={onClose}>
+          Cancel
+        </Button>
+        <Button kind="accent" full onPress={() => onSave(tags)}>
+          Save
+        </Button>
+      </Row>
+    </Stack>
   );
 }
 
@@ -518,16 +662,38 @@ function SessionRowView({
             no messages yet
           </Text>
         )}
-        {item.badge ? (
-          <Row gap={4} style={{ marginTop: 2 }}>
-            <StatusPill
-              kind="connecting"
-              label={
-                item.badge === "running"
-                  ? "running"
-                  : "awaiting approval"
-              }
-            />
+        {item.badge || item.tags.length > 0 ? (
+          <Row gap={4} style={{ marginTop: 4, flexWrap: "wrap" }}>
+            {item.badge ? (
+              <StatusPill
+                kind="connecting"
+                label={
+                  item.badge === "running"
+                    ? "running"
+                    : "awaiting approval"
+                }
+              />
+            ) : null}
+            {item.tags.slice(0, 3).map((t) => (
+              <View
+                key={t}
+                style={{
+                  paddingHorizontal: 6,
+                  paddingVertical: 2,
+                  borderRadius: 4,
+                  backgroundColor: tokens.chip,
+                }}
+              >
+                <Text kind="micro" color={tokens.ink2}>
+                  #{t}
+                </Text>
+              </View>
+            ))}
+            {item.tags.length > 3 ? (
+              <Text kind="micro" color={tokens.ink3}>
+                +{item.tags.length - 3}
+              </Text>
+            ) : null}
           </Row>
         ) : null}
       </View>

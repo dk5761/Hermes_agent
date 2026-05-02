@@ -20,6 +20,7 @@ import { useAuthStore } from "@/auth/store";
 import { useTodosUi } from "@/state/todos";
 import { usePinnedSessions } from "@/state/pinned-sessions";
 import { useNotificationsInbox } from "@/state/notifications-inbox";
+import { useSessionTags } from "@/state/session-tags";
 import { BG, MUTED } from "@/config";
 import { ThemeProvider, useAppFonts } from "@/theme";
 import { ToastProvider, showToast } from "@/components/ui";
@@ -60,6 +61,7 @@ function AuthGate() {
     void useTodosUi.getState().hydrate();
     void usePinnedSessions.getState().hydrate();
     void useNotificationsInbox.getState().hydrate();
+    void useSessionTags.getState().hydrate();
   }, [hydrate]);
 
   useAuthRedirect();

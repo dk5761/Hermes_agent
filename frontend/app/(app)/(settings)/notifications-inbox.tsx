@@ -6,12 +6,10 @@
  * if the payload carries a known deep-link (cron output today, more later),
  * navigates to it. Swiping right archives. Long-press opens delete.
  */
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import {
-  ActionSheetIOS,
   Alert,
   FlatList,
-  Platform,
   Pressable,
   View,
   type ListRenderItem,
@@ -24,6 +22,7 @@ import Animated, {
 } from "react-native-reanimated";
 
 import {
+  ActionSheet,
   Chip,
   EmptyState,
   Icon,
@@ -35,6 +34,7 @@ import {
   Stack,
   Text,
   useThemeTokens,
+  type ActionSheetHandle,
 } from "@/components/ui";
 import {
   useNotificationsInbox,
@@ -107,73 +107,58 @@ export default function NotificationsInboxScreen() {
     [markRead, router],
   );
 
+  const actionSheetRef = useRef<ActionSheetHandle>(null);
   const onLongPress = useCallback(
     (item: InboxItem) => {
       const archiveLabel = item.archived ? "Unarchive" : "Archive";
       const reset = item.archived
         ? () => unarchive(item.id)
         : () => archive(item.id);
-      if (Platform.OS === "ios") {
-        ActionSheetIOS.showActionSheetWithOptions(
+      actionSheetRef.current?.present({
+        title: item.title || "Notification",
+        actions: [
           {
-            title: item.title || "Notification",
-            options: ["Cancel", archiveLabel, "Delete"],
-            destructiveButtonIndex: 2,
-            cancelButtonIndex: 0,
+            id: "archive",
+            label: archiveLabel,
+            icon: "archive",
+            onPress: reset,
           },
-          (idx) => {
-            if (idx === 1) reset();
-            else if (idx === 2) remove(item.id);
+          {
+            id: "delete",
+            label: "Delete",
+            icon: "trash",
+            destructive: true,
+            onPress: () => remove(item.id),
           },
-        );
-        return;
-      }
-      Alert.alert(item.title || "Notification", undefined, [
-        { text: archiveLabel, onPress: reset },
-        {
-          text: "Delete",
-          style: "destructive",
-          onPress: () => remove(item.id),
-        },
-        { text: "Cancel", style: "cancel" },
-      ]);
+        ],
+      });
     },
     [archive, unarchive, remove],
   );
 
   const onMenu = useCallback(() => {
-    if (Platform.OS === "ios") {
-      ActionSheetIOS.showActionSheetWithOptions(
+    actionSheetRef.current?.present({
+      title: "Inbox actions",
+      actions: [
         {
-          options: ["Cancel", "Mark all read", "Clear all"],
-          destructiveButtonIndex: 2,
-          cancelButtonIndex: 0,
+          id: "mark-all-read",
+          label: "Mark all read",
+          icon: "check",
+          onPress: markAllRead,
         },
-        (idx) => {
-          if (idx === 1) markAllRead();
-          else if (idx === 2) {
+        {
+          id: "clear",
+          label: "Clear all",
+          icon: "trash",
+          destructive: true,
+          onPress: () =>
             Alert.alert("Clear all notifications?", "This cannot be undone.", [
               { text: "Cancel", style: "cancel" },
               { text: "Clear", style: "destructive", onPress: clearAll },
-            ]);
-          }
+            ]),
         },
-      );
-      return;
-    }
-    Alert.alert("Inbox actions", undefined, [
-      { text: "Mark all read", onPress: markAllRead },
-      {
-        text: "Clear all",
-        style: "destructive",
-        onPress: () =>
-          Alert.alert("Clear all notifications?", "This cannot be undone.", [
-            { text: "Cancel", style: "cancel" },
-            { text: "Clear", style: "destructive", onPress: clearAll },
-          ]),
-      },
-      { text: "Cancel", style: "cancel" },
-    ]);
+      ],
+    });
   }, [markAllRead, clearAll]);
 
   const renderItem = useCallback<ListRenderItem<InboxItem>>(
@@ -244,6 +229,7 @@ export default function NotificationsInboxScreen() {
           />
         }
       />
+      <ActionSheet ref={actionSheetRef} />
     </PhoneSafeArea>
   );
 }
