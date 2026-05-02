@@ -4,7 +4,7 @@
 import "../global.css";
 
 import { useEffect } from "react";
-import { ActivityIndicator, StyleSheet, View } from "react-native";
+import { ActivityIndicator, AppState, StyleSheet, View } from "react-native";
 import { Slot } from "expo-router";
 import {
   MutationCache,
@@ -21,6 +21,8 @@ import { useTodosUi } from "@/state/todos";
 import { usePinnedSessions } from "@/state/pinned-sessions";
 import { useNotificationsInbox } from "@/state/notifications-inbox";
 import { useSessionTags } from "@/state/session-tags";
+import { useAppLock } from "@/state/app-lock";
+import { AppLockOverlay } from "@/components/AppLockOverlay";
 import { BG, MUTED } from "@/config";
 import { ThemeProvider, useAppFonts } from "@/theme";
 import { ToastProvider, showToast } from "@/components/ui";
@@ -62,7 +64,19 @@ function AuthGate() {
     void usePinnedSessions.getState().hydrate();
     void useNotificationsInbox.getState().hydrate();
     void useSessionTags.getState().hydrate();
+    void useAppLock.getState().hydrate();
   }, [hydrate]);
+
+  // Re-arm the app lock whenever the app leaves foreground; on return the
+  // overlay auto-prompts FaceID/TouchID.
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", (state) => {
+      if (state === "background" || state === "inactive") {
+        useAppLock.getState().rearm();
+      }
+    });
+    return () => sub.remove();
+  }, []);
 
   useAuthRedirect();
 
@@ -99,6 +113,9 @@ export default function RootLayout() {
                 <ToastProvider>
                   <StatusBar style="auto" />
                   <AuthGate />
+                  {/* Mounted last so the lock overlay paints on top of every
+                      screen including pushed routes and modals. */}
+                  <AppLockOverlay />
                 </ToastProvider>
               </BottomSheetModalProvider>
             </QueryClientProvider>

@@ -30,6 +30,7 @@ import {
   Row,
   Section,
   Sheet,
+  Toggle,
   showToast,
   Stack,
   StatusPill,
@@ -37,6 +38,7 @@ import {
   useThemeTokens,
   type SheetHandle,
 } from "@/components/ui";
+import { authenticateBiometric, useAppLock } from "@/state/app-lock";
 import {
   changePassword,
   listAuthSessions,
@@ -85,6 +87,31 @@ export default function AccountScreen() {
 
   const onChangePasswordPress = useCallback(() => {
     sheetRef.current?.present();
+  }, []);
+
+  // App-lock toggle. We require a successful biometric prompt before
+  // enabling so we know the device can actually unlock — and before
+  // disabling so a passer-by can't flip it off after grabbing an
+  // unattended phone.
+  const appLockEnabled = useAppLock((s) => s.enabled);
+  const appLockAvailable = useAppLock((s) => s.available);
+  const setAppLockEnabled = useAppLock((s) => s.setEnabled);
+  const onToggleAppLock = useCallback(
+    (next: boolean) => {
+      void (async () => {
+        const ok = await authenticateBiometric();
+        if (!ok) return;
+        await setAppLockEnabled(next);
+        showToast(next ? "App lock on" : "App lock off", "success");
+      })();
+    },
+    [setAppLockEnabled],
+  );
+
+  // Force the lock overlay open without going through the biometric path —
+  // simulator-only affordance for previewing the UI.
+  const previewAppLock = useCallback(() => {
+    useAppLock.setState({ locked: true });
   }, []);
 
   const onSignOutEverywhere = () => {
@@ -191,6 +218,46 @@ export default function AccountScreen() {
                 chevron
                 onPress={onChangePasswordPress}
               />
+            </ListGroup>
+          </Section>
+
+          {/* App lock. */}
+          <Section title="App lock">
+            <ListGroup
+              footer={
+                appLockAvailable
+                  ? "Requires FaceID, TouchID, or your device passcode each time the app opens or returns from the background."
+                  : "Biometric hardware not detected — usually the case in a simulator. The toggle is hidden until you run on a real device."
+              }
+            >
+              {appLockAvailable ? (
+                <ListRow
+                  icon="shieldCheck"
+                  title="Require biometric on launch"
+                  right={
+                    <Toggle on={appLockEnabled} onChange={onToggleAppLock} />
+                  }
+                />
+              ) : (
+                <>
+                  <ListRow
+                    icon="shieldCheck"
+                    title="Biometric lock"
+                    detail="unavailable"
+                  />
+                  {/* Dev affordance — only rendered when no biometrics are
+                      enrolled (i.e. simulator / emulator). Lets you preview
+                      the lock UI without owning a real device; the overlay
+                      reveals a "Skip (no biometric)" button in this state. */}
+                  <ListRow
+                    icon="eye"
+                    title="Preview lock screen"
+                    subtitle="Simulator-only — opens the lock overlay"
+                    chevron
+                    onPress={previewAppLock}
+                  />
+                </>
+              )}
             </ListGroup>
           </Section>
 
