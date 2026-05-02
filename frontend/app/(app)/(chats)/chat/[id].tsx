@@ -936,12 +936,19 @@ export default function ChatScreen() {
   }, []);
 
   const headerTitle = session?.title || "New chat";
-  // Banner visibility: show whenever we're not in steady "open"/"idle" state,
-  // plus a 3s grace once we transition back to open so the user gets a brief
-  // "Online" confirmation before the banner disappears.
+  // Banner visibility:
+  //   - Before the first non-idle status arrives (cold mount), stay hidden
+  //     so we don't flash a meaningless "idle" pill.
+  //   - From the moment the WS has actually reported any state, the banner
+  //     stays visible whenever status !== "open". Sticky on every non-OK
+  //     condition (auth_required, reconnecting, closed, sync_required) so
+  //     transient flips don't make it vanish.
+  //   - 3s grace post-reconnect for an "Online" confirmation.
   const [showOnlineConfirmation, setShowOnlineConfirmation] = useState(false);
+  const hasConnectedOnce = useRef(false);
   const wasNonOpen = useRef(false);
   useEffect(() => {
+    if (stream.status !== "idle") hasConnectedOnce.current = true;
     const isOpen = stream.status === "open";
     if (!isOpen && stream.status !== "idle") {
       wasNonOpen.current = true;
@@ -955,7 +962,7 @@ export default function ChatScreen() {
     return undefined;
   }, [stream.status]);
   const showStatusBanner =
-    (stream.status !== "open" && stream.status !== "idle") ||
+    (hasConnectedOnce.current && stream.status !== "open") ||
     showOnlineConfirmation;
 
   return (
