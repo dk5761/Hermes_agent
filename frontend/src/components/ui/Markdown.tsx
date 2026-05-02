@@ -9,9 +9,20 @@
  * The library expects flat StyleSheet.NamedStyles, so we stay in inline-style
  * land here rather than Tailwind class names.
  */
-import React, { useMemo } from "react";
-import { Linking, StyleSheet, type TextStyle, type ViewStyle } from "react-native";
-import Markdown from "react-native-markdown-display";
+import React, { useCallback, useMemo } from "react";
+import {
+  Linking,
+  Pressable,
+  Share,
+  StyleSheet,
+  Text as RNText,
+  View,
+  type TextStyle,
+  type ViewStyle,
+} from "react-native";
+import Markdown, { type RenderRules } from "react-native-markdown-display";
+import * as Clipboard from "expo-clipboard";
+import { Icon } from "./Icon";
 import { useThemeTokens, type ThemeTokens } from "./tokens";
 
 export interface MarkdownViewProps {
@@ -200,6 +211,108 @@ function buildStyles(t: ThemeTokens): Record<string, TextStyle | ViewStyle> {
   });
 }
 
+// Custom fenced code block renderer: language label + Copy + Share icons in
+// a header strip, code body styled with the same fence styles below. Mirrors
+// the ChatGPT/Claude layout so users can grab snippets without having to
+// triple-tap-select.
+function CodeBlock({
+  code,
+  language,
+  tokens,
+}: {
+  code: string;
+  language: string;
+  tokens: ThemeTokens;
+}) {
+  const onCopy = useCallback(() => {
+    void Clipboard.setStringAsync(code).catch(() => undefined);
+  }, [code]);
+  const onShare = useCallback(() => {
+    void Share.share({ message: code }).catch(() => undefined);
+  }, [code]);
+  return (
+    <View
+      style={{
+        backgroundColor: tokens.sunken,
+        borderColor: tokens.lineSoft,
+        borderWidth: 1,
+        borderRadius: 10,
+        marginVertical: 6,
+        overflow: "hidden",
+      }}
+    >
+      <View
+        style={{
+          flexDirection: "row",
+          alignItems: "center",
+          justifyContent: "space-between",
+          paddingHorizontal: 10,
+          paddingVertical: 6,
+          backgroundColor: tokens.chip,
+        }}
+      >
+        <RNText
+          style={{
+            color: tokens.ink3,
+            fontFamily: "JetBrainsMono_400Regular",
+            fontSize: 11,
+            textTransform: "lowercase",
+          }}
+          numberOfLines={1}
+        >
+          {language || "code"}
+        </RNText>
+        <View style={{ flexDirection: "row", gap: 4 }}>
+          <Pressable
+            onPress={onCopy}
+            hitSlop={6}
+            accessibilityRole="button"
+            accessibilityLabel="Copy code"
+            style={({ pressed }) => ({
+              width: 24,
+              height: 24,
+              alignItems: "center",
+              justifyContent: "center",
+              borderRadius: 6,
+              opacity: pressed ? 0.5 : 1,
+            })}
+          >
+            <Icon name="copy" size={12} color={tokens.ink3} />
+          </Pressable>
+          <Pressable
+            onPress={onShare}
+            hitSlop={6}
+            accessibilityRole="button"
+            accessibilityLabel="Share code"
+            style={({ pressed }) => ({
+              width: 24,
+              height: 24,
+              alignItems: "center",
+              justifyContent: "center",
+              borderRadius: 6,
+              opacity: pressed ? 0.5 : 1,
+            })}
+          >
+            <Icon name="share" size={12} color={tokens.ink3} />
+          </Pressable>
+        </View>
+      </View>
+      <RNText
+        style={{
+          fontFamily: "JetBrainsMono_400Regular",
+          fontSize: 13,
+          lineHeight: 18,
+          color: tokens.ink2,
+          padding: 12,
+        }}
+        selectable
+      >
+        {code.replace(/\n$/, "")}
+      </RNText>
+    </View>
+  );
+}
+
 export function MarkdownView({ text }: MarkdownViewProps): React.ReactElement {
   const tokens = useThemeTokens();
   const styles = useMemo(() => buildStyles(tokens), [tokens]);
@@ -211,10 +324,41 @@ export function MarkdownView({ text }: MarkdownViewProps): React.ReactElement {
     // Return true so the library doesn't fall back to its default opener.
     return true;
   };
+  // Override the library's default fence + code_block renderers so each
+  // snippet gets a header bar with copy/share. The library passes us the
+  // full markdown-it node — `node.content` is the code text, `node.sourceInfo`
+  // is the language fence info (e.g. "ts", "bash").
+  const rules: RenderRules = useMemo(
+    () => ({
+      fence: (node) => {
+        const n = node as { key: string; content?: string; sourceInfo?: string };
+        return (
+          <CodeBlock
+            key={n.key}
+            code={n.content ?? ""}
+            language={(n.sourceInfo ?? "").split(/\s+/)[0] ?? ""}
+            tokens={tokens}
+          />
+        );
+      },
+      code_block: (node) => {
+        const n = node as { key: string; content?: string };
+        return (
+          <CodeBlock
+            key={n.key}
+            code={n.content ?? ""}
+            language=""
+            tokens={tokens}
+          />
+        );
+      },
+    }),
+    [tokens],
+  );
   return (
     // The library's default props type doesn't accept ReactNode children well
     // when text is empty; pass a single space to keep heights stable.
-    <Markdown style={styleProp} onLinkPress={onLinkPress}>
+    <Markdown style={styleProp} onLinkPress={onLinkPress} rules={rules}>
       {text.length > 0 ? text : " "}
     </Markdown>
   );
