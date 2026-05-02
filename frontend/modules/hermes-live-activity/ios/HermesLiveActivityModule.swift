@@ -19,9 +19,11 @@ public class HermesLiveActivityModule: Module {
   public func definition() -> ModuleDefinition {
     Name("HermesLiveActivity")
 
-    Constants([
-      "supported": isSupported(),
-    ])
+    Constants {
+      [
+        "supported": HermesLiveActivityModule.computeSupported(),
+      ]
+    }
 
     AsyncFunction("isSupported") { () -> Bool in
       isSupported()
@@ -38,15 +40,11 @@ public class HermesLiveActivityModule: Module {
       (attrs: [String: Any], state: [String: Any]) -> String? in
       guard #available(iOS 16.2, *) else { return nil }
       guard ActivityAuthorizationInfo().areActivitiesEnabled else { return nil }
+      guard
+        let attributes = decodeAttrs(attrs),
+        let initialState = decodeState(state)
+      else { return nil }
       do {
-        let attributes = try decode(
-          HermesActivityAttributes.self,
-          from: attrs
-        )
-        let initialState = try decode(
-          HermesActivityAttributes.ContentState.self,
-          from: state
-        )
         let content = ActivityContent(
           state: initialState,
           staleDate: Date().addingTimeInterval(60 * 60 * 8)
@@ -67,22 +65,15 @@ public class HermesLiveActivityModule: Module {
       guard #available(iOS 16.2, *) else { return false }
       guard
         let activity = Activity<HermesActivityAttributes>.activities
-          .first(where: { $0.id == activityId })
+          .first(where: { $0.id == activityId }),
+        let next = decodeState(state)
       else { return false }
-      do {
-        let next = try decode(
-          HermesActivityAttributes.ContentState.self,
-          from: state
-        )
-        let content = ActivityContent(
-          state: next,
-          staleDate: Date().addingTimeInterval(60 * 60 * 8)
-        )
-        await activity.update(content)
-        return true
-      } catch {
-        return false
-      }
+      let content = ActivityContent(
+        state: next,
+        staleDate: Date().addingTimeInterval(60 * 60 * 8)
+      )
+      await activity.update(content)
+      return true
     }
 
     AsyncFunction("end") {
@@ -92,23 +83,14 @@ public class HermesLiveActivityModule: Module {
         let activity = Activity<HermesActivityAttributes>.activities
           .first(where: { $0.id == activityId })
       else { return false }
-      let policy: ActivityUIDismissalPolicy
-      switch dismiss {
-      case "immediate": policy = .immediate
-      case "after": policy = .default
-      default: policy = .default
-      }
-      let final: ActivityContent<HermesActivityAttributes.ContentState>?
-      if let fs = finalState,
-        let next = try? decode(
-          HermesActivityAttributes.ContentState.self, from: fs)
-      {
+      let policy: ActivityUIDismissalPolicy =
+        dismiss == "immediate" ? .immediate : .default
+      var final: ActivityContent<HermesActivityAttributes.ContentState>? = nil
+      if let fs = finalState, let next = decodeState(fs) {
         final = ActivityContent(
           state: next,
           staleDate: Date().addingTimeInterval(60)
         )
-      } else {
-        final = nil
       }
       await activity.end(final, dismissalPolicy: policy)
       return true
@@ -140,7 +122,7 @@ public class HermesLiveActivityModule: Module {
           "id": activity.id,
           "appSessionId": activity.attributes.appSessionId,
           "sessionTitle": activity.attributes.sessionTitle,
-          "state": (try? encodeToDict(activity.content.state)) ?? [:],
+          "state": encodeStateToDict(activity.content.state),
         ]
       }
     }
@@ -157,20 +139,45 @@ public class HermesLiveActivityModule: Module {
     if #available(iOS 16.2, *) { return true }
     return false
   }
+
+  static func computeSupported() -> Bool {
+    if #available(iOS 16.2, *) { return true }
+    return false
+  }
 }
 
 // MARK: - JSON helpers
+//
+// Concrete-typed wrappers so the AsyncFunction macros don't need to infer
+// generic parameters from a `[String: Any]` payload. Returns nil instead
+// of throwing — the caller treats both decoder failures and "no data" the
+// same way (just refuse to start/update).
 
-private func decode<T: Codable>(_ type: T.Type, from dict: [String: Any]) throws
-  -> T
-{
-  let data = try JSONSerialization.data(withJSONObject: dict, options: [])
-  let decoder = JSONDecoder()
-  return try decoder.decode(type, from: data)
+@available(iOS 16.2, *)
+private func decodeAttrs(_ dict: [String: Any]) -> HermesActivityAttributes? {
+  guard let data = try? JSONSerialization.data(withJSONObject: dict)
+  else { return nil }
+  return try? JSONDecoder().decode(HermesActivityAttributes.self, from: data)
 }
 
-private func encodeToDict<T: Codable>(_ value: T) throws -> [String: Any] {
-  let data = try JSONEncoder().encode(value)
-  let obj = try JSONSerialization.jsonObject(with: data, options: [])
+@available(iOS 16.2, *)
+private func decodeState(_ dict: [String: Any])
+  -> HermesActivityAttributes.ContentState?
+{
+  guard let data = try? JSONSerialization.data(withJSONObject: dict)
+  else { return nil }
+  return try? JSONDecoder().decode(
+    HermesActivityAttributes.ContentState.self,
+    from: data
+  )
+}
+
+@available(iOS 16.2, *)
+private func encodeStateToDict(
+  _ value: HermesActivityAttributes.ContentState
+) -> [String: Any] {
+  guard let data = try? JSONEncoder().encode(value),
+    let obj = try? JSONSerialization.jsonObject(with: data, options: [])
+  else { return [:] }
   return obj as? [String: Any] ?? [:]
 }

@@ -16,7 +16,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.hermesapp.mobile",
-      "deploymentTarget": "16.2",
+      "appleTeamId": "XR7L4K435B",
       "infoPlist": {
         "NSSupportsLiveActivities": true,
         "NSSupportsLiveActivitiesFrequentUpdates": true
@@ -44,7 +44,15 @@
       "expo-router",
       "expo-secure-store",
       "expo-font",
-      "@bacons/apple-targets"
+      "@bacons/apple-targets",
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "deploymentTarget": "16.2"
+          }
+        }
+      ]
     ]
   }
 }
