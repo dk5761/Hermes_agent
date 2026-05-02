@@ -176,8 +176,14 @@ function reduce(state: ChatSessionState, env: GatewayEventEnvelope): ChatSession
       next.isStreaming = true;
       return next;
     }
-    case "message.delta":
-    case "thinking.delta": {
+    case "thinking.delta":
+      // Hermes emits decorative status text on this channel — kaomoji like
+      // "(o_o) mulling…" or "( •_•)>⌐■-■ synthesizing…". They're meant for
+      // a TUI status line, not the chat bubble. Drop entirely; the live
+      // "Thinking…" header in ReasoningInline already conveys the same
+      // intent without dumping ASCII art into the response text.
+      return next;
+    case "message.delta": {
       if (!next.streaming) {
         next.streaming = emptyStreaming(env.createdAt);
         next.isStreaming = true;
@@ -187,13 +193,9 @@ function reduce(state: ChatSessionState, env: GatewayEventEnvelope): ChatSession
         getString(payload, "delta") ??
         getString(payload, "content") ??
         "";
-      // The first message.delta marks the moment the model stopped thinking
-      // and started answering — record it so we can show "Thought for Ns".
-      // (thinking.delta is a status indicator from Hermes, not real output;
-      // it can fire repeatedly during reasoning, so we only record the
-      // boundary on a real text delta.)
+      // First message.delta is the moment the model stopped thinking and
+      // started answering — record it so we can show "Thought for Ns".
       const nextEndedAt =
-        env.type === "message.delta" &&
         next.streaming.reasoningStartedAt !== null &&
         next.streaming.reasoningEndedAt === null
           ? Date.now()
