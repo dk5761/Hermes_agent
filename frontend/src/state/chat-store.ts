@@ -29,6 +29,10 @@ export interface AssistantMessage {
   reasoning?: string;
   createdAt: string;
   warning?: string;
+  // Time the model spent reasoning (first reasoning.delta → first message
+  // token, or message.complete if no text streamed). Drives the "Thought
+  // for Ns" header in the collapsed reasoning block. Live-only field.
+  reasoningDurationMs?: number;
 }
 
 export interface ToolCallCard {
@@ -63,6 +67,13 @@ export interface StreamingAssistant {
   reasoningBuffer: string;
   toolCalls: Map<string, ToolCallState>;
   startedAt: string;
+  // Timestamps (ms since epoch) used to compute "Thought for Ns" once the
+  // turn completes. `reasoningStartedAt` lands on the first reasoning.delta
+  // / reasoning.available; `reasoningEndedAt` lands when the model starts
+  // streaming the visible answer (first message.delta) or when the turn
+  // completes — whichever is first.
+  reasoningStartedAt: number | null;
+  reasoningEndedAt: number | null;
 }
 
 export type ApprovalKind = "approval" | "clarify" | "sudo" | "secret";
@@ -138,6 +149,17 @@ function genId(prefix: string): string {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+function emptyStreaming(startedAt: string): StreamingAssistant {
+  return {
+    textBuffer: "",
+    reasoningBuffer: "",
+    toolCalls: new Map(),
+    startedAt,
+    reasoningStartedAt: null,
+    reasoningEndedAt: null,
+  };
+}
+
 function reduce(state: ChatSessionState, env: GatewayEventEnvelope): ChatSessionState {
   const next = clone(state);
   if (env.id > 0 && env.id > next.lastEventId) next.lastEventId = env.id;
@@ -146,24 +168,14 @@ function reduce(state: ChatSessionState, env: GatewayEventEnvelope): ChatSession
 
   switch (env.type) {
     case "message.start": {
-      next.streaming = {
-        textBuffer: "",
-        reasoningBuffer: "",
-        toolCalls: new Map(),
-        startedAt: env.createdAt,
-      };
+      next.streaming = emptyStreaming(env.createdAt);
       next.isStreaming = true;
       return next;
     }
     case "message.delta":
     case "thinking.delta": {
       if (!next.streaming) {
-        next.streaming = {
-          textBuffer: "",
-          reasoningBuffer: "",
-          toolCalls: new Map(),
-          startedAt: env.createdAt,
-        };
+        next.streaming = emptyStreaming(env.createdAt);
         next.isStreaming = true;
       }
       const chunk =
@@ -171,18 +183,28 @@ function reduce(state: ChatSessionState, env: GatewayEventEnvelope): ChatSession
         getString(payload, "delta") ??
         getString(payload, "content") ??
         "";
-      next.streaming = { ...next.streaming, textBuffer: next.streaming.textBuffer + chunk };
+      // The first message.delta marks the moment the model stopped thinking
+      // and started answering — record it so we can show "Thought for Ns".
+      // (thinking.delta is a status indicator from Hermes, not real output;
+      // it can fire repeatedly during reasoning, so we only record the
+      // boundary on a real text delta.)
+      const nextEndedAt =
+        env.type === "message.delta" &&
+        next.streaming.reasoningStartedAt !== null &&
+        next.streaming.reasoningEndedAt === null
+          ? Date.now()
+          : next.streaming.reasoningEndedAt;
+      next.streaming = {
+        ...next.streaming,
+        textBuffer: next.streaming.textBuffer + chunk,
+        reasoningEndedAt: nextEndedAt,
+      };
       return next;
     }
     case "reasoning.delta":
     case "reasoning.available": {
       if (!next.streaming) {
-        next.streaming = {
-          textBuffer: "",
-          reasoningBuffer: "",
-          toolCalls: new Map(),
-          startedAt: env.createdAt,
-        };
+        next.streaming = emptyStreaming(env.createdAt);
         next.isStreaming = true;
       }
       const chunk =
@@ -193,6 +215,9 @@ function reduce(state: ChatSessionState, env: GatewayEventEnvelope): ChatSession
       next.streaming = {
         ...next.streaming,
         reasoningBuffer: next.streaming.reasoningBuffer + chunk,
+        // Stamp the start time on the very first reasoning chunk we see.
+        reasoningStartedAt:
+          next.streaming.reasoningStartedAt ?? Date.now(),
       };
       return next;
     }
@@ -216,10 +241,8 @@ function reduce(state: ChatSessionState, env: GatewayEventEnvelope): ChatSession
       };
       if (!next.streaming) {
         next.streaming = {
-          textBuffer: "",
-          reasoningBuffer: "",
+          ...emptyStreaming(env.createdAt),
           toolCalls: new Map([[id, merged]]),
-          startedAt: env.createdAt,
         };
         next.isStreaming = true;
       } else {
@@ -262,6 +285,17 @@ function reduce(state: ChatSessionState, env: GatewayEventEnvelope): ChatSession
       const reasoning =
         getString(payload, "reasoning") ?? next.streaming?.reasoningBuffer;
       const warning = getString(payload, "warning");
+      // Duration covers reasoning-start → first text token, falling back to
+      // now-completion if no text was streamed (rare). Negative or missing
+      // values stay undefined so the UI just shows "Thought" without a
+      // duration label.
+      let reasoningDurationMs: number | undefined;
+      if (next.streaming?.reasoningStartedAt) {
+        const end =
+          next.streaming.reasoningEndedAt ?? Date.now();
+        const ms = end - next.streaming.reasoningStartedAt;
+        if (ms > 0) reasoningDurationMs = ms;
+      }
       const msg: AssistantMessage = {
         kind: "assistant",
         id: `assistant-${env.id > 0 ? env.id : genId("a")}`,
@@ -269,6 +303,7 @@ function reduce(state: ChatSessionState, env: GatewayEventEnvelope): ChatSession
         reasoning: reasoning && reasoning.length > 0 ? reasoning : undefined,
         warning,
         createdAt: env.createdAt,
+        ...(reasoningDurationMs !== undefined ? { reasoningDurationMs } : {}),
       };
       next.messages = [...next.messages, msg];
       next.streaming = null;

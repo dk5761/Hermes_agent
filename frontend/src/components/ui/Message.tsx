@@ -208,14 +208,51 @@ function UserRow({ message }: { message: UserMessage }) {
 
 // ─── assistant ──────────────────────────────────────────────────────────────
 
-function ReasoningInline({ text }: { text: string }) {
-  const [open, setOpen] = useState(false);
+function fmtThinkDuration(ms: number): string {
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  const s = ms / 1000;
+  if (s < 60) return `${s.toFixed(1).replace(/\.0$/, "")}s`;
+  const m = Math.floor(s / 60);
+  const rem = Math.round(s - m * 60);
+  return rem > 0 ? `${m}m ${rem}s` : `${m}m`;
+}
+
+function ReasoningInline({
+  text,
+  streaming,
+  durationMs,
+}: {
+  text: string;
+  // Live during the turn — auto-expand and label as "Thinking…".
+  streaming?: boolean;
+  // Time spent reasoning, available once the turn completes.
+  durationMs?: number;
+}) {
+  // Default expansion: collapsed for completed turns, expanded for live ones.
+  // After completion the user can re-open via the chevron.
+  const [open, setOpen] = useState(!!streaming);
   const tokens = useThemeTokens();
+  // While streaming, keep auto-expanded as new chunks arrive. Once the turn
+  // finishes (streaming flips false) we don't force-collapse; that respects
+  // a user who already toggled.
+  React.useEffect(() => {
+    if (streaming) setOpen(true);
+  }, [streaming]);
+
+  const header = streaming
+    ? "Thinking…"
+    : durationMs !== undefined
+      ? `Thought for ${fmtThinkDuration(durationMs)}`
+      : open
+        ? "Hide reasoning"
+        : "Show reasoning";
+
   return (
     <View
       className="bg-sunken border border-line-soft"
       style={{
-        marginTop: 8,
+        marginTop: 4,
+        marginBottom: 6,
         marginHorizontal: 6,
         borderRadius: 12,
         paddingHorizontal: 12,
@@ -224,13 +261,28 @@ function ReasoningInline({ text }: { text: string }) {
     >
       <Pressable onPress={() => setOpen((v) => !v)}>
         <Row gap={6} align="center">
-          <Icon name="spark" size={12} color={tokens.ink3} />
-          <Text kind="caption" color={tokens.ink3} style={{ fontWeight: "500" }}>
-            {open ? "Hide reasoning" : "Show reasoning"}
+          <Icon
+            name="spark"
+            size={12}
+            color={streaming ? tokens.accent : tokens.ink3}
+          />
+          <Text
+            kind="caption"
+            color={streaming ? tokens.accent : tokens.ink3}
+            style={{ fontWeight: "500", flex: 1 }}
+          >
+            {header}
           </Text>
+          {!streaming ? (
+            <Icon
+              name={open ? "chevU" : "chevD"}
+              size={12}
+              color={tokens.ink3}
+            />
+          ) : null}
         </Row>
       </Pressable>
-      {open ? (
+      {open && text.length > 0 ? (
         <Text
           kind="caption"
           mono
@@ -253,8 +305,20 @@ function AssistantRow({
 }) {
   const tokens = useThemeTokens();
   const hasText = message.text.length > 0;
+  const hasReasoning = !!message.reasoning && message.reasoning.length > 0;
   return (
     <View style={{ paddingHorizontal: 8, paddingVertical: 4, maxWidth: "92%" }}>
+      {/* Reasoning lives above the answer (matches Claude/ChatGPT pattern):
+          users see the "thought" first, then the response below it. While
+          streaming, the block auto-expands and shows "Thinking…"; on
+          completion it collapses to "Thought for Ns". */}
+      {hasReasoning ? (
+        <ReasoningInline
+          text={message.reasoning ?? ""}
+          streaming={streaming}
+          durationMs={message.reasoningDurationMs}
+        />
+      ) : null}
       {hasText ? (
         <MarkdownView text={message.text} />
       ) : streaming ? (
@@ -281,9 +345,6 @@ function AssistantRow({
             {message.warning}
           </Text>
         </Row>
-      ) : null}
-      {message.reasoning && message.reasoning.length > 0 ? (
-        <ReasoningInline text={message.reasoning} />
       ) : null}
     </View>
   );
@@ -501,6 +562,9 @@ interface MessageProps {
   searchActive?: boolean;
   isMatch?: boolean;
   isActiveMatch?: boolean;
+  // True when this row is the in-flight streaming AssistantMessage. Drives
+  // the auto-expanded "Thinking…" reasoning header.
+  streaming?: boolean;
 }
 
 function MessageInner({
@@ -510,6 +574,7 @@ function MessageInner({
   searchActive,
   isMatch,
   isActiveMatch,
+  streaming,
 }: MessageProps) {
   let inner: React.ReactNode = null;
   switch (message.kind) {
@@ -517,10 +582,15 @@ function MessageInner({
       inner = <UserRow message={message} />;
       break;
     case "assistant": {
-      if (message.text.length === 0 && message.reasoning && message.reasoning.length > 0) {
+      if (
+        !streaming &&
+        message.text.length === 0 &&
+        message.reasoning &&
+        message.reasoning.length > 0
+      ) {
         inner = <ReasoningOnlyRow text={message.reasoning} />;
       } else {
-        inner = <AssistantRow message={message} />;
+        inner = <AssistantRow message={message} streaming={streaming} />;
       }
       break;
     }

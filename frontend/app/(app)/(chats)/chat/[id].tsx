@@ -812,7 +812,13 @@ export default function ChatScreen() {
         );
       }
       if (item.rowKind === "stream-msg") {
-        return <MessageRow message={item.data} sessionId={sessionId} />;
+        return (
+          <MessageRow
+            message={item.data}
+            sessionId={sessionId}
+            streaming
+          />
+        );
       }
       if (item.rowKind === "approval") {
         return (
