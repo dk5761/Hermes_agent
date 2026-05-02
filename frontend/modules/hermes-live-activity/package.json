@@ -1,0 +1,8 @@
+{
+  "name": "hermes-live-activity",
+  "version": "1.0.0",
+  "description": "Local bridge for ActivityKit live activities",
+  "main": "index.ts",
+  "types": "index.ts",
+  "private": true
+}

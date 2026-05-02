@@ -15,7 +15,17 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.hermesapp.mobile"
+      "bundleIdentifier": "com.hermesapp.mobile",
+      "deploymentTarget": "16.2",
+      "infoPlist": {
+        "NSSupportsLiveActivities": true,
+        "NSSupportsLiveActivitiesFrequentUpdates": true
+      },
+      "entitlements": {
+        "com.apple.security.application-groups": [
+          "group.com.hermesapp.mobile"
+        ]
+      }
     },
     "android": {
       "package": "com.hermesapp.mobile",
@@ -33,7 +43,8 @@
     "plugins": [
       "expo-router",
       "expo-secure-store",
-      "expo-font"
+      "expo-font",
+      "@bacons/apple-targets"
     ]
   }
 }

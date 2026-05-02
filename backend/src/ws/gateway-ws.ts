@@ -24,6 +24,8 @@ import {
   type AttachmentBridgeWarning,
 } from "./attachment-bridge.js";
 import type { ChatRunTimer } from "../observability/chat-run-timer.js";
+import type { LiveActivityPusher } from "../push/apns-live-activity.js";
+import { liveActivityTokens } from "../db/schema.js";
 
 export interface GatewayWsDeps {
   db: Db;
@@ -33,6 +35,8 @@ export interface GatewayWsDeps {
   attachmentBridge: AttachmentBridge;
   // Phase 7: per-run timing recorder. Optional so tests can omit it.
   chatRunTimer?: ChatRunTimer;
+  // ActivityKit push provider — wired by server.ts.
+  liveActivityPusher?: LiveActivityPusher;
 }
 
 // Reverse map hermes_session_id -> app_session_id, populated lazily as
@@ -151,7 +155,15 @@ export async function registerGatewayWsRoute(
   // matching app_session subscribers. Persist allowlisted events along the way.
   const sharedClient = deps.wsPool.getOrCreateShared();
   sharedClient.onEvent((ev) => {
-    void handleUpstreamEvent(ev, deps.db, reverse, registry, log, deps.chatRunTimer);
+    void handleUpstreamEvent(
+      ev,
+      deps.db,
+      reverse,
+      registry,
+      log,
+      deps.chatRunTimer,
+      deps.liveActivityPusher,
+    );
   });
 
   // Whenever the upstream WS connects (initial boot, reconnect after Hermes
@@ -834,6 +846,7 @@ async function handleUpstreamEvent(
   registry: SubscriberRegistry,
   log: AppLogger,
   chatRunTimer: ChatRunTimer | undefined,
+  liveActivityPusher: LiveActivityPusher | undefined,
 ): Promise<void> {
   const hsid = ev.session_id;
   if (!hsid) {
@@ -880,6 +893,19 @@ async function handleUpstreamEvent(
     if (ev.type === "message.complete") {
       void maybeReplaceFirstTurnTitle(db, appSessionId, ev.payload, log).catch(
         (err: unknown) => log.warn({ err }, "auto-title (smart) failed"),
+      );
+    }
+    // Live Activity push (foregrounded JS already drives ActivityKit
+    // directly; this covers the suspended/locked case).
+    if (liveActivityPusher) {
+      void pushLiveActivityForEvent(
+        db,
+        appSessionId,
+        ev,
+        liveActivityPusher,
+        log,
+      ).catch((err: unknown) =>
+        log.warn({ err }, "live-activity push dispatch failed"),
       );
     }
   } catch (err) {
@@ -1035,4 +1061,130 @@ function errorMessage(err: unknown): string {
     if (typeof m === "string") return m;
   }
   return String(err);
+}
+
+// ─── Live Activity push relay ────────────────────────────────────────────
+//
+// Maps an upstream Hermes event onto an ActivityKit content-state and
+// pushes via APNs to whichever device(s) registered a token for this
+// session. Best-effort — we don't fail the upstream relay on push errors.
+//
+// Throttling: a per-(session, type) suppression cache so a tool burst
+// doesn't trip APNs' rate limits. APNs caps live-activity pushes around
+// 4-6 per second across the whole app; we self-cap at 1 per 500ms per
+// session.
+const _laLastPush = new Map<string, number>();
+function _laShouldPush(sessionId: string): boolean {
+  const now = Date.now();
+  const t = _laLastPush.get(sessionId) ?? 0;
+  if (now - t < 500) return false;
+  _laLastPush.set(sessionId, now);
+  return true;
+}
+
+async function pushLiveActivityForEvent(
+  db: Db,
+  appSessionId: string,
+  ev: HermesEventParams,
+  pusher: LiveActivityPusher,
+  log: AppLogger,
+): Promise<void> {
+  if (!pusher.isEnabled()) return;
+  // Resolve content-state shape from the upstream event.
+  const payload = (ev.payload ?? {}) as Record<string, unknown>;
+  const asString = (k: string): string | undefined =>
+    typeof payload[k] === "string" ? (payload[k] as string) : undefined;
+  let kind: "chat" | "approval" = "chat";
+  let status: "thinking" | "tool" | "responding" | "awaiting" = "thinking";
+  let detail: string | null = null;
+  let isEnd = false;
+  switch (ev.type) {
+    case "tool.start":
+    case "tool.update":
+    case "tool.progress":
+    case "tool.generating": {
+      status = "tool";
+      detail =
+        asString("name") ??
+        asString("tool") ??
+        asString("tool_name") ??
+        "tool";
+      break;
+    }
+    case "tool.complete": {
+      status = "thinking";
+      break;
+    }
+    case "message.delta":
+    case "reasoning.available": {
+      status = "responding";
+      break;
+    }
+    case "message.complete":
+    case "error": {
+      isEnd = true;
+      status = "responding";
+      break;
+    }
+    case "approval.request": {
+      kind = "approval";
+      status = "awaiting";
+      detail =
+        asString("command") ??
+        asString("prompt") ??
+        asString("question") ??
+        "Awaiting approval";
+      break;
+    }
+    default:
+      return; // ignore other event types
+  }
+  if (!_laShouldPush(appSessionId)) return;
+  const tokens = await db
+    .select({
+      activityId: liveActivityTokens.activityId,
+      pushToken: liveActivityTokens.pushToken,
+      kind: liveActivityTokens.kind,
+      createdAt: liveActivityTokens.createdAt,
+    })
+    .from(liveActivityTokens)
+    .where(eq(liveActivityTokens.appSessionId, appSessionId));
+  if (tokens.length === 0) return;
+  const elapsedSec =
+    tokens[0]
+      ? Math.max(0, Math.floor(Date.now() / 1000) - tokens[0].createdAt)
+      : 0;
+  const state = {
+    kind,
+    status,
+    detail,
+    elapsedSec,
+    modelName: null,
+    updatedAtEpochMs: Date.now(),
+    openUrl: `hermes://chat/${appSessionId}`,
+  };
+  for (const t of tokens) {
+    // Activity-kind mismatch: end stale chat activity if this is an
+    // approval request, and vice versa. APNs end is cheap; the JS side
+    // will start the appropriate kind on its next foreground tick.
+    if (t.kind !== kind && !isEnd) {
+      await pusher.sendEnd(t.pushToken, state);
+      continue;
+    }
+    if (isEnd) {
+      await pusher.sendEnd(t.pushToken, state);
+    } else {
+      await pusher.sendUpdate(t.pushToken, state);
+    }
+  }
+  if (isEnd) {
+    // Best-effort cleanup so we don't keep pushing to dead activities.
+    try {
+      await db
+        .delete(liveActivityTokens)
+        .where(eq(liveActivityTokens.appSessionId, appSessionId));
+    } catch (err) {
+      log.warn({ err }, "live-activity tokens cleanup failed");
+    }
+  }
 }

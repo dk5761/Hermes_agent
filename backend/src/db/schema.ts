@@ -204,6 +204,29 @@ export const cronPrefs = sqliteTable(
   }),
 );
 
+// One row per active ActivityKit live activity. We push updates to the
+// `pushToken` whenever an upstream event for `appSessionId` arrives that
+// changes the activity's state. Cleared on `end` from the client.
+export const liveActivityTokens = sqliteTable(
+  "live_activity_tokens",
+  {
+    activityId: text("activity_id").primaryKey(),
+    appSessionId: text("app_session_id")
+      .notNull()
+      .references(() => appSessions.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    pushToken: text("push_token").notNull(),
+    kind: text("kind").notNull(),
+    createdAt: integer("created_at").notNull(),
+    updatedAt: integer("updated_at").notNull(),
+  },
+  (t) => ({
+    sessionIdx: index("live_activity_tokens_session_idx").on(t.appSessionId),
+  }),
+);
+
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
 export type RefreshToken = typeof refreshTokens.$inferSelect;

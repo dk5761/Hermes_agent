@@ -6,6 +6,9 @@
     "paths": {
       "@/*": [
         "src/*"
+      ],
+      "hermes-live-activity": [
+        "modules/hermes-live-activity/index.ts"
       ]
     }
   },

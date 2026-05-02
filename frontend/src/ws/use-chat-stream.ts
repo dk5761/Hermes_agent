@@ -6,6 +6,13 @@ import { useChatStore } from "../state/chat-store";
 import { GatewayWsClient, type ConnectionStatus } from "./client";
 import type { ClientFrame } from "./events";
 import type { AttachmentDTO } from "../api/types";
+import {
+  approvalPending,
+  approvalResolved,
+  chatRunEnded,
+  chatRunStarted,
+  chatRunUpdated,
+} from "../live-activity/bridge";
 
 // Hook glue between GatewayWsClient and Zustand chat-store, scoped to one
 // app_session_id. Owns the socket lifecycle for the chat screen mount.
@@ -65,6 +72,55 @@ export function useChatStream(appSessionId: string | null): ChatStreamApi {
       // (Sessions list also refetches on tab focus as a safety net.)
       if (env.type === "message.complete" || env.type === "gateway.user.message") {
         void queryClient.invalidateQueries({ queryKey: ["sessions"] });
+      }
+
+      // Drive ActivityKit (iOS 16.2+ only). All calls no-op on other
+      // platforms via the native module stub.
+      const sessions = queryClient.getQueryData<{
+        sessions: Array<{ id: string; title: string }>;
+      }>(["sessions"]);
+      const titleForActivity =
+        sessions?.sessions.find((s) => s.id === appSessionId)?.title ?? "Hermes";
+      const payload = (env.payload ?? {}) as Record<string, unknown>;
+      const asString = (k: string): string | undefined =>
+        typeof payload[k] === "string" ? (payload[k] as string) : undefined;
+      switch (env.type) {
+        case "message.start": {
+          void chatRunStarted(appSessionId, titleForActivity, null);
+          break;
+        }
+        case "tool.start":
+        case "tool.update":
+        case "tool.progress":
+        case "tool.generating": {
+          const name =
+            asString("name") ?? asString("tool") ?? asString("tool_name") ?? "tool";
+          void chatRunUpdated(appSessionId, { status: "tool", detail: name });
+          break;
+        }
+        case "tool.complete": {
+          void chatRunUpdated(appSessionId, { status: "thinking", detail: null });
+          break;
+        }
+        case "message.delta":
+        case "reasoning.available": {
+          void chatRunUpdated(appSessionId, { status: "responding", detail: null });
+          break;
+        }
+        case "message.complete":
+        case "error": {
+          void chatRunEnded(appSessionId);
+          break;
+        }
+        case "approval.request": {
+          const cmd =
+            asString("command") ??
+            asString("prompt") ??
+            asString("question") ??
+            "Awaiting approval";
+          void approvalPending(appSessionId, titleForActivity, cmd);
+          break;
+        }
       }
     });
     const offStatus = client.onStatus((s, info) => {
@@ -132,8 +188,9 @@ export function useChatStream(appSessionId: string | null): ChatStreamApi {
           ? { type: "approval.respond", requestId, choice }
           : { type: "approval.respond", requestId, choice, all };
       clientRef.current?.send(frame);
+      if (appSessionId) void approvalResolved(appSessionId);
     },
-    [],
+    [appSessionId],
   );
   const respondClarify = useCallback((requestId: string, text: string) => {
     clientRef.current?.send({ type: "clarify.respond", requestId, text });

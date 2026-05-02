@@ -75,6 +75,22 @@ const envSchema = z
       .string()
       .optional()
       .transform((v) => (v && v.length > 0 ? v : undefined)),
+
+    // APNs auth-key credentials for ActivityKit push (Phase: live activity).
+    // All four fields must be set for live activity push to work; if any is
+    // missing the gateway logs a warning and falls back to "foreground-only"
+    // updates (the JS side still drives the activity directly via the
+    // bridge while the app is open).
+    APNS_KEY_ID: z.string().optional(),
+    APNS_TEAM_ID: z.string().optional(),
+    APNS_BUNDLE_ID: z.string().optional(),
+    // Base64-encoded contents of the .p8 auth key. We accept the raw
+    // file contents too — both shapes are decoded in the apns client.
+    APNS_KEY_P8: z.string().optional(),
+    APNS_USE_SANDBOX: z
+      .union([z.literal("true"), z.literal("false")])
+      .default("false")
+      .transform((v) => v === "true"),
     CRON_OUTPUT_WATCH_ENABLED: z
       .union([z.literal("true"), z.literal("false")])
       .default("true")

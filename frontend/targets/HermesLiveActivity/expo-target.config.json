@@ -1,0 +1,8 @@
+{
+  "type": "widget",
+  "icon": "../../assets/icon.png",
+  "deploymentTarget": "16.2",
+  "entitlements": {
+    "com.apple.security.application-groups": ["group.com.hermesapp.mobile"]
+  }
+}

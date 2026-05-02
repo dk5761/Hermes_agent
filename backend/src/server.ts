@@ -21,6 +21,8 @@ import { registerAccountRoutes } from "./routes/account.js";
 import { registerUploadsRoutes } from "./routes/uploads.js";
 import { registerBlobsRoutes } from "./routes/blobs.js";
 import { registerGatewayWsRoute } from "./ws/gateway-ws.js";
+import { registerLiveActivityRoutes } from "./routes/live-activity.js";
+import { LiveActivityPusher } from "./push/apns-live-activity.js";
 import { AttachmentBridge } from "./ws/attachment-bridge.js";
 import type { ProcessLauncher } from "./hermes/launcher.js";
 import type { HermesHttpClient } from "./hermes/http-client.js";
@@ -228,12 +230,23 @@ export async function buildServer(deps: BuildServerDeps): Promise<FastifyInstanc
     },
   });
 
+  await registerLiveActivityRoutes(app, {
+    db: deps.dbHandle.db,
+    requireAuth,
+  });
+
+  const liveActivityPusher = new LiveActivityPusher({
+    config: deps.config,
+    logger: deps.logger,
+  });
+
   await registerGatewayWsRoute(app, {
     db: deps.dbHandle.db,
     jwt: jwtConfig,
     logger: deps.logger,
     wsPool: deps.wsPool,
     attachmentBridge,
+    liveActivityPusher,
     ...(deps.chatRunTimer ? { chatRunTimer: deps.chatRunTimer } : {}),
   });
 
