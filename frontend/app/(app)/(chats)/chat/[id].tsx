@@ -893,20 +893,37 @@ export default function ChatScreen() {
     showToast("Reloading MCP…", "info");
     reloadSessionMcp(sessionId)
       .then((res) => {
-        // Hermes' /reload-mcp output is multi-line. The first line is a
-        // progress prefix ("⏳ Reloading MCP servers...") that looks
-        // identical to our in-progress toast, so we'd appear stuck.
-        // Prefer the result line — the one with ✅ marker — else fall
-        // back to the last non-empty line.
-        const lines = (res.output || "")
-          .split("\n")
-          .map((l) => l.trim())
-          .filter((l) => l.length > 0);
-        const summary =
-          lines.find((l) => l.includes("✅") || l.includes("❌")) ??
-          lines[lines.length - 1] ??
-          "MCP reloaded";
-        showToast(summary.slice(0, 120), "success");
+        // Hermes' /reload-mcp output has two distinct counts:
+        //   "🔧 N tool(s) available from M server(s)"   — MCP-layer (loaded)
+        //   "✅ Agent updated — K tool(s) available"    — agent-layer (visible)
+        // K can be < N when platform_toolsets.<platform> doesn't include
+        // the mcp-<server> entries. Surface that discrepancy as a warning
+        // toast — silently showing K=0 is misleading when MCP itself is fine.
+        const text = res.output || "";
+        const mcpMatch = text.match(/🔧\s+(\d+)\s+tool/);
+        const agentMatch = text.match(/Agent updated\s*—\s*(\d+)/);
+        const failMatch = text.match(/❌\s*(.+)/);
+        if (failMatch) {
+          showToast(failMatch[1]?.slice(0, 120) ?? "MCP reload failed", "error");
+          return;
+        }
+        const mcpCount = mcpMatch ? parseInt(mcpMatch[1] ?? "0", 10) : 0;
+        const agentCount = agentMatch ? parseInt(agentMatch[1] ?? "0", 10) : 0;
+        if (mcpCount === 0) {
+          showToast("No MCP servers connected", "warning");
+        } else if (agentCount === 0) {
+          showToast(
+            `MCP loaded ${mcpCount} tools but agent has 0 — check platform_toolsets`,
+            "warning",
+          );
+        } else if (agentCount < mcpCount) {
+          showToast(
+            `${agentCount}/${mcpCount} MCP tools available to agent`,
+            "warning",
+          );
+        } else {
+          showToast(`✅ ${agentCount} MCP tool(s) available`, "success");
+        }
       })
       .catch((err: unknown) => {
         const msg = err instanceof Error ? err.message : "Reload failed";
