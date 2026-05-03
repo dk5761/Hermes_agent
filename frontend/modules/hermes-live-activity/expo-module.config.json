@@ -1,6 +1,7 @@
 {
-  "platforms": ["ios"],
-  "ios": {
-    "modules": ["HermesLiveActivityModule"]
+  "platforms": ["apple"],
+  "apple": {
+    "modules": ["HermesLiveActivityModule"],
+    "podspecPath": "HermesLiveActivityBridge.podspec"
   }
 }

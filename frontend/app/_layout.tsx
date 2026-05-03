@@ -69,6 +69,16 @@ function AuthGate() {
     // Kill any orphan Live Activities from a previous launch — we can't
     // reliably resync their elapsed-time state across an app restart.
     void reconcileOnLaunch();
+    // TEMP diagnostic — remove once Live Activities verified working.
+    void (async () => {
+      const LiveActivity = (await import("hermes-live-activity")).default;
+      console.log(
+        "[live-activity]",
+        "supported=", await LiveActivity.isSupported(),
+        "enabled=", await LiveActivity.areEnabled(),
+        "moduleSupported=", LiveActivity.supported,
+      );
+    })();
   }, [hydrate]);
 
   // Re-arm the app lock whenever the app leaves foreground; on return the

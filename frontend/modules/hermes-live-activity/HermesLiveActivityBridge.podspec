@@ -1,5 +1,5 @@
 Pod::Spec.new do |s|
-  s.name           = 'HermesLiveActivity'
+  s.name           = 'HermesLiveActivityBridge'
   s.version        = '1.0.0'
   s.summary        = 'Bridge for Hermes ActivityKit live activities'
   s.description    = 'Local Expo module exposing ActivityKit start/update/end ' \
