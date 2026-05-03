@@ -64,6 +64,37 @@ ssh root@<vps> "systemctl restart hermes-dashboard hermes-gateway"
 
 The gateway re-scrapes Hermes' auth token on every WS connect, so order is not strict — but restarting `hermes-dashboard` while the gateway is running causes a transient upstream-disconnect that the gateway recovers from on its own.
 
+### Restart and verify (one command, run after any deploy or VPS reboot)
+
+```bash
+ssh root@<vps> "systemctl restart hermes-dashboard hermes-gateway && sleep 8 && \
+  echo '=== service status ===' && systemctl is-active hermes-dashboard hermes-gateway nginx && \
+  echo && echo '=== ports ===' && ss -tlnp | grep -E ':(80|443|8080|9119)\s' && \
+  echo && echo '=== gateway → hermes link ===' && \
+  journalctl -u hermes-gateway --since '15 seconds ago' --no-pager | grep -iE 'using external|upstream|listening|migrations|ECONNREFUSED' | tail -8 && \
+  echo && echo '=== external HTTPS ===' && \
+  curl -s -m 10 https://hermes.drshnk.dev/health -w 'HTTP %{http_code}\n'"
+```
+
+A healthy run reports:
+
+| Section | Healthy output |
+|---|---|
+| service status | three `active` lines (dashboard / gateway / nginx) |
+| ports | `127.0.0.1:8080` (gateway), `127.0.0.1:9119` (hermes), `0.0.0.0:80` + `0.0.0.0:443` (nginx) |
+| gateway → hermes link | `db migrations up to date` + `using external Hermes` + `Server listening at http://127.0.0.1:8080` + `gateway.ready` event |
+| external HTTPS | `{"status":"ok","uptimeS":N}` followed by `HTTP 200` |
+
+If the link line shows `ECONNREFUSED 127.0.0.1:9119`, `hermes-dashboard` failed to start — drop into `journalctl -u hermes-dashboard -n 100 --no-pager` for the cause (commonly missing `hermes login` for a provider, or a corrupt `~/.hermes/`).
+
+If service status shows `failed` for `hermes-gateway`, check whether you remembered the migrations copy step after a build:
+
+```bash
+ssh root@<vps> "ls /root/repos/Hermes_agent/backend/dist/src/db/migrations/ 2>/dev/null | head"
+```
+
+Should list at least the latest `.sql` files. If empty / missing, see the **Re-deploy** section.
+
 ### Status
 
 ```bash
@@ -102,7 +133,85 @@ ssh root@<vps> "systemctl restart hermes-dashboard hermes-gateway"
 
 ### Backup
 
-Two paths to back up. The gateway's database + blobs:
+#### Automated daily snapshots → private GitHub repo (production setup)
+
+A cron job on the VPS encrypts the full Hermes state every day at 04:00 UTC and pushes it to `git@github.com:dk5761/hermes-snapshots.git` (private repo). Keeps last 14 days of snapshots; weekly aggressive `git gc` shrinks the pack so the repo stays around ~250MB.
+
+What's included:
+- `~/.hermes/` — config, sessions, memories, skills, cron jobs, SOUL.md, .env (encrypted)
+- `~/repos/Hermes_agent/backend/data/` — gateway SQLite + uploaded blobs
+
+What's excluded (regeneratable): `audio_cache/`, `image_cache/`, `logs/`, `models_dev_cache.json`.
+
+Encryption: AES-256 symmetric via GPG. The passphrase lives at `/root/.hermes-snapshot.pass` on the VPS (root-only, `chmod 600`) and a copy must live in your password manager. **Lose both = backups unrecoverable.**
+
+Components:
+
+| File | Purpose |
+|---|---|
+| `/root/hermes-snapshot.sh` | The script (tar + gpg + git push + prune) |
+| `/root/.hermes-snapshot.pass` | GPG passphrase, root-only |
+| `/root/hermes-snapshots/` | Local clone of the private GitHub repo |
+| `/var/log/hermes-snapshot.log` | Daily run log |
+| crontab `0 4 * * *` | Trigger |
+
+Manual snapshot (if you want one outside the daily cron):
+
+```bash
+ssh root@<vps> "/root/hermes-snapshot.sh"
+```
+
+Verify recent runs:
+
+```bash
+ssh root@<vps> "tail -20 /var/log/hermes-snapshot.log"
+```
+
+Inspect what's in the repo:
+
+```bash
+ssh root@<vps> "cd /root/hermes-snapshots && git log --oneline -10 && ls -lh"
+```
+
+#### Restore on a fresh VPS
+
+```bash
+# 1. Bring up the empty VPS, install Hermes core + mobile gateway per the
+#    "First-time setup" runbook above (system packages, hermes core install,
+#    repo clone, systemd units, nginx, certbot). Skip the .env / data setup.
+
+# 2. Clone the snapshots repo
+git clone git@github.com:dk5761/hermes-snapshots.git
+cd hermes-snapshots
+
+# 3. Pick the latest snapshot
+LATEST=$(ls -t snapshot-*.tar.gz.gpg | head -1)
+echo "Restoring $LATEST"
+
+# 4. Decrypt — prompts for the passphrase from your password manager
+gpg --decrypt "$LATEST" | tar xz -C /
+
+# 5. Restart services
+systemctl restart hermes-dashboard hermes-gateway
+```
+
+Within 5 minutes the new VPS has the same chat history, skills, cron jobs, secrets, and blobs as the old one. The gateway will re-scrape its Hermes auth token on next WS connect; mobile clients re-auth on next launch.
+
+If you need to restore on a machine that doesn't have GitHub SSH access set up, you can also `gh release download` from a phone or use a fine-grained PAT.
+
+#### Cleanup / change retention
+
+Edit the `KEEP_DAYS=14` line in `/root/hermes-snapshot.sh`. Increase if you want longer history (cost ~15MB per extra day on disk + GitHub repo size).
+
+To stop snapshots:
+
+```bash
+ssh root@<vps> "crontab -l | grep -v hermes-snapshot.sh | crontab -"
+```
+
+#### Ad-hoc one-off backup (local download to your laptop)
+
+Smaller scope (just gateway DB + blobs, no Hermes state):
 
 ```bash
 ssh root@<vps> "
