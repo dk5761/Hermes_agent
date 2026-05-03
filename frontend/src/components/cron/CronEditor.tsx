@@ -4,13 +4,10 @@
  * Visual target: design/screens-2.jsx::CronEditor (lines 189-258).
  *
  * Design notes:
- *   - Cron schedule is driven by 4 preset chips. Picking a preset sets the
- *     expression directly; picking "Custom" reveals a mono input the user
- *     can edit. The selected chip is derived from the current expression
- *     so navigating to /edit re-selects the matching preset automatically.
- *   - "Next 3 runs" is computed client-side via cron-parser (see
- *     util/cronPreview). Invalid expressions surface inline below the chip
- *     row instead of the preview.
+ *   - Cron schedule is now driven by ScheduleBuilder (friendly mode tabs:
+ *     Daily / Weekly / Monthly / Hourly / Custom). The builder emits a cron
+ *     expression upward via onChange; the rest of the form remains unchanged.
+ *   - "Next 3 runs" preview is rendered inside ScheduleBuilder.
  *   - Save is disabled until name + prompt are non-empty AND the schedule
  *     parses. Mutations invalidate the jobs list and (for edit) this job's
  *     detail key.
@@ -18,14 +15,13 @@
  *     picker exists. Delivery target is a SegControl mapped 1:1 with the
  *     backend's accepted values.
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Alert, ScrollView, View } from "react-native";
 import { useRouter } from "expo-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
   Button,
-  Chip,
   EmptyState,
   Field,
   Input,
@@ -49,7 +45,8 @@ import {
   type CronJobInput,
 } from "@/api/cron";
 import type { CronJob } from "@/api/types";
-import { formatPreview, isValidCron, nextRuns } from "@/util/cronPreview";
+import { isValidCron } from "@/util/cronPreview";
+import { ScheduleBuilder } from "./ScheduleBuilder";
 
 export type CronEditorMode = "create" | "edit";
 
@@ -59,21 +56,6 @@ export interface CronEditorProps {
   jobId?: string;
 }
 
-interface Preset {
-  id: PresetId;
-  label: string;
-  expr: string;
-}
-
-type PresetId = "hourly" | "daily" | "weekdays" | "custom";
-
-const PRESETS: ReadonlyArray<Preset> = [
-  { id: "hourly", label: "Hourly", expr: "0 * * * *" },
-  { id: "daily", label: "Daily", expr: "0 9 * * *" },
-  { id: "weekdays", label: "Weekdays", expr: "0 9 * * 1-5" },
-  { id: "custom", label: "Custom", expr: "" },
-];
-
 const DELIVER_OPTIONS = [
   { value: "origin", label: "Origin" },
   { value: "local", label: "Local" },
@@ -82,11 +64,6 @@ const DELIVER_OPTIONS = [
 ] as const;
 
 type DeliverValue = (typeof DELIVER_OPTIONS)[number]["value"];
-
-function detectPreset(expr: string): PresetId {
-  const match = PRESETS.find((p) => p.id !== "custom" && p.expr === expr);
-  return match ? match.id : "custom";
-}
 
 function readSchedExpr(job: CronJob): string {
   const sched = job.schedule as Record<string, unknown> | undefined;
@@ -115,7 +92,6 @@ export function CronEditor({ mode, jobId }: CronEditorProps): React.ReactElement
   const [name, setName] = useState("");
   const [prompt, setPrompt] = useState("");
   const [schedule, setSchedule] = useState("0 9 * * *");
-  const [presetId, setPresetId] = useState<PresetId>("daily");
   const [deliver, setDeliver] = useState<DeliverValue>("origin");
   const [model, setModel] = useState<string>("");
   const [notify, setNotify] = useState(false);
@@ -127,7 +103,6 @@ export function CronEditor({ mode, jobId }: CronEditorProps): React.ReactElement
     setPrompt(existing.prompt);
     const expr = readSchedExpr(existing) || "0 9 * * *";
     setSchedule(expr);
-    setPresetId(detectPreset(expr));
     const d = (existing.deliver ?? "origin") as DeliverValue;
     // Defensive: if backend ships an unexpected value, fall back to "origin"
     // so the SegControl doesn't sit in a broken state with no segment active.
@@ -146,16 +121,6 @@ export function CronEditor({ mode, jobId }: CronEditorProps): React.ReactElement
   const canSave =
     name.trim().length > 0 && prompt.trim().length > 0 && scheduleValid;
 
-  const previews = useMemo(
-    () => (scheduleValid ? nextRuns(schedule, 3) ?? [] : []),
-    [schedule, scheduleValid],
-  );
-
-  const onPickPreset = useCallback((p: Preset) => {
-    setPresetId(p.id);
-    if (p.id !== "custom") setSchedule(p.expr);
-  }, []);
-
   // Save mutation — branches on mode. We chain a separate notify-prefs PUT
   // because /cron/jobs doesn't accept the notify flag inline.
   const createMut = useMutation({
@@ -173,7 +138,7 @@ export function CronEditor({ mode, jobId }: CronEditorProps): React.ReactElement
     },
     onSuccess: (created) => {
       void queryClient.invalidateQueries({ queryKey: cronKeys.jobs() });
-      showToast(`Job “${created.name}” created`, "success");
+      showToast(`Job "${created.name}" created`, "success");
       router.replace({
         pathname: "/(cron)/[jobId]",
         params: { jobId: created.id },
@@ -332,61 +297,7 @@ export function CronEditor({ mode, jobId }: CronEditorProps): React.ReactElement
 
           <Section title="Schedule">
             <Stack gap={10} style={{ paddingHorizontal: 16 }}>
-              <Row gap={6} style={{ flexWrap: "wrap" }}>
-                {PRESETS.map((p) => (
-                  <Chip
-                    key={p.id}
-                    active={presetId === p.id}
-                    onPress={() => onPickPreset(p)}
-                  >
-                    {p.label}
-                  </Chip>
-                ))}
-              </Row>
-              {presetId === "custom" ? (
-                <Field
-                  label="Cron expression"
-                  hint="Pick a preset or enter a cron expression."
-                  error={scheduleValid ? undefined : "Invalid cron expression"}
-                >
-                  <Input value={schedule} onChange={setSchedule} mono />
-                </Field>
-              ) : (
-                <Text kind="caption" mono color={tokens.ink3}>
-                  {schedule}
-                </Text>
-              )}
-              <View
-                style={{
-                  padding: 12,
-                  backgroundColor: tokens.surface,
-                  borderRadius: 10,
-                  borderWidth: 1,
-                  borderColor: tokens.line,
-                }}
-              >
-                <Text
-                  kind="micro"
-                  color={tokens.ink3}
-                  className="uppercase"
-                  style={{ marginBottom: 6 }}
-                >
-                  Next 3 runs
-                </Text>
-                {previews.length > 0 ? (
-                  <Stack gap={4}>
-                    {previews.map((d, i) => (
-                      <Text key={i} kind="caption" mono>
-                        {formatPreview(d)}
-                      </Text>
-                    ))}
-                  </Stack>
-                ) : (
-                  <Text kind="caption" mono color={tokens.ink3}>
-                    {scheduleValid ? "—" : "(invalid expression)"}
-                  </Text>
-                )}
-              </View>
+              <ScheduleBuilder schedule={schedule} onChange={setSchedule} />
             </Stack>
           </Section>
 
