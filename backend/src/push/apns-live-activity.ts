@@ -34,7 +34,9 @@ export interface LiveActivityContentState {
   kind: "chat" | "approval";
   status: "thinking" | "tool" | "responding" | "awaiting";
   detail: string | null;
-  elapsedSec: number;
+  // Wall-clock start of the run. Widget uses SwiftUI's `Text(timerInterval:)`
+  // to auto-tick on-device — no per-second updates needed.
+  startedAtEpochMs: number;
   modelName: string | null;
   updatedAtEpochMs: number;
   openUrl: string | null;

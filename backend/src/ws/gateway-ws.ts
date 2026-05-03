@@ -1150,15 +1150,17 @@ async function pushLiveActivityForEvent(
     .from(liveActivityTokens)
     .where(eq(liveActivityTokens.appSessionId, appSessionId));
   if (tokens.length === 0) return;
-  const elapsedSec =
-    tokens[0]
-      ? Math.max(0, Math.floor(Date.now() / 1000) - tokens[0].createdAt)
-      : 0;
+  // Use the activity's createdAt as the run start. Widget renders elapsed
+  // via SwiftUI's `Text(timerInterval:)` so the timer ticks on-device — we
+  // just need to feed it a stable wall-clock start.
+  const startedAtEpochMs = tokens[0]
+    ? tokens[0].createdAt * 1000
+    : Date.now();
   const state = {
     kind,
     status,
     detail,
-    elapsedSec,
+    startedAtEpochMs,
     modelName: null,
     updatedAtEpochMs: Date.now(),
     openUrl: `hermes://chat/${appSessionId}`,

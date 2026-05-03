@@ -46,9 +46,14 @@ struct HermesActivity: Widget {
         Image(systemName: glyph(for: context.state))
           .foregroundStyle(.tint)
       } compactTrailing: {
-        Text(elapsedString(context.state.elapsedSec))
-          .font(.caption2.monospacedDigit())
-          .foregroundStyle(.secondary)
+        Text(
+          timerInterval: context.state.startedAt...Date.distantFuture,
+          countsDown: false,
+          showsHours: false
+        )
+        .font(.caption2.monospacedDigit())
+        .foregroundStyle(.secondary)
+        .frame(maxWidth: 44)
       } minimal: {
         Image(systemName: glyph(for: context.state))
           .foregroundStyle(.tint)
@@ -93,8 +98,12 @@ struct LockScreenView: View {
       }
       Spacer(minLength: 8)
       VStack(alignment: .trailing, spacing: 2) {
-        Text(elapsedString(state.elapsedSec))
-          .font(.title3.weight(.semibold).monospacedDigit())
+        Text(
+          timerInterval: state.startedAt...Date.distantFuture,
+          countsDown: false,
+          showsHours: false
+        )
+        .font(.title3.weight(.semibold).monospacedDigit())
         Text(state.kind == .approval ? "tap to respond" : "tap to open")
           .font(.caption2)
           .foregroundStyle(.tertiary)
@@ -128,9 +137,13 @@ struct ExpandedLeading: View {
 struct ExpandedTrailing: View {
   let state: HermesActivityAttributes.ContentState
   var body: some View {
-    Text(elapsedString(state.elapsedSec))
-      .font(.headline.monospacedDigit())
-      .foregroundStyle(.primary)
+    Text(
+      timerInterval: state.startedAt...Date.distantFuture,
+      countsDown: false,
+      showsHours: false
+    )
+    .font(.headline.monospacedDigit())
+    .foregroundStyle(.primary)
   }
 }
 
@@ -168,16 +181,6 @@ func openUrl(
     return URL(string: s)
   }
   return URL(string: "hermes://chat/\(context.attributes.appSessionId)")
-}
-
-func elapsedString(_ sec: Int) -> String {
-  let s = max(0, sec)
-  let m = s / 60
-  let r = s % 60
-  if m > 0 {
-    return String(format: "%d:%02d", m, r)
-  }
-  return "0:\(String(format: "%02d", r))"
 }
 
 func glyph(for state: HermesActivityAttributes.ContentState) -> String {

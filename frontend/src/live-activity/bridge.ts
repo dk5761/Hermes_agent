@@ -25,10 +25,6 @@ function nowMs(): number {
   return Date.now();
 }
 
-function elapsedFromStart(startedAt: number): number {
-  return Math.max(0, Math.floor((nowMs() - startedAt) / 1000));
-}
-
 function deepLink(sessionId: string, kind: "chat" | "approval"): string {
   return kind === "approval"
     ? `hermes://chat/${sessionId}/approvals`
@@ -88,7 +84,7 @@ export async function chatRunStarted(
     kind: "chat",
     status: "thinking",
     detail: null,
-    elapsedSec: 0,
+    startedAtEpochMs: startedAt,
     modelName: modelName ?? null,
     updatedAtEpochMs: startedAt,
     openUrl: deepLink(sessionId, "chat"),
@@ -120,12 +116,11 @@ export async function chatRunUpdated(
   const rec = useLiveActivityState.getState().getActivity(sessionId);
   if (!rec) return;
   if (!shouldUpdate(rec.activityId)) return;
-  const elapsedSec = elapsedFromStart(rec.startedAt);
   const next: ActivityContentState = {
     kind: rec.kind,
     status: patch.status ?? "thinking",
     detail: patch.detail ?? null,
-    elapsedSec,
+    startedAtEpochMs: rec.startedAt,
     modelName: patch.modelName ?? null,
     updatedAtEpochMs: nowMs(),
     openUrl: deepLink(sessionId, rec.kind),
@@ -160,7 +155,7 @@ export async function approvalPending(
       kind: "approval",
       status: "awaiting",
       detail: command,
-      elapsedSec: elapsedFromStart(existing.startedAt),
+      startedAtEpochMs: existing.startedAt,
       modelName: null,
       updatedAtEpochMs: nowMs(),
       openUrl: deepLink(sessionId, "approval"),
@@ -176,7 +171,7 @@ export async function approvalPending(
     kind: "approval",
     status: "awaiting",
     detail: command,
-    elapsedSec: 0,
+    startedAtEpochMs: startedAt,
     modelName: null,
     updatedAtEpochMs: startedAt,
     openUrl: deepLink(sessionId, "approval"),

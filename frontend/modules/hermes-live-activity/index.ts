@@ -16,7 +16,10 @@ export interface ActivityContentState {
   kind: ActivityKind;
   status: "thinking" | "tool" | "responding" | "awaiting";
   detail?: string | null;
-  elapsedSec: number;
+  // Wall-clock start of the run. The widget feeds this into SwiftUI's
+  // `Text(timerInterval:)` which auto-ticks on the device — no JS / APNs
+  // updates needed to keep the timer moving.
+  startedAtEpochMs: number;
   modelName?: string | null;
   updatedAtEpochMs: number;
   openUrl?: string | null;
