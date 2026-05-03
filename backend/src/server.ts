@@ -155,6 +155,7 @@ export async function buildServer(deps: BuildServerDeps): Promise<FastifyInstanc
     db: deps.dbHandle.db,
     requireAuth,
     hermesHttp: deps.hermesHttp,
+    wsPool: deps.wsPool,
     logger: deps.logger,
   });
   await registerCronRoutes(app, {

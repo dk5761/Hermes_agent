@@ -42,6 +42,7 @@ import {
   Stack,
   Text,
   TodoPlanCard,
+  showToast,
   useThemeTokens,
   type ActionSheetHandle,
   type SheetHandle,
@@ -63,6 +64,7 @@ import {
   deleteSession,
   getMessages,
   listSessions,
+  reloadSessionMcp,
   renameSession,
 } from "@/api/sessions";
 import type { AttachmentDTO, HistoryRow, SessionDto } from "@/api/types";
@@ -886,6 +888,32 @@ export default function ChatScreen() {
     ]);
   }, [sessionId, queryClient, router]);
 
+  const onReloadMcp = useCallback(() => {
+    if (!sessionId) return;
+    showToast("Reloading MCP…", "info");
+    reloadSessionMcp(sessionId)
+      .then((res) => {
+        // Hermes' /reload-mcp output is multi-line. The first line is a
+        // progress prefix ("⏳ Reloading MCP servers...") that looks
+        // identical to our in-progress toast, so we'd appear stuck.
+        // Prefer the result line — the one with ✅ marker — else fall
+        // back to the last non-empty line.
+        const lines = (res.output || "")
+          .split("\n")
+          .map((l) => l.trim())
+          .filter((l) => l.length > 0);
+        const summary =
+          lines.find((l) => l.includes("✅") || l.includes("❌")) ??
+          lines[lines.length - 1] ??
+          "MCP reloaded";
+        showToast(summary.slice(0, 120), "success");
+      })
+      .catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : "Reload failed";
+        showToast(msg, "error");
+      });
+  }, [sessionId]);
+
   const openSheet = useCallback(() => {
     sheetRef.current?.present();
   }, []);
@@ -1394,6 +1422,13 @@ export default function ChatScreen() {
                   params: { sessionId },
                 } as never);
               }
+            }}
+          />
+          <SheetItem
+            label="Reload MCP"
+            onPress={() => {
+              dismissSheet();
+              onReloadMcp();
             }}
           />
           <SheetItem

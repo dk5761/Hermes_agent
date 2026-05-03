@@ -54,6 +54,17 @@ export async function getMessages(id: string): Promise<HistoryResponse> {
   return apiFetch<HistoryResponse>(`/sessions/${id}/messages`);
 }
 
+export interface ReloadMcpResponse {
+  output: string;
+  warning: string | null;
+}
+
+export async function reloadSessionMcp(id: string): Promise<ReloadMcpResponse> {
+  return apiFetch<ReloadMcpResponse>(`/sessions/${id}/reload-mcp`, {
+    method: "POST",
+  });
+}
+
 // Loosely-typed search response — the upstream Hermes payload shape is not
 // strictly defined (HERMES_CONTRACT.md flags it explicitly). We model the
 // most common variants and let the renderer normalize defensively.

@@ -5,6 +5,7 @@ import { z } from "zod";
 import type { Db } from "../db/client.js";
 import { appSessions, wsEvents } from "../db/schema.js";
 import type { HermesHttpClient } from "../hermes/http-client.js";
+import type { HermesWsPool } from "../hermes/ws-pool.js";
 import type { AppLogger } from "../logger.js";
 import { loadHistory } from "../ws/chat-history.js";
 
@@ -15,6 +16,7 @@ export interface SessionsRoutesDeps {
   db: Db;
   requireAuth: preHandlerHookHandler;
   hermesHttp: HermesHttpClient;
+  wsPool: HermesWsPool;
   logger: AppLogger;
 }
 
@@ -45,7 +47,7 @@ export async function registerSessionsRoutes(
   app: FastifyInstance,
   deps: SessionsRoutesDeps,
 ): Promise<void> {
-  const { db, requireAuth, hermesHttp, logger } = deps;
+  const { db, requireAuth, hermesHttp, wsPool, logger } = deps;
 
   app.get("/sessions", { preHandler: requireAuth }, async (request, reply) => {
     const user = request.user;
@@ -256,6 +258,55 @@ export async function registerSessionsRoutes(
           payload: r.payload,
         })),
       });
+    },
+  );
+
+  // POST /sessions/:id/reload-mcp — runs Hermes' `/reload-mcp` slash command
+  // for this session, reloading any MCP servers attached to it. Maps the
+  // app session to its hermes session, then dispatches via slash.exec.
+  app.post(
+    "/sessions/:id/reload-mcp",
+    { preHandler: requireAuth },
+    async (request, reply) => {
+      const user = request.user;
+      if (!user) return reply.code(401).send({ error: "unauthenticated" });
+      const params = idParams.safeParse(request.params);
+      if (!params.success) return reply.code(400).send({ error: "invalid_params" });
+
+      const rows = await db
+        .select({
+          id: appSessions.id,
+          hermesSessionId: appSessions.hermesSessionId,
+        })
+        .from(appSessions)
+        .where(and(eq(appSessions.id, params.data.id), eq(appSessions.userId, user.id)))
+        .limit(1);
+      const row = rows[0];
+      if (!row) return reply.code(404).send({ error: "not_found" });
+      if (!row.hermesSessionId) {
+        return reply.code(409).send({
+          error: "no_hermes_session",
+          message: "Send a message first — Hermes session not yet created.",
+        });
+      }
+
+      const client = wsPool.getOrCreateShared();
+      try {
+        const result = (await client.request("slash.exec", {
+          session_id: row.hermesSessionId,
+          command: "/reload-mcp",
+        })) as { output?: string; warning?: string };
+        return reply.send({
+          output: typeof result?.output === "string" ? result.output : "",
+          warning: typeof result?.warning === "string" ? result.warning : null,
+        });
+      } catch (err) {
+        logger.warn({ err, appSessionId: row.id }, "reload-mcp slash.exec failed");
+        return reply.code(503).send({
+          error: "slash_failed",
+          message: err instanceof Error ? err.message : "slash command failed",
+        });
+      }
     },
   );
 }

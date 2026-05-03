@@ -64,6 +64,10 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
   // Stable counter survives re-renders without re-creating timer cleanup.
   const counter = useRef(0);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // The clear-state timeout chained after the dismiss animation. Tracked
+  // separately so a new show() during the exit window can cancel it —
+  // otherwise it would fire mid-replacement and wipe the new toast.
+  const clearTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const offset = useSharedValue(-100);
   const opacity = useSharedValue(0);
@@ -84,17 +88,27 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
   // Animate in on new state, schedule dismiss after 3s.
   useEffect(() => {
     if (!state) return;
+    // Cancel any leftover clear-state timeout from a previous toast's exit
+    // animation. Without this, a quick show() during the 220ms exit window
+    // gets wiped by the stale clear scheduled by the previous dismiss.
+    if (clearTimer.current) {
+      clearTimeout(clearTimer.current);
+      clearTimer.current = null;
+    }
     offset.value = withTiming(0, { duration: 200 });
     opacity.value = withTiming(1, { duration: 200 });
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(() => {
       offset.value = withTiming(-100, { duration: 200 });
       opacity.value = withTiming(0, { duration: 200 });
-      // Clear state shortly after exit animation completes.
-      setTimeout(() => setState(null), 220);
+      clearTimer.current = setTimeout(() => {
+        setState(null);
+        clearTimer.current = null;
+      }, 220);
     }, 3000);
     return () => {
       if (timer.current) clearTimeout(timer.current);
+      if (clearTimer.current) clearTimeout(clearTimer.current);
     };
   }, [state, offset, opacity]);
 
