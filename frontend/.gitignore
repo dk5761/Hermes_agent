@@ -61,3 +61,6 @@ uniwind-types.d.ts
 
 # Test coverage
 coverage/
+
+# ios
+*.ipa
