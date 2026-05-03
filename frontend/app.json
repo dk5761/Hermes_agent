@@ -83,6 +83,12 @@
         "projectId": "6f009dfb-144b-449f-8d57-b59a254eb11f"
       }
     },
-    "owner": "nanatsuxiv"
+    "owner": "nanatsuxiv",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/6f009dfb-144b-449f-8d57-b59a254eb11f"
+    }
   }
 }

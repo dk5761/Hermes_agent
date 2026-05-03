@@ -6,21 +6,24 @@
   "build": {
     "development": {
       "developmentClient": true,
-      "distribution": "internal"
+      "distribution": "internal",
+      "channel": "development"
     },
     "preview": {
       "distribution": "internal",
       "env": {
         "EXPO_PUBLIC_API_URL": "https://hermes.drshnk.dev",
         "EXPO_PUBLIC_WS_URL": "wss://hermes.drshnk.dev"
-      }
+      },
+      "channel": "preview"
     },
     "production": {
       "autoIncrement": true,
       "env": {
         "EXPO_PUBLIC_API_URL": "https://hermes.drshnk.dev",
         "EXPO_PUBLIC_WS_URL": "wss://hermes.drshnk.dev"
-      }
+      },
+      "channel": "production"
     }
   },
   "submit": {
