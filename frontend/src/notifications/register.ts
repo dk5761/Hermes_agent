@@ -99,10 +99,22 @@ export async function ensurePushPermissionAndToken(): Promise<EnsureResult> {
   await setPushDeniedFlag(false);
 
   const projectId = resolveProjectId();
-  const tokenResp = await Notifications.getExpoPushTokenAsync(
-    projectId ? { projectId } : undefined,
-  );
-  return { state: "granted", token: tokenResp.data };
+  if (!projectId) {
+    console.warn(
+      "[push] No EAS projectId configured. " +
+        "getExpoPushTokenAsync requires one in standalone builds. " +
+        "Add `extra.eas.projectId` to app.json (run `eas init` to create it).",
+    );
+  }
+  try {
+    const tokenResp = await Notifications.getExpoPushTokenAsync(
+      projectId ? { projectId } : undefined,
+    );
+    return { state: "granted", token: tokenResp.data };
+  } catch (err) {
+    console.warn("[push] getExpoPushTokenAsync failed:", err);
+    return { state: "denied", token: null };
+  }
 }
 
 // Returns the token actually in use (or null if denied/unsupported). Called
@@ -117,18 +129,24 @@ export async function registerPushTokenWithBackend(opts?: {
 
   const stored = await readStoredToken();
   if (stored === token) {
-    // Already registered with this exact token in a previous session —
-    // skipping the POST avoids hammering the backend on every cold start.
+    console.log("[push] token unchanged, skipping re-registration");
     return token;
   }
 
-  await registerPushToken({
-    expoToken: token,
-    platform,
-    deviceName: opts?.deviceName,
-  });
-  await writeStoredToken(token);
-  return token;
+  console.log("[push] registering token", token.slice(0, 24) + "…", platform);
+  try {
+    await registerPushToken({
+      expoToken: token,
+      platform,
+      deviceName: opts?.deviceName,
+    });
+    await writeStoredToken(token);
+    console.log("[push] token registered with backend");
+    return token;
+  } catch (err) {
+    console.warn("[push] backend registration failed:", err);
+    throw err;
+  }
 }
 
 // Called on logout. Best-effort delete + clear local state. We don't await
