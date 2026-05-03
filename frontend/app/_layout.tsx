@@ -24,6 +24,7 @@ import { useSessionTags } from "@/state/session-tags";
 import { useAppLock } from "@/state/app-lock";
 import { AppLockOverlay } from "@/components/AppLockOverlay";
 import { reconcileOnLaunch } from "@/live-activity/bridge";
+import { registerPushTokenWithBackend } from "@/notifications/register";
 import { BG, MUTED } from "@/config";
 import { ThemeProvider, useAppFonts } from "@/theme";
 import { ToastProvider, showToast } from "@/components/ui";
@@ -57,6 +58,7 @@ const queryClient = new QueryClient({
 function AuthGate() {
   const hydrated = useAuthStore((s) => s.hydrated);
   const hydrate = useAuthStore((s) => s.hydrate);
+  const isAuthed = useAuthStore((s) => Boolean(s.accessToken && s.user));
 
   useEffect(() => {
     void hydrate();
@@ -80,6 +82,18 @@ function AuthGate() {
       );
     })();
   }, [hydrate]);
+
+  // Push token registration. Fires once auth is hydrated and the user is
+  // signed in. Safe to re-fire — the underlying call short-circuits when
+  // the previously-stored token equals the freshly-fetched one. Failures
+  // are non-fatal (no permission, simulator, network down).
+  useEffect(() => {
+    if (!hydrated || !isAuthed) return;
+    void registerPushTokenWithBackend().catch(() => {
+      // Intentional swallow: registration failures should not block the UI
+      // and the user can retry via the Notifications settings screen.
+    });
+  }, [hydrated, isAuthed]);
 
   // Re-arm the app lock whenever the app leaves foreground; on return the
   // overlay auto-prompts FaceID/TouchID.
