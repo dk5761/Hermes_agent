@@ -22,7 +22,10 @@ import { registerUploadsRoutes } from "./routes/uploads.js";
 import { registerBlobsRoutes } from "./routes/blobs.js";
 import { registerGatewayWsRoute } from "./ws/gateway-ws.js";
 import { registerLiveActivityRoutes } from "./routes/live-activity.js";
+import { registerPrefsRoutes } from "./routes/prefs.js";
 import { LiveActivityPusher } from "./push/apns-live-activity.js";
+import { ChatCompleteNotifier } from "./push/chat-complete.js";
+import type { ExpoClient } from "./push/expo-client.js";
 import { AttachmentBridge } from "./ws/attachment-bridge.js";
 import type { ProcessLauncher } from "./hermes/launcher.js";
 import type { HermesHttpClient } from "./hermes/http-client.js";
@@ -43,6 +46,9 @@ export interface BuildServerDeps {
   cleanup?: CleanupTasksHandle;
   cronWatcherStatus?: () => { enabled: boolean; running: boolean };
   chatRunTimer?: ChatRunTimer;
+  // Expo push client — used to construct ChatCompleteNotifier inline.
+  // Optional so tests can omit push entirely.
+  expoClient?: ExpoClient;
 }
 
 export async function buildServer(deps: BuildServerDeps): Promise<FastifyInstance> {
@@ -164,6 +170,7 @@ export async function buildServer(deps: BuildServerDeps): Promise<FastifyInstanc
   await registerDevicesRoutes(app, {
     db: deps.dbHandle.db,
     requireAuth,
+    ...(deps.expoClient ? { expoClient: deps.expoClient } : {}),
   });
   await registerProxyRoutes(app, { requireAuth, hermesHttp: deps.hermesHttp });
   await registerSettingsRoutes(app, {
@@ -235,10 +242,23 @@ export async function buildServer(deps: BuildServerDeps): Promise<FastifyInstanc
     requireAuth,
   });
 
+  await registerPrefsRoutes(app, {
+    db: deps.dbHandle.db,
+    requireAuth,
+  });
+
   const liveActivityPusher = new LiveActivityPusher({
     config: deps.config,
     logger: deps.logger,
   });
+
+  const chatCompleteNotifier = deps.expoClient
+    ? new ChatCompleteNotifier({
+        db: deps.dbHandle.db,
+        expo: deps.expoClient,
+        logger: deps.logger,
+      })
+    : undefined;
 
   await registerGatewayWsRoute(app, {
     db: deps.dbHandle.db,
@@ -248,6 +268,7 @@ export async function buildServer(deps: BuildServerDeps): Promise<FastifyInstanc
     attachmentBridge,
     liveActivityPusher,
     ...(deps.chatRunTimer ? { chatRunTimer: deps.chatRunTimer } : {}),
+    ...(chatCompleteNotifier ? { chatCompleteNotifier } : {}),
   });
 
   return app;

@@ -18,7 +18,17 @@ import type { AppLogger } from "../logger.js";
 
 export type ChatRunStatus = "completed" | "aborted" | "errored" | "orphaned";
 
-export interface ChatRunStats {
+// Public result returned from recordRunComplete — callers use this to read
+// the flushed duration without needing access to internal state.
+export interface ChatRunResult {
+  durationMs: number;
+  deltaCount: number;
+  toolCount: number;
+  status: ChatRunStatus;
+}
+
+// Internal per-run tracking entry.
+interface RunEntry {
   appSessionId: string;
   startedAtMs: number;
   deltaCount: number;
@@ -29,7 +39,7 @@ const ORPHAN_AGE_MS = 30 * 60 * 1000;
 
 export class ChatRunTimer {
   private readonly log: AppLogger;
-  private readonly runs = new Map<string, ChatRunStats>();
+  private readonly runs = new Map<string, RunEntry>();
   private readonly reaper: NodeJS.Timeout;
 
   constructor(logger: AppLogger) {
@@ -55,55 +65,58 @@ export class ChatRunTimer {
   // Increments the matching counter. Tolerates events arriving before
   // recordRunStart (race on message.start delivery) by silently ignoring.
   recordEvent(appSessionId: string, type: string): void {
-    const stats = this.runs.get(appSessionId);
-    if (!stats) return;
+    const entry = this.runs.get(appSessionId);
+    if (!entry) return;
     if (type === "message.delta") {
-      stats.deltaCount += 1;
+      entry.deltaCount += 1;
       return;
     }
     if (type === "tool.start" || type === "tool.complete") {
       // Each tool produces both events; counting only `tool.start` keeps the
       // metric == "tool invocations". (Renamed from toolCount=both/2 for
       // clarity.)
-      if (type === "tool.start") stats.toolCount += 1;
+      if (type === "tool.start") entry.toolCount += 1;
     }
   }
 
-  recordRunComplete(appSessionId: string, status: ChatRunStatus): void {
-    const stats = this.runs.get(appSessionId);
-    if (!stats) return;
-    this.flush(appSessionId, stats, status);
+  // Returns the flushed run stats so callers can inspect durationMs etc.
+  // Returns null when no in-flight run exists for the given session.
+  recordRunComplete(appSessionId: string, status: ChatRunStatus): ChatRunResult | null {
+    const entry = this.runs.get(appSessionId);
+    if (!entry) return null;
+    return this.flush(appSessionId, entry, status);
   }
 
   stop(): void {
     clearInterval(this.reaper);
     // Flush whatever's left so we don't drop telemetry on shutdown.
-    for (const [sid, stats] of this.runs) {
-      this.flush(sid, stats, "orphaned");
+    for (const [sid, entry] of this.runs) {
+      this.flush(sid, entry, "orphaned");
     }
   }
 
-  private flush(appSessionId: string, stats: ChatRunStats, status: ChatRunStatus): void {
-    const durationMs = Date.now() - stats.startedAtMs;
+  private flush(appSessionId: string, entry: RunEntry, status: ChatRunStatus): ChatRunResult {
+    const durationMs = Date.now() - entry.startedAtMs;
     this.log.info(
       {
         event: "chat_run",
         appSessionId,
         durationMs,
-        deltaCount: stats.deltaCount,
-        toolCount: stats.toolCount,
+        deltaCount: entry.deltaCount,
+        toolCount: entry.toolCount,
         status,
       },
       "chat_run",
     );
     this.runs.delete(appSessionId);
+    return { durationMs, deltaCount: entry.deltaCount, toolCount: entry.toolCount, status };
   }
 
   private reapOrphans(): void {
     const now = Date.now();
-    for (const [sid, stats] of this.runs) {
-      if (now - stats.startedAtMs > ORPHAN_AGE_MS) {
-        this.flush(sid, stats, "orphaned");
+    for (const [sid, entry] of this.runs) {
+      if (now - entry.startedAtMs > ORPHAN_AGE_MS) {
+        this.flush(sid, entry, "orphaned");
       }
     }
   }

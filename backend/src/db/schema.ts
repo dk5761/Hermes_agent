@@ -227,6 +227,17 @@ export const liveActivityTokens = sqliteTable(
   }),
 );
 
+// Per-user notification preferences. One row per user (upserted on write).
+// notifyChatComplete defaults ON (1) — a missing row is treated as enabled
+// by the push notifier so new users get the feature without a bootstrap step.
+export const userPrefs = sqliteTable("user_prefs", {
+  userId: text("user_id")
+    .primaryKey()
+    .references(() => users.id, { onDelete: "cascade" }),
+  notifyChatComplete: integer("notify_chat_complete").notNull().default(1),
+  updatedAt: integer("updated_at").notNull(),
+});
+
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
 export type RefreshToken = typeof refreshTokens.$inferSelect;

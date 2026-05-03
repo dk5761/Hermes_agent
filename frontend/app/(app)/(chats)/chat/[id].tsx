@@ -24,8 +24,9 @@ import {
   View,
 } from "react-native";
 import { FlashList, type FlashListRef, type ListRenderItem } from "@shopify/flash-list";
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { setCurrentChatId } from "@/notifications/handler";
 
 import {
   ActionSheet,
@@ -425,6 +426,16 @@ export default function ChatScreen() {
       return;
     }
   }, [sessionId, messagesQuery.data, setLatestTodoToolId]);
+
+  // ─── foreground push suppression ────────────────────────────────────────
+  // Tell the notification handler which chat is currently on screen so it
+  // can skip the banner for pushes that belong to this exact session.
+  useFocusEffect(
+    useCallback(() => {
+      if (sessionId) setCurrentChatId(sessionId);
+      return () => setCurrentChatId(null);
+    }, [sessionId]),
+  );
 
   // ─── pinned card lookup ──────────────────────────────────────────────────
   const todosPinnedMap = useTodosUi((s) => s.pinnedByCard);

@@ -22,16 +22,49 @@ function isCronOutputData(value: unknown): value is CronOutputData {
   );
 }
 
+// chat_complete push — fired by the backend when an LLM run takes >5 s.
+interface ChatCompleteData {
+  type: "chat_complete";
+  appSessionId: string;
+}
+
+function isChatCompleteData(value: unknown): value is ChatCompleteData {
+  if (!value || typeof value !== "object") return false;
+  const v = value as Record<string, unknown>;
+  return v.type === "chat_complete" && typeof v.appSessionId === "string";
+}
+
+// ─── foreground suppression ──────────────────────────────────────────────────
+// The chat screen calls setCurrentChatId(sessionId) on focus and
+// setCurrentChatId(null) on blur so we know which chat the user is looking at.
+// When the incoming push is for that exact chat we skip the banner/sound/list
+// to avoid interrupting a conversation the user is already watching.
+
+let _currentChatId: string | null = null;
+
+export function setCurrentChatId(id: string | null): void {
+  _currentChatId = id;
+}
+
+function isCurrentlyOnChat(data: unknown): boolean {
+  if (!isChatCompleteData(data)) return false;
+  return _currentChatId === data.appSessionId;
+}
+
 // Foreground display behavior. Without setNotificationHandler, foreground
 // pushes are silently dropped on iOS. We choose to show alerts so the user
 // notices fresh cron output even while the app is open.
+// For chat_complete pushes: suppress when the user is already on that chat.
 Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowBanner: true,
-    shouldShowList: true,
-    shouldPlaySound: true,
-    shouldSetBadge: false,
-  }),
+  handleNotification: async (notif) => {
+    const suppress = isCurrentlyOnChat(notif.request.content.data);
+    return {
+      shouldShowBanner: !suppress,
+      shouldShowList: !suppress,
+      shouldPlaySound: !suppress,
+      shouldSetBadge: false,
+    };
+  },
 });
 
 interface SetupArgs {
@@ -50,6 +83,10 @@ function navigateToOutput(router: Router, jobId: string, outputId: string): void
   router.push(
     `/(cron)/${encodeURIComponent(jobId)}/output/${encodeURIComponent(outputId)}` as never,
   );
+}
+
+function navigateToChat(router: Router, appSessionId: string): void {
+  router.push(`/chat/${encodeURIComponent(appSessionId)}` as never);
 }
 
 function recordToInbox(
@@ -96,8 +133,14 @@ export function setupNotificationListeners(
     recordToInbox(evt.notification);
     useNotificationsInbox.getState().markRead(evt.notification.request.identifier);
     const data = evt.notification.request.content.data;
-    if (!isCronOutputData(data)) return;
-    navigateToOutput(router, data.jobId, data.outputId);
+    if (isCronOutputData(data)) {
+      navigateToOutput(router, data.jobId, data.outputId);
+      return;
+    }
+    if (isChatCompleteData(data)) {
+      navigateToChat(router, data.appSessionId);
+      return;
+    }
   });
 
   // Cold-start tap: if the app was launched from a notification tap (killed
@@ -109,8 +152,14 @@ export function setupNotificationListeners(
     recordToInbox(last.notification);
     useNotificationsInbox.getState().markRead(last.notification.request.identifier);
     const data = last.notification.request.content.data;
-    if (!isCronOutputData(data)) return;
-    navigateToOutput(router, data.jobId, data.outputId);
+    if (isCronOutputData(data)) {
+      navigateToOutput(router, data.jobId, data.outputId);
+      return;
+    }
+    if (isChatCompleteData(data)) {
+      navigateToChat(router, data.appSessionId);
+      return;
+    }
   })();
 
   return {

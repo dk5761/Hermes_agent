@@ -25,6 +25,7 @@ import {
 } from "./attachment-bridge.js";
 import type { ChatRunTimer } from "../observability/chat-run-timer.js";
 import type { LiveActivityPusher } from "../push/apns-live-activity.js";
+import type { ChatCompleteNotifier } from "../push/chat-complete.js";
 import { liveActivityTokens } from "../db/schema.js";
 
 export interface GatewayWsDeps {
@@ -37,6 +38,8 @@ export interface GatewayWsDeps {
   chatRunTimer?: ChatRunTimer;
   // ActivityKit push provider — wired by server.ts.
   liveActivityPusher?: LiveActivityPusher;
+  // Chat-complete Expo push notifier. Optional so tests can omit it.
+  chatCompleteNotifier?: ChatCompleteNotifier;
 }
 
 // Reverse map hermes_session_id -> app_session_id, populated lazily as
@@ -163,6 +166,7 @@ export async function registerGatewayWsRoute(
       log,
       deps.chatRunTimer,
       deps.liveActivityPusher,
+      deps.chatCompleteNotifier,
     );
   });
 
@@ -847,6 +851,7 @@ async function handleUpstreamEvent(
   log: AppLogger,
   chatRunTimer: ChatRunTimer | undefined,
   liveActivityPusher: LiveActivityPusher | undefined,
+  chatCompleteNotifier: ChatCompleteNotifier | undefined,
 ): Promise<void> {
   const hsid = ev.session_id;
   if (!hsid) {
@@ -862,10 +867,20 @@ async function handleUpstreamEvent(
   // Phase 7: record per-run timing transitions. Errors flush as "errored" so
   // we still get a chat_run log line for failed runs.
   if (chatRunTimer) {
-    if (ev.type === "message.start") chatRunTimer.recordRunStart(appSessionId);
-    else if (ev.type === "message.complete") chatRunTimer.recordRunComplete(appSessionId, "completed");
-    else if (ev.type === "error") chatRunTimer.recordRunComplete(appSessionId, "errored");
-    else chatRunTimer.recordEvent(appSessionId, ev.type);
+    if (ev.type === "message.start") {
+      chatRunTimer.recordRunStart(appSessionId);
+    } else if (ev.type === "message.complete") {
+      const stats = chatRunTimer.recordRunComplete(appSessionId, "completed");
+      if (stats && chatCompleteNotifier) {
+        void chatCompleteNotifier
+          .maybePush({ appSessionId, durationMs: stats.durationMs, payload: ev.payload })
+          .catch((err: unknown) => log.warn({ err }, "chat-complete maybePush failed"));
+      }
+    } else if (ev.type === "error") {
+      chatRunTimer.recordRunComplete(appSessionId, "errored");
+    } else {
+      chatRunTimer.recordEvent(appSessionId, ev.type);
+    }
   }
   if (!isPersistedEventType(ev.type)) {
     // Live-only fan-out (no envelope id). We still need a stable shape for the

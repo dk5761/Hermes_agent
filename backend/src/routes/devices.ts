@@ -2,6 +2,10 @@
 //
 // POST /devices/push-token   — idempotent register/transfer.
 // DELETE /devices/push-token — unregister, scoped to current user.
+// POST /devices/test-push    — fan out a "Test notification" to every push
+//                              token owned by the current user. Used by the
+//                              Settings screen to verify push delivery end
+//                              to end (token registered, APNs reachable).
 //
 // Note: the push_tokens table currently has no `device_name` column. The
 // `deviceName` field on the request is accepted (for future use) and ignored.
@@ -18,6 +22,7 @@ import { ExpoClient } from "../push/expo-client.js";
 export interface DevicesRoutesDeps {
   db: Db;
   requireAuth: preHandlerHookHandler;
+  expoClient?: ExpoClient;
 }
 
 const registerBody = z.object({
@@ -78,6 +83,41 @@ export async function registerDevicesRoutes(
       lastSeenAt: now,
     });
     return reply.code(201).send({ id });
+  });
+
+  app.post("/devices/test-push", { preHandler: requireAuth }, async (request, reply) => {
+    const user = request.user;
+    if (!user) return reply.code(401).send({ error: "unauthenticated" });
+    const expo = deps.expoClient;
+    if (!expo) {
+      return reply.code(503).send({ error: "push_disabled" });
+    }
+    const tokens = await db
+      .select({ token: pushTokens.expoToken })
+      .from(pushTokens)
+      .where(eq(pushTokens.userId, user.id));
+    if (tokens.length === 0) {
+      return reply.code(404).send({ error: "no_devices" });
+    }
+    const payloads = tokens.map((t) => ({
+      to: t.token,
+      title: "Hermes",
+      body: "Test notification — push delivery is working.",
+      sound: "default" as const,
+      data: { type: "test" as const },
+    }));
+    const result = await expo.sendMany(payloads);
+    if (result.staleTokens.length > 0) {
+      for (const stale of result.staleTokens) {
+        await db.delete(pushTokens).where(eq(pushTokens.expoToken, stale));
+      }
+    }
+    return reply.code(200).send({
+      sent: result.okCount,
+      errors: result.errorCount,
+      stale: result.staleTokens.length,
+      devices: tokens.length,
+    });
   });
 
   app.delete("/devices/push-token", { preHandler: requireAuth }, async (request, reply) => {

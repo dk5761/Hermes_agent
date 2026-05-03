@@ -8,7 +8,22 @@ export interface PushDataCronOutput {
   outputId: string;
 }
 
-export type PushData = PushDataCronOutput;
+export interface PushDataChatComplete {
+  type: "chat_complete";
+  appSessionId: string;
+}
+
+// "Test" push fired by Settings → "Send test notification". The mobile
+// notification handler ignores it for routing (no deep link target) but
+// still records it to the inbox.
+export interface PushDataTest {
+  type: "test";
+}
+
+export type PushData =
+  | PushDataCronOutput
+  | PushDataChatComplete
+  | PushDataTest;
 
 export interface PushPayload {
   to: string;

@@ -118,6 +118,7 @@ async function main(): Promise<void> {
       running: cronWatcherRunning,
     }),
     chatRunTimer,
+    expoClient,
   });
 
   let shuttingDown = false;

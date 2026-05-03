@@ -13,6 +13,8 @@ import { Alert, Linking, Platform, RefreshControl, ScrollView, View } from "reac
 import { useRouter } from "expo-router";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Notifications from "expo-notifications";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { getUserPrefs, updateUserPrefs, type UserPrefs } from "@/api/prefs";
 import {
   Button,
   Field,
@@ -27,10 +29,11 @@ import {
   StatusPill,
   Text,
   Toggle,
+  showToast,
   useThemeTokens,
 } from "@/components/ui";
 import { secureStorage } from "@/auth/secure-storage";
-import { unregisterPushToken } from "@/api/devices";
+import { sendTestPushNotification, unregisterPushToken } from "@/api/devices";
 
 type PrefKey = "cron" | "approval" | "serverError" | "quietHoursEnabled";
 
@@ -116,11 +119,59 @@ async function readPermission(): Promise<PermissionState> {
 export default function NotificationsScreen() {
   const router = useRouter();
   const tokens = useThemeTokens();
+  const queryClient = useQueryClient();
 
   const [prefs, setPrefs] = useState<NotificationPrefs>(DEFAULT_PREFS);
   const [permission, setPermission] = useState<PermissionState | null>(null);
   const [pushToken, setPushToken] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+
+  // ─── server-backed chat-complete pref ─────────────────────────────────────
+  const prefsQuery = useQuery({ queryKey: ["user-prefs"], queryFn: getUserPrefs });
+  const setPrefMut = useMutation({
+    mutationFn: (next: boolean) => updateUserPrefs({ notifyChatComplete: next }),
+    onMutate: async (next) => {
+      await queryClient.cancelQueries({ queryKey: ["user-prefs"] });
+      const prev = queryClient.getQueryData<UserPrefs>(["user-prefs"]);
+      queryClient.setQueryData<UserPrefs>(["user-prefs"], { notifyChatComplete: next });
+      return { prev };
+    },
+    onError: (_err, _next, ctx) => {
+      if (ctx?.prev) queryClient.setQueryData(["user-prefs"], ctx.prev);
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ["user-prefs"] }),
+  });
+  // While loading, fall back to true (the server default) so the toggle
+  // renders in an enabled state rather than flickering to false then back.
+  const chatCompleteEnabled = prefsQuery.data?.notifyChatComplete ?? true;
+
+  // ─── test push fan-out ────────────────────────────────────────────────────
+  // Verifies end-to-end push delivery: token registered, APNs reachable,
+  // banner permission granted. Backend fans out to every device the current
+  // user has registered.
+  const testPushMut = useMutation({
+    mutationFn: sendTestPushNotification,
+    onSuccess: (res) => {
+      if (res.sent === 0) {
+        showToast(
+          res.devices === 0
+            ? "No devices registered"
+            : `${res.errors} device${res.errors === 1 ? "" : "s"} failed`,
+          "error",
+        );
+      } else {
+        showToast(
+          `Test sent to ${res.sent} device${res.sent === 1 ? "" : "s"}`,
+          "success",
+        );
+      }
+    },
+    onError: (err: unknown) => {
+      const msg = err instanceof Error ? err.message : "Send failed";
+      showToast(msg, "error");
+    },
+    meta: { silent: true },
+  });
 
   const refresh = useCallback(async () => {
     const [next, perm, token] = await Promise.all([
@@ -237,6 +288,17 @@ export default function NotificationsScreen() {
           {/* Per-kind toggles. */}
           <ListGroup header="Categories">
             <ListRow
+              icon="bell"
+              title="Notify when chat finishes"
+              subtitle="Get a notification when Hermes is done thinking. Useful for long runs you walk away from."
+              right={
+                <Toggle
+                  on={chatCompleteEnabled}
+                  onChange={(next) => setPrefMut.mutate(next)}
+                />
+              }
+            />
+            <ListRow
               icon="clock"
               title="Cron completion"
               subtitle="When a scheduled job finishes"
@@ -261,6 +323,26 @@ export default function NotificationsScreen() {
                   onChange={updateBool("serverError")}
                 />
               }
+            />
+          </ListGroup>
+
+          {/* Diagnostic: send a push to every registered device. Confirms
+              token registration + APNs delivery + iOS notification permission
+              all line up. Useful right after first install. */}
+          <ListGroup
+            header="Diagnostics"
+            footer="Sends a test notification to every device signed in to this account."
+          >
+            <ListRow
+              icon="bell"
+              title="Send test notification"
+              subtitle={
+                testPushMut.isPending ? "Sending…" : "Verify push delivery"
+              }
+              onPress={() => {
+                if (testPushMut.isPending) return;
+                testPushMut.mutate();
+              }}
             />
           </ListGroup>
 
