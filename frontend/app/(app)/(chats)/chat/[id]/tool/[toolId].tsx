@@ -15,7 +15,8 @@
  */
 import React from "react";
 import { ScrollView, View } from "react-native";
-import { Stack as ExpoStack, router, useLocalSearchParams } from "expo-router";
+import { Stack as ExpoStack, useLocalSearchParams } from "expo-router";
+import { safeBack } from "@/util/nav";
 import {
   Button,
   EmptyState,
@@ -185,13 +186,13 @@ export default function ToolDetailScreen() {
     return (
       <PhoneSafeArea>
         <ExpoStack.Screen options={{ headerShown: false }} />
-        <NavBar title="Tool" onBack={() => router.back()} />
+        <NavBar title="Tool" onBack={() => safeBack(appSessionId ? `/chat/${appSessionId}` : "/")} />
         <EmptyState
           icon="terminal"
           title="Tool details unavailable"
           body="Tool details are only available during an active session. Open the chat to load history."
           action={
-            <Button kind="secondary" onPress={() => router.back()}>
+            <Button kind="secondary" onPress={() => safeBack(appSessionId ? `/chat/${appSessionId}` : "/")}>
               Open chat
             </Button>
           }
@@ -228,7 +229,7 @@ export default function ToolDetailScreen() {
       <ExpoStack.Screen options={{ headerShown: false }} />
       <NavBar
         title={tool.name}
-        onBack={() => router.back()}
+        onBack={() => safeBack(appSessionId ? `/chat/${appSessionId}` : "/")}
         trailing={
           <StatusPill kind={statusToPill(status)} label={statusLabel(status)} />
         }

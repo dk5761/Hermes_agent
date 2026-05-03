@@ -52,6 +52,7 @@ import { ApprovalCard } from "@/components/ApprovalCard";
 import { ComposerAttachments } from "@/components/ComposerAttachments";
 import * as Clipboard from "expo-clipboard";
 import { exportChat } from "@/util/export-chat";
+import { safeBack } from "@/util/nav";
 import { useChatStream } from "@/ws/use-chat-stream";
 import { useChatStore } from "@/state/chat-store";
 import { useTodosUi } from "@/state/todos";
@@ -770,7 +771,7 @@ export default function ChatScreen() {
         onPress: () => {
           void deleteSession(sessionId).then(() => {
             void queryClient.invalidateQueries({ queryKey: ["sessions"] });
-            router.back();
+            safeBack("/(chats)");
           });
         },
       },
@@ -949,7 +950,7 @@ export default function ChatScreen() {
     <PhoneSafeArea>
       <NavBar
         title={headerTitle}
-        onBack={() => router.back()}
+        onBack={() => safeBack("/(chats)")}
         leading={
           // Connection status moved to the dedicated banner below the
           // NavBar — keeping it here too was redundant and crowded the
@@ -1100,7 +1101,13 @@ export default function ChatScreen() {
 
       <KeyboardAvoidingView
         behavior={Platform.OS === "ios" ? "padding" : undefined}
-        keyboardVerticalOffset={Platform.OS === "ios" ? 88 : 0}
+        // RN computes bottom padding as `keyboardOverlap + offset`, so a
+        // larger offset *increases* the gap between the composer and the
+        // keyboard. The composer already sits at the very bottom of the
+        // KAV (PhoneSafeArea handles the home-indicator inset above it),
+        // so we want zero extra padding — let the keyboard's top edge
+        // align flush with the composer's bottom.
+        keyboardVerticalOffset={0}
         style={{ flex: 1 }}
       >
         {/* On a cold open we'd otherwise show a blank list flash before

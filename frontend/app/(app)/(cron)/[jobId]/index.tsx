@@ -52,6 +52,7 @@ import {
 } from "@/api/cron";
 import type { CronJob, CronJobsResponse, CronOutputSummary } from "@/api/types";
 import { formatRelative, toDate } from "@/util/time";
+import { safeBack } from "@/util/nav";
 
 export default function CronJobDetailScreen() {
   const router = useRouter();
@@ -120,7 +121,7 @@ export default function CronJobDetailScreen() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: cronKeys.jobs() });
       showToast("Job deleted", "success");
-      router.back();
+      safeBack("/(cron)");
     },
   });
 
@@ -213,7 +214,7 @@ export default function CronJobDetailScreen() {
   if (!job) {
     return (
       <PhoneSafeArea>
-        <NavBar title="Cron job" onBack={() => router.back()} />
+        <NavBar title="Cron job" onBack={() => safeBack("/(cron)")} />
         {jobQuery.isError ? (
           <EmptyState
             icon="close"
@@ -237,7 +238,7 @@ export default function CronJobDetailScreen() {
     <PhoneSafeArea>
       <NavBar
         title={job.name}
-        onBack={() => router.back()}
+        onBack={() => safeBack("/(cron)")}
         trailing={<NavIcon name="edit" onPress={onEdit} />}
       />
       <ScrollView

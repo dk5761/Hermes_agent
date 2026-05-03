@@ -21,7 +21,8 @@
  */
 import React, { useCallback } from "react";
 import { Pressable, View } from "react-native";
-import { Stack as ExpoStack, router, useLocalSearchParams } from "expo-router";
+import { Stack as ExpoStack, useLocalSearchParams } from "expo-router";
+import { safeBack } from "@/util/nav";
 import { StatusBar } from "expo-status-bar";
 import { Image } from "expo-image";
 import * as Clipboard from "expo-clipboard";
@@ -82,8 +83,10 @@ const FADE_EASING = Easing.bezier(0.2, 0, 0, 1);
 
 export default function ImageLightboxScreen() {
   const params = useLocalSearchParams<{ id: string; attachmentId: string }>();
+  const sessionId = typeof params.id === "string" ? params.id : null;
   const attachmentId =
     typeof params.attachmentId === "string" ? params.attachmentId : null;
+  const fallbackPath = sessionId ? `/chat/${sessionId}` : "/";
   const insets = useSafeAreaInsets();
   const toast = useToast();
 
@@ -116,15 +119,15 @@ export default function ImageLightboxScreen() {
       { duration: 180, easing: FADE_EASING },
       (finished) => {
         if (finished) {
-          runOnJS(router.back)();
+          runOnJS(safeBack)(fallbackPath);
         }
       },
     );
-  }, [backdropOpacity]);
+  }, [backdropOpacity, fallbackPath]);
 
   const onClose = useCallback(() => {
-    router.back();
-  }, []);
+    safeBack(fallbackPath);
+  }, [fallbackPath]);
 
   const onCopy = useCallback(async () => {
     if (!url) return;

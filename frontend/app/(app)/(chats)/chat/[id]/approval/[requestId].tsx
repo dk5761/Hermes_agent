@@ -10,14 +10,14 @@
  * The modal mounts its own `useChatStream` so it can send `approval.respond`.
  * That briefly opens a second socket while the chat screen's socket is also
  * alive — the gateway tolerates concurrent sockets per session, and the
- * modal's socket closes on unmount (immediately after `router.back()`).
+ * modal's socket closes on unmount (immediately after the back nav).
  *
  * If the approval has already been resolved (or the session isn't loaded
  * for cold deep-links), we render an empty state.
  */
 import React, { useCallback } from "react";
 import { ScrollView, View } from "react-native";
-import { Stack as ExpoStack, router, useLocalSearchParams } from "expo-router";
+import { Stack as ExpoStack, useLocalSearchParams } from "expo-router";
 import {
   Button,
   EmptyState,
@@ -32,6 +32,7 @@ import {
 } from "@/components/ui";
 import { useApprovalFromStore } from "@/hooks/useApprovalFromStore";
 import { useChatStream } from "@/ws/use-chat-stream";
+import { safeBack } from "@/util/nav";
 
 function asString(v: unknown): string | null {
   return typeof v === "string" ? v : null;
@@ -90,7 +91,7 @@ export default function ApprovalModalScreen() {
           respondSecret(requestId, "");
           break;
       }
-      router.back();
+      safeBack(`/chat/${appSessionId ?? ""}`);
     },
     [approval, requestId, respondApproval, respondSudo, respondClarify, respondSecret],
   );
@@ -111,20 +112,20 @@ export default function ApprovalModalScreen() {
         respondSecret(requestId, "");
         break;
     }
-    router.back();
+    safeBack(`/chat/${appSessionId ?? ""}`);
   }, [approval, requestId, respondApproval, respondSudo, respondClarify, respondSecret]);
 
   if (!approval) {
     return (
       <PhoneSafeArea>
         <ExpoStack.Screen options={{ headerShown: false, presentation: "modal" }} />
-        <NavBar title="Approval" onBack={() => router.back()} />
+        <NavBar title="Approval" onBack={() => safeBack(`/chat/${appSessionId ?? ""}`)} />
         <EmptyState
           icon="shield"
           title="Approval no longer pending"
           body="This request has already been resolved or the session is not loaded."
           action={
-            <Button kind="secondary" onPress={() => router.back()}>
+            <Button kind="secondary" onPress={() => safeBack(`/chat/${appSessionId ?? ""}`)}>
               Back
             </Button>
           }
@@ -139,7 +140,7 @@ export default function ApprovalModalScreen() {
   return (
     <PhoneSafeArea>
       <ExpoStack.Screen options={{ headerShown: false, presentation: "modal" }} />
-      <NavBar title="Approval" onBack={() => router.back()} />
+      <NavBar title="Approval" onBack={() => safeBack(`/chat/${appSessionId ?? ""}`)} />
       <ScrollView
         contentContainerStyle={{
           paddingHorizontal: 16,

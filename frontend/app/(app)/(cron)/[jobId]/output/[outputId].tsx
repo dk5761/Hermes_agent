@@ -10,7 +10,8 @@
  */
 import { useCallback } from "react";
 import { Alert, RefreshControl, ScrollView, View } from "react-native";
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { useLocalSearchParams } from "expo-router";
+import { safeBack } from "@/util/nav";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
@@ -28,7 +29,6 @@ import { cronKeys, getOutput, triggerJob } from "@/api/cron";
 import { formatRelative, toDate } from "@/util/time";
 
 export default function CronOutputDetailScreen() {
-  const router = useRouter();
   const queryClient = useQueryClient();
   const tokens = useThemeTokens();
   const params = useLocalSearchParams<{ jobId: string; outputId: string }>();
@@ -69,7 +69,7 @@ export default function CronOutputDetailScreen() {
   if (!data) {
     return (
       <PhoneSafeArea>
-        <NavBar title="Output" onBack={() => router.back()} />
+        <NavBar title="Output" onBack={() => safeBack(jobId ? `/(cron)/${jobId}` : "/(cron)")} />
         {outputQuery.isError ? (
           <EmptyState
             icon="close"
@@ -91,7 +91,7 @@ export default function CronOutputDetailScreen() {
       <NavBar
         title="Output"
         subtitle={subtitle}
-        onBack={() => router.back()}
+        onBack={() => safeBack(jobId ? `/(cron)/${jobId}` : "/(cron)")}
         trailing={
           <Button
             size="sm"
