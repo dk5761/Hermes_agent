@@ -358,6 +358,12 @@ function AssistantRow({
           </Text>
         </Row>
       ) : null}
+      {message.interrupted ? (
+        <Row gap={4} align="center" style={{ paddingHorizontal: 12, marginTop: 4 }}>
+          <Icon name="close" size={10} color={tokens.ink3} />
+          <Text kind="caption" color={tokens.ink3}>Stopped</Text>
+        </Row>
+      ) : null}
       {showActions ? (
         <Row gap={4} align="center" style={{ marginTop: 6, marginLeft: -4 }}>
           {onCopy ? (
@@ -990,7 +996,8 @@ export const Message = memo(MessageInner, (prev, next) => {
       a.text === b.text &&
       a.reasoning === b.reasoning &&
       a.warning === b.warning &&
-      a.reasoningDurationMs === b.reasoningDurationMs
+      a.reasoningDurationMs === b.reasoningDurationMs &&
+      a.interrupted === b.interrupted
     );
   }
   if (a.kind === "tool" && b.kind === "tool") {

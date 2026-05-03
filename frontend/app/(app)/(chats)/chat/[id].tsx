@@ -230,6 +230,8 @@ function historyRowToUiRow(
       const text = pickString(p, "text");
       const reasoning = pickString(p, "reasoning") || pickString(p, "reasoning_content");
       const warning = pickString(p, "warning");
+      const status = pickString(p, "status");
+      const interrupted = status === "interrupted";
       if (!text && !reasoning) return null;
       return {
         rowKind: "msg",
@@ -239,6 +241,7 @@ function historyRowToUiRow(
           text,
           ...(reasoning ? { reasoning } : {}),
           ...(warning ? { warning } : {}),
+          ...(interrupted ? { interrupted: true } : {}),
           createdAt: iso,
         },
       };

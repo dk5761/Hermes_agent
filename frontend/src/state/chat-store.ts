@@ -33,6 +33,9 @@ export interface AssistantMessage {
   // token, or message.complete if no text streamed). Drives the "Thought
   // for Ns" header in the collapsed reasoning block. Live-only field.
   reasoningDurationMs?: number;
+  // True when this turn was cancelled mid-flight via session.interrupt.
+  // Drives the "Stopped" pill in the assistant bubble.
+  interrupted?: boolean;
 }
 
 // Subtask of a parent `delegate_task` tool call. Hermes emits dedicated
@@ -362,10 +365,17 @@ function reduce(state: ChatSessionState, env: GatewayEventEnvelope): ChatSession
       return next;
     }
     case "message.complete": {
+      const status = getString(payload, "status");
+      const isInterrupted = status === "interrupted";
+      // Prefer the streamed buffer on interrupt — Hermes' fallback `text`
+      // is a boilerplate "Operation interrupted: ..." string that would
+      // overwrite the partial output the user just watched stream in.
+      const payloadText = getString(payload, "text");
+      const bufferText = next.streaming?.textBuffer ?? "";
       const text =
-        getString(payload, "text") ??
-        next.streaming?.textBuffer ??
-        "";
+        isInterrupted && bufferText.length > 0
+          ? bufferText
+          : payloadText ?? bufferText;
       const reasoning =
         getString(payload, "reasoning") ?? next.streaming?.reasoningBuffer;
       const warning = getString(payload, "warning");
@@ -388,6 +398,7 @@ function reduce(state: ChatSessionState, env: GatewayEventEnvelope): ChatSession
         warning,
         createdAt: env.createdAt,
         ...(reasoningDurationMs !== undefined ? { reasoningDurationMs } : {}),
+        ...(isInterrupted ? { interrupted: true } : {}),
       };
       next.messages = [...next.messages, msg];
       next.streaming = null;
