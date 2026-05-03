@@ -1318,16 +1318,24 @@ export default function ChatScreen() {
             {isStreaming ? (
               <Pressable
                 onPress={onAbort}
+                accessibilityLabel="Stop generating"
                 style={{
                   width: 32,
                   height: 32,
                   borderRadius: 16,
                   alignItems: "center",
                   justifyContent: "center",
-                  backgroundColor: tokens.ink,
+                  backgroundColor: tokens.danger,
                 }}
               >
-                <Icon name="pause" size={14} color={tokens.surface} />
+                <View
+                  style={{
+                    width: 11,
+                    height: 11,
+                    borderRadius: 2,
+                    backgroundColor: "#FFFFFF",
+                  }}
+                />
               </Pressable>
             ) : (
               <Pressable
