@@ -71,6 +71,7 @@ import type {
   AssistantMessage,
   ChatSessionState,
   Message,
+  SubagentInfo,
   ToolCallState,
 } from "@/state/chat-store";
 import type { ConnectionStatus } from "@/ws/client";
@@ -125,7 +126,55 @@ function pickString(p: Record<string, unknown>, key: string): string {
 // history — Hermes can't continue past an open approval, so anything after
 // proves the request was answered. Live `pendingApprovals` overlays the
 // last-row case and replaces the history version via requestId match.
-function historyRowToUiRow(r: HistoryRow, resolvedApproval: boolean): Row | null {
+// True when a chat_history `tool.call` row is actually a subagent.* event
+// that the gateway collapsed into kind="tool.call" on persistence. They lack
+// a `name` / `tool_id` and carry a `subagent_id` instead.
+function isSubagentHistoryRow(r: HistoryRow): boolean {
+  if (r.kind !== "tool.call") return false;
+  return typeof r.payload["subagent_id"] === "string";
+}
+
+function readSubagentFromHistory(r: HistoryRow): SubagentInfo | null {
+  const p = r.payload;
+  const subagentId = pickString(p, "subagent_id");
+  if (!subagentId) return null;
+  const goal = pickString(p, "goal");
+  const taskIndexRaw = p["task_index"];
+  const taskCountRaw = p["task_count"];
+  const taskIndex = typeof taskIndexRaw === "number" ? taskIndexRaw : 0;
+  const taskCount = typeof taskCountRaw === "number" ? taskCountRaw : 1;
+  const statusStr = pickString(p, "status");
+  let status: SubagentInfo["status"] = "completed";
+  if (statusStr === "interrupted") status = "interrupted";
+  else if (statusStr === "error") status = "error";
+  const durationRaw = p["duration_seconds"];
+  const durationSec = typeof durationRaw === "number" ? durationRaw : undefined;
+  const summaryRaw = pickString(p, "summary");
+  const summary =
+    summaryRaw && summaryRaw !== "(empty)" && summaryRaw.length > 0 ? summaryRaw : undefined;
+  const model = pickString(p, "model");
+  const toolsetsRaw = p["toolsets"];
+  const toolsets = Array.isArray(toolsetsRaw)
+    ? toolsetsRaw.filter((v): v is string => typeof v === "string")
+    : undefined;
+  return {
+    subagentId,
+    taskIndex,
+    taskCount,
+    goal,
+    status,
+    ...(model ? { model } : {}),
+    ...(toolsets && toolsets.length > 0 ? { toolsets } : {}),
+    ...(durationSec !== undefined ? { durationSec } : {}),
+    ...(summary ? { summary } : {}),
+  };
+}
+
+function historyRowToUiRow(
+  r: HistoryRow,
+  resolvedApproval: boolean,
+  subagentsForThisRow?: SubagentInfo[],
+): Row | null {
   const iso = new Date(r.createdAt * 1000).toISOString();
   const p = r.payload;
   switch (r.kind) {
@@ -175,6 +224,9 @@ function historyRowToUiRow(r: HistoryRow, resolvedApproval: boolean): Row | null
           status: "complete",
           detail: p,
           createdAt: iso,
+          ...(subagentsForThisRow && subagentsForThisRow.length > 0
+            ? { subagents: subagentsForThisRow }
+            : {}),
         },
       };
     }
@@ -363,8 +415,18 @@ export default function ChatScreen() {
     // collapsible "Show reasoning"). Otherwise it renders inline at its own
     // position — so mid-turn thinking around tool calls stays visible.
     let pendingReasoning: string | null = null;
+    // Subagent buffer: gateway persists `subagent.complete` events as
+    // kind="tool.call" rows that come *before* the parent delegate_task
+    // row. Collect them here; drain into the next delegate_task row so the
+    // UI gets one grouped card per delegation.
+    let pendingSubagents: SubagentInfo[] = [];
     for (let i = 0; i < apiRows.length; i++) {
       const r = apiRows[i];
+      if (isSubagentHistoryRow(r)) {
+        const info = readSubagentFromHistory(r);
+        if (info) pendingSubagents.push(info);
+        continue;
+      }
       if (r.kind === "reasoning") {
         const text = pickString(r.payload, "text");
         if (!text) continue;
@@ -417,7 +479,12 @@ export default function ChatScreen() {
       // Approval rows are resolved iff anything exists after them in history.
       const isLast = i === apiRows.length - 1;
       const resolvedApproval = !isLast;
-      const ui = historyRowToUiRow(r, resolvedApproval);
+      // delegate_task is the parent — drain pending subagents into it.
+      const isDelegateParent =
+        r.kind === "tool.call" && pickString(r.payload, "name") === "delegate_task";
+      const subsForRow = isDelegateParent ? pendingSubagents : undefined;
+      if (isDelegateParent) pendingSubagents = [];
+      const ui = historyRowToUiRow(r, resolvedApproval, subsForRow);
       if (ui) out.push(ui);
     }
     // Tail: a reasoning row at the very end with nothing after it. Surface

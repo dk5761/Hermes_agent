@@ -35,6 +35,22 @@ export interface AssistantMessage {
   reasoningDurationMs?: number;
 }
 
+// Subtask of a parent `delegate_task` tool call. Hermes emits dedicated
+// `subagent.start/complete` events bracketed inside the parent's tool.start
+// → tool.complete. The reducer tags each subagent into the currently-open
+// delegate_task tool so the UI can render them as a single grouped card.
+export interface SubagentInfo {
+  subagentId: string;
+  taskIndex: number;
+  taskCount: number;
+  goal: string;
+  model?: string;
+  toolsets?: string[];
+  status: "running" | "completed" | "interrupted" | "error";
+  durationSec?: number;
+  summary?: string;
+}
+
 export interface ToolCallCard {
   kind: "tool";
   id: string;
@@ -43,6 +59,8 @@ export interface ToolCallCard {
   // Free-form payload bag for renderer (input, output, progress, error).
   detail: Record<string, unknown>;
   createdAt: string;
+  // Populated only for delegate_task tool calls (parent of N subagents).
+  subagents?: SubagentInfo[];
 }
 
 export interface ErrorBubble {
@@ -60,12 +78,17 @@ export interface ToolCallState {
   status: "running" | "complete" | "error";
   detail: Record<string, unknown>;
   createdAt: string;
+  subagents?: SubagentInfo[];
 }
 
 export interface StreamingAssistant {
   textBuffer: string;
   reasoningBuffer: string;
   toolCalls: Map<string, ToolCallState>;
+  // Tool id of the currently-open delegate_task call; subagent.* events
+  // attach to this one. Hermes emits delegations sequentially, so a single
+  // open id is sufficient.
+  currentDelegateToolId: string | null;
   startedAt: string;
   // Timestamps (ms since epoch) used to compute "Thought for Ns" once the
   // turn completes. `reasoningStartedAt` lands on the first reasoning.delta
@@ -158,9 +181,47 @@ function emptyStreaming(startedAt: string): StreamingAssistant {
     textBuffer: "",
     reasoningBuffer: "",
     toolCalls: new Map(),
+    currentDelegateToolId: null,
     startedAt,
     reasoningStartedAt: null,
     reasoningEndedAt: null,
+  };
+}
+
+function readSubagentInfo(payload: Record<string, unknown> | null): SubagentInfo | null {
+  if (!payload) return null;
+  const subagentId = getString(payload, "subagent_id");
+  if (!subagentId) return null;
+  const goal = getString(payload, "goal") ?? "";
+  const taskIndex = typeof payload["task_index"] === "number" ? (payload["task_index"] as number) : 0;
+  const taskCount = typeof payload["task_count"] === "number" ? (payload["task_count"] as number) : 1;
+  const statusStr = getString(payload, "status");
+  let status: SubagentInfo["status"] = "running";
+  if (statusStr === "completed") status = "completed";
+  else if (statusStr === "interrupted") status = "interrupted";
+  else if (statusStr === "error") status = "error";
+  const durationSec =
+    typeof payload["duration_seconds"] === "number"
+      ? (payload["duration_seconds"] as number)
+      : undefined;
+  const summaryRaw = getString(payload, "summary");
+  const summary =
+    summaryRaw && summaryRaw !== "(empty)" && summaryRaw.length > 0 ? summaryRaw : undefined;
+  const model = getString(payload, "model");
+  const toolsetsRaw = payload["toolsets"];
+  const toolsets = Array.isArray(toolsetsRaw)
+    ? toolsetsRaw.filter((v): v is string => typeof v === "string")
+    : undefined;
+  return {
+    subagentId,
+    taskIndex,
+    taskCount,
+    goal,
+    status,
+    ...(model ? { model } : {}),
+    ...(toolsets && toolsets.length > 0 ? { toolsets } : {}),
+    ...(durationSec !== undefined ? { durationSec } : {}),
+    ...(summary ? { summary } : {}),
   };
 }
 
@@ -244,17 +305,27 @@ function reduce(state: ChatSessionState, env: GatewayEventEnvelope): ChatSession
         status: "running",
         detail: { ...(existing?.detail ?? {}), ...(payload ?? {}) },
         createdAt: existing?.createdAt ?? env.createdAt,
+        ...(existing?.subagents ? { subagents: existing.subagents } : {}),
       };
       if (!next.streaming) {
         next.streaming = {
           ...emptyStreaming(env.createdAt),
           toolCalls: new Map([[id, merged]]),
+          currentDelegateToolId: name === "delegate_task" && env.type === "tool.start" ? id : null,
         };
         next.isStreaming = true;
       } else {
         const tc = new Map(next.streaming.toolCalls);
         tc.set(id, merged);
-        next.streaming = { ...next.streaming, toolCalls: tc };
+        const nextDelegateId =
+          name === "delegate_task" && env.type === "tool.start"
+            ? id
+            : next.streaming.currentDelegateToolId;
+        next.streaming = {
+          ...next.streaming,
+          toolCalls: tc,
+          currentDelegateToolId: nextDelegateId,
+        };
       }
       return next;
     }
@@ -274,12 +345,19 @@ function reduce(state: ChatSessionState, env: GatewayEventEnvelope): ChatSession
         status: errStr ? "error" : "complete",
         detail: { ...(existing?.detail ?? {}), ...(payload ?? {}) },
         createdAt: existing?.createdAt ?? env.createdAt,
+        ...(existing?.subagents ? { subagents: existing.subagents } : {}),
       };
       next.messages = [...next.messages, card];
       if (next.streaming) {
         const tc = new Map(next.streaming.toolCalls);
         tc.delete(id);
-        next.streaming = { ...next.streaming, toolCalls: tc };
+        const nextDelegateId =
+          next.streaming.currentDelegateToolId === id ? null : next.streaming.currentDelegateToolId;
+        next.streaming = {
+          ...next.streaming,
+          toolCalls: tc,
+          currentDelegateToolId: nextDelegateId,
+        };
       }
       return next;
     }
@@ -369,12 +447,31 @@ function reduce(state: ChatSessionState, env: GatewayEventEnvelope): ChatSession
       next.isStreaming = false;
       return next;
     }
+    case "subagent.start":
+    case "subagent.complete": {
+      const info = readSubagentInfo(payload);
+      if (!info || !next.streaming) return next;
+      const parentId = next.streaming.currentDelegateToolId;
+      if (!parentId) return next;
+      const parent = next.streaming.toolCalls.get(parentId);
+      if (!parent) return next;
+      const status: SubagentInfo["status"] =
+        env.type === "subagent.start" ? "running" : info.status;
+      const existing = parent.subagents ?? [];
+      const idx = existing.findIndex((s) => s.subagentId === info.subagentId);
+      const merged: SubagentInfo = idx >= 0 ? { ...existing[idx], ...info, status } : { ...info, status };
+      const nextSubs =
+        idx >= 0
+          ? existing.map((s, i) => (i === idx ? merged : s))
+          : [...existing, merged];
+      const tc = new Map(next.streaming.toolCalls);
+      tc.set(parentId, { ...parent, subagents: nextSubs });
+      next.streaming = { ...next.streaming, toolCalls: tc };
+      return next;
+    }
     case "session.info":
     case "background.complete":
-    case "subagent.start":
     case "subagent.tool":
-    case "subagent.complete":
-      // Phase 3: surface only as no-op state mutation — id bookkeeping only.
       return next;
     default:
       return next;

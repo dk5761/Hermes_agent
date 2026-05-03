@@ -24,6 +24,7 @@ import type {
   AssistantMessage,
   ErrorBubble,
   Message as ChatMessage,
+  SubagentInfo,
   ToolCallCard,
   ToolCallState,
   UserMessage,
@@ -86,6 +87,8 @@ const TOOL_ICON: Record<string, IconName> = {
   http: "globe",
   list_dir: "doc",
   ls: "doc",
+  delegate_task: "flow",
+  todo: "check",
 };
 
 function iconForTool(name: string): IconName {
@@ -431,6 +434,202 @@ function ReasoningOnlyRow({ text }: { text: string }) {
   );
 }
 
+// ─── delegate_task (parent + nested subagents) ───────────────────────────────
+
+function fmtSeconds(secs: number | undefined): string | null {
+  if (secs === undefined) return null;
+  if (secs < 60) return `${Math.round(secs)}s`;
+  const m = Math.floor(secs / 60);
+  const s = Math.round(secs % 60);
+  return `${m}m ${s}s`;
+}
+
+function subagentDot(status: SubagentInfo["status"], tokens: ReturnType<typeof useThemeTokens>): string {
+  switch (status) {
+    case "running":
+      return tokens.accent;
+    case "completed":
+      return tokens.positive;
+    case "interrupted":
+      return tokens.warning;
+    case "error":
+      return tokens.danger;
+  }
+}
+
+interface DelegateTaskCardProps {
+  data: ToolCallCard | ToolCallState;
+  subagents: SubagentInfo[];
+  sessionId: string | null;
+}
+
+function DelegateTaskCard({ data, subagents, sessionId }: DelegateTaskCardProps) {
+  const tokens = useThemeTokens();
+  const router = useRouter();
+  const [expanded, setExpanded] = useState(false);
+
+  const detail = data.detail as Record<string, unknown> | null | undefined;
+  const parentDurMs =
+    pickNum(detail, "duration_s") !== undefined
+      ? (pickNum(detail, "duration_s") as number) * 1000
+      : pickNum(detail, "durationMs");
+  const parentDur = fmtDuration(parentDurMs);
+  const headerDot =
+    data.status === "running"
+      ? tokens.accent
+      : data.status === "error"
+        ? tokens.danger
+        : tokens.positive;
+
+  const ordered = [...subagents].sort((a, b) => a.taskIndex - b.taskIndex);
+  const summary = `${ordered.length} subtask${ordered.length === 1 ? "" : "s"}`;
+
+  const onPressDetail = () => {
+    if (!sessionId) return;
+    void Haptics.selectionAsync().catch(() => undefined);
+    router.push({
+      pathname: "/chat/[id]/tool/[toolId]" as const,
+      params: { id: sessionId, toolId: data.id },
+    });
+  };
+
+  return (
+    <View
+      className="bg-surface border border-line"
+      style={{
+        marginHorizontal: 6,
+        marginVertical: 4,
+        borderRadius: 12,
+        paddingHorizontal: 12,
+        paddingVertical: 10,
+      }}
+    >
+      <Pressable
+        onPress={() => setExpanded((v) => !v)}
+        onLongPress={onPressDetail}
+        hitSlop={8}
+      >
+        <Row gap={8} align="center" justify="space-between">
+          <Row gap={8} align="center" style={{ minWidth: 0, flex: 1 }}>
+            <View
+              style={{
+                width: 22,
+                height: 22,
+                borderRadius: 6,
+                backgroundColor: tokens.chip,
+                alignItems: "center",
+                justifyContent: "center",
+                flexShrink: 0,
+              }}
+            >
+              <Icon name={iconForTool("delegate_task")} size={12} color={tokens.ink} />
+            </View>
+            <Text kind="label" mono numberOfLines={1} style={{ flexShrink: 0 }}>
+              delegate_task
+            </Text>
+            <Text kind="caption" color={tokens.ink3} numberOfLines={1} style={{ flex: 1, minWidth: 0 }}>
+              {summary}
+            </Text>
+          </Row>
+          <Row gap={6} align="center" style={{ flexShrink: 0 }}>
+            {parentDur ? (
+              <Text kind="caption" mono color={tokens.ink3}>
+                {parentDur}
+              </Text>
+            ) : null}
+            <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: headerDot }} />
+            <Icon
+              name={expanded ? "chevU" : "chevD"}
+              size={14}
+              color={tokens.ink3}
+            />
+          </Row>
+        </Row>
+      </Pressable>
+      {expanded ? (
+        <Stack gap={6} style={{ marginTop: 10 }}>
+          {ordered.map((s) => (
+            <SubagentRow key={s.subagentId} info={s} />
+          ))}
+        </Stack>
+      ) : (
+        <Stack gap={2} style={{ marginTop: 8 }}>
+          {ordered.slice(0, 2).map((s) => (
+            <Row key={s.subagentId} gap={6} align="center">
+              <View
+                style={{
+                  width: 6,
+                  height: 6,
+                  borderRadius: 3,
+                  backgroundColor: subagentDot(s.status, tokens),
+                }}
+              />
+              <Text kind="caption" color={tokens.ink2} numberOfLines={1} style={{ flex: 1 }}>
+                {s.taskCount > 1 ? `${s.taskIndex + 1}/${s.taskCount} · ` : ""}
+                {s.goal || "(no goal)"}
+              </Text>
+            </Row>
+          ))}
+          {ordered.length > 2 ? (
+            <Text kind="caption" color={tokens.ink3} style={{ marginLeft: 12 }}>
+              +{ordered.length - 2} more
+            </Text>
+          ) : null}
+        </Stack>
+      )}
+    </View>
+  );
+}
+
+function SubagentRow({ info }: { info: SubagentInfo }) {
+  const tokens = useThemeTokens();
+  const dur = fmtSeconds(info.durationSec);
+  return (
+    <View
+      style={{
+        backgroundColor: tokens.sunken,
+        borderRadius: 8,
+        paddingHorizontal: 10,
+        paddingVertical: 8,
+      }}
+    >
+      <Row gap={6} align="center" justify="space-between">
+        <Row gap={6} align="center" style={{ flex: 1, minWidth: 0 }}>
+          <View
+            style={{
+              width: 6,
+              height: 6,
+              borderRadius: 3,
+              backgroundColor: subagentDot(info.status, tokens),
+            }}
+          />
+          <Text kind="caption" mono color={tokens.ink3} style={{ flexShrink: 0 }}>
+            {info.taskCount > 1 ? `${info.taskIndex + 1}/${info.taskCount}` : "·"}
+          </Text>
+          {info.toolsets && info.toolsets.length > 0 ? (
+            <Text kind="caption" mono color={tokens.ink3} style={{ flexShrink: 0 }}>
+              {info.toolsets.join(",")}
+            </Text>
+          ) : null}
+        </Row>
+        {dur ? (
+          <Text kind="caption" mono color={tokens.ink3}>
+            {dur}
+          </Text>
+        ) : null}
+      </Row>
+      <Text kind="caption" color={tokens.ink2} style={{ marginTop: 4 }} numberOfLines={3}>
+        {info.goal || "(no goal)"}
+      </Text>
+      {info.summary ? (
+        <Text kind="caption" color={tokens.ink3} style={{ marginTop: 4 }} numberOfLines={2}>
+          {info.summary}
+        </Text>
+      ) : null}
+    </View>
+  );
+}
+
 // ─── tool ───────────────────────────────────────────────────────────────────
 
 interface ToolRowProps {
@@ -663,6 +862,16 @@ function MessageInner({
       break;
     }
     case "tool": {
+      if (message.name === "delegate_task" && message.subagents && message.subagents.length > 0) {
+        inner = (
+          <DelegateTaskCard
+            data={message}
+            subagents={message.subagents}
+            sessionId={sessionId}
+          />
+        );
+        break;
+      }
       if (message.name === "todo" && sessionId) {
         const todos = asTodoItems(message.detail?.todos);
         if (todos) {
@@ -765,6 +974,11 @@ export const StreamingToolRow = memo(function StreamingToolRow({
   data,
   sessionId,
 }: StreamingToolProps) {
+  if (data.name === "delegate_task" && data.subagents && data.subagents.length > 0) {
+    return (
+      <DelegateTaskCard data={data} subagents={data.subagents} sessionId={sessionId} />
+    );
+  }
   return <ToolRow data={data} sessionId={sessionId} />;
 });
 
