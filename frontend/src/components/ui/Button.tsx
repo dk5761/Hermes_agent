@@ -64,7 +64,7 @@ export function Button({
   disabled,
   ...rest
 }: ButtonProps) {
-  const { mode } = useTheme();
+  const { resolvedMode } = useTheme();
   const spec = SIZES[size];
 
   // Color logic mirrors ui.jsx::Button.kinds
@@ -80,14 +80,14 @@ export function Button({
         return {
           bgClass: "bg-accent",
           // Accent text contrast varies by mode (see file header).
-          textColor: mode === "dark" ? "#0E0B08" : undefined,
-          fgClass: mode === "dark" ? "" : "text-surface",
+          textColor: resolvedMode === "dark" ? "#0E0B08" : undefined,
+          fgClass: resolvedMode === "dark" ? "" : "text-surface",
           border: false,
         };
       case "danger":
         return { bgClass: "bg-transparent", textColor: undefined, fgClass: "text-danger", border: true };
     }
-  }, [kind, mode]);
+  }, [kind, resolvedMode]);
 
   const handler = onClick ?? onPress;
 

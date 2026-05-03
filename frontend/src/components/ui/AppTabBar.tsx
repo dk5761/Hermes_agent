@@ -36,7 +36,9 @@ export function AppTabBar(props: BottomTabBarProps): React.ReactElement | null {
   const { state, navigation } = props;
   const insets = useSafeAreaInsets();
   const tokens = useThemeTokens();
-  const { mode } = useTheme();
+  // Use the *resolved* mode (always "light" | "dark") — `mode` itself can be
+  // "system", which would mis-route the tint when OS is dark.
+  const { resolvedMode } = useTheme();
   const segments = useSegments();
 
   // Hide on push depth: segments after `(app)` and the active group should be
@@ -55,13 +57,13 @@ export function AppTabBar(props: BottomTabBarProps): React.ReactElement | null {
     >
       <BlurView
         intensity={40}
-        tint={mode === "dark" ? "dark" : "light"}
+        tint={resolvedMode}
         style={[
           styles.bar,
           {
             borderColor: tokens.line,
             backgroundColor:
-              mode === "dark"
+              resolvedMode === "dark"
                 ? "rgba(28,28,30,0.55)"
                 : "rgba(255,255,255,0.55)",
           },

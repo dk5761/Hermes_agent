@@ -21,7 +21,7 @@ export interface ToggleProps {
 }
 
 export function Toggle({ on, onChange }: ToggleProps) {
-  const { mode } = useTheme();
+  const { resolvedMode } = useTheme();
   const tokens = useThemeTokens();
   const progress = useSharedValue(on ? 1 : 0);
 
@@ -36,7 +36,7 @@ export function Toggle({ on, onChange }: ToggleProps) {
   // Track background color depends on `on` and theme mode (matches ui.jsx).
   const trackBg = on
     ? tokens.accent
-    : mode === "dark"
+    : resolvedMode === "dark"
       ? tokens.line
       : tokens.sunken;
   const trackBorder = on ? tokens.accent : tokens.line;

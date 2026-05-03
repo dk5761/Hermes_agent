@@ -38,7 +38,17 @@ export default function KeysHubScreen() {
   });
 
   const { configured, unset } = useMemo(() => {
-    const all: ProviderKey[] = keysQ.data ?? [];
+    // Defensive: if the API returns a wrapper object instead of an array
+    // (shape drift, stale cached response from a previous bundle, etc.),
+    // unwrap or default rather than crashing the whole settings stack.
+    const raw: unknown = keysQ.data;
+    let all: ProviderKey[] = [];
+    if (Array.isArray(raw)) {
+      all = raw as ProviderKey[];
+    } else if (raw && typeof raw === "object") {
+      const wrapped = (raw as { keys?: unknown }).keys;
+      if (Array.isArray(wrapped)) all = wrapped as ProviderKey[];
+    }
     const q = query.trim().toLowerCase();
     const visible = q
       ? all.filter(

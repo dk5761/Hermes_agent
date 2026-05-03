@@ -96,7 +96,7 @@ export default function StorageScreen() {
           />
         ) : null}
 
-        {usageQ.data ? (
+        {usageQ.data && usageQ.data.blobs && usageQ.data.gatewayDb ? (
           <Stack gap={16} style={{ paddingTop: 12 }}>
             {/* Hero — total bytes used + headroom progress. */}
             <View
@@ -126,8 +126,11 @@ export default function StorageScreen() {
             <ListGroup header="By kind">
               {blobKindOrder().map((kind) => {
                 const meta = BLOB_KIND_META[kind];
-                const bytes = usageQ.data.blobs.byKind[kind] ?? 0;
-                const totalBlobs = usageQ.data.blobs.totalBytes || 1;
+                // Defensive: API shape drift or partial cached data could
+                // leave `blobs` / `byKind` undefined. Treat missing as zero.
+                const blobs = usageQ.data?.blobs;
+                const bytes = blobs?.byKind?.[kind] ?? 0;
+                const totalBlobs = blobs?.totalBytes || 1;
                 const share = totalBlobs > 0 ? bytes / totalBlobs : 0;
                 return (
                   <View key={kind} style={{ paddingVertical: 10 }}>
