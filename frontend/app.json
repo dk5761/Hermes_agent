@@ -16,10 +16,16 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.hermesapp.mobile",
+      "buildNumber": "1",
       "appleTeamId": "XR7L4K435B",
       "infoPlist": {
         "NSSupportsLiveActivities": true,
-        "NSSupportsLiveActivitiesFrequentUpdates": true
+        "NSSupportsLiveActivitiesFrequentUpdates": true,
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSPhotoLibraryUsageDescription": "Hermes attaches photos you pick from your library to your chats.",
+        "NSCameraUsageDescription": "Hermes uses the camera to capture photos to attach to your chats.",
+        "NSFaceIDUsageDescription": "Hermes uses Face ID to unlock the app when biometric lock is enabled.",
+        "NSDocumentsFolderUsageDescription": "Hermes lets you attach documents from Files to your chats."
       },
       "entitlements": {
         "com.apple.security.application-groups": [

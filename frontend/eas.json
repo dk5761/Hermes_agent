@@ -9,13 +9,25 @@
       "distribution": "internal"
     },
     "preview": {
-      "distribution": "internal"
+      "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://hermes.drshnk.dev",
+        "EXPO_PUBLIC_WS_URL": "wss://hermes.drshnk.dev"
+      }
     },
     "production": {
-      "autoIncrement": true
+      "autoIncrement": true,
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://hermes.drshnk.dev",
+        "EXPO_PUBLIC_WS_URL": "wss://hermes.drshnk.dev"
+      }
     }
   },
   "submit": {
-    "production": {}
+    "production": {
+      "ios": {
+        "appleTeamId": "XR7L4K435B"
+      }
+    }
   }
 }
