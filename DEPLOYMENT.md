@@ -131,6 +131,96 @@ When upgrading Hermes (the Python agent at `/usr/local/lib/hermes-agent/`), foll
 ssh root@<vps> "systemctl restart hermes-dashboard hermes-gateway"
 ```
 
+After a Hermes upgrade you may also need to re-apply the project's MCP-server / toolset config — see the next section.
+
+### Patch Hermes config (MCP servers + platform_toolsets)
+
+Hermes config lives outside this repo (per-host: `~/.hermes/config.yaml` on the VPS, `./data/hermes-home/config.yaml` for local docker). To keep this project's required `mcp_servers` + `platform_toolsets` entries in sync across hosts, this repo ships an idempotent patch script at `scripts/patch-hermes-config.py`.
+
+The script's desired state lives in two dicts at the top of the file:
+
+```python
+DESIRED_MCP_SERVERS = { "fs": { "command": "npx", ... } }
+DESIRED_PLATFORM_TOOLSETS = { "cli": ["hermes-cli", "mcp-fs"] }
+```
+
+Edit those, commit, then re-run on each host. The patch is purely additive — it never overwrites or removes entries you've added by hand. A `.bak` is written before any change.
+
+#### One-time prereq per host
+
+```bash
+# macOS:
+python3 -m pip install --user ruamel.yaml
+
+# Debian / Ubuntu (VPS):
+apt-get install -y python3-ruamel.yaml
+```
+
+#### Local (docker)
+
+```bash
+cd <repo>
+./scripts/patch-hermes-config.py            # default: ./data/hermes-home/config.yaml
+docker compose restart hermes gateway
+```
+
+Note: docker-compose `restart` is **not** sufficient when the gateway's env_file changed (compose only reads env at container CREATE). For env changes use `docker compose up -d --force-recreate gateway`. For the patch script (which only mutates Hermes' YAML), `restart` works.
+
+#### VPS
+
+```bash
+ssh root@<vps>
+cd /root/repos/Hermes_agent
+git pull
+python3 scripts/patch-hermes-config.py --config /root/.hermes/config.yaml
+systemctl restart hermes-dashboard hermes-gateway
+```
+
+Or one-shot from your laptop:
+
+```bash
+ssh root@<vps> "cd /root/repos/Hermes_agent && git pull && \
+  python3 scripts/patch-hermes-config.py --config /root/.hermes/config.yaml && \
+  systemctl restart hermes-dashboard hermes-gateway"
+```
+
+#### Dry-run / CI
+
+```bash
+./scripts/patch-hermes-config.py --check    # exits 1 if changes needed, 0 if up-to-date
+```
+
+#### Adding a new MCP server (the rule that bit us)
+
+The toolset gating that controls which MCP tools the agent can actually call is `platform_toolsets.<platform>`, **not** the top-level `toolsets:`. For mobile-app sessions the platform is `cli`. So every new MCP server needs **two** entries in the desired state, one in each dict:
+
+```python
+DESIRED_MCP_SERVERS = {
+    "myserver": {                                # ← line A: declares the server
+        "command": "npx",
+        "args": ["-y", "some-mcp-package"],
+        "timeout": 60,
+        "connect_timeout": 30,
+    },
+}
+
+DESIRED_PLATFORM_TOOLSETS = {
+    "cli": [
+        "hermes-cli",
+        "mcp-myserver",                          # ← line B: gate must match server name
+    ],
+}
+```
+
+Without line B, MCP server connects fine, registers tools, but the agent's `enabled_toolsets` filter excludes them — the chat shows `Agent updated — 0 tool(s) available` even though MCP-layer reports `🔧 N tool(s) available from M server(s)`. The Reload-MCP toast will surface this discrepancy explicitly:
+
+| Toast | What it means |
+|---|---|
+| `✅ N MCP tool(s) available` | Fully wired |
+| `MCP loaded N tools but agent has 0 — check platform_toolsets` | Missing `mcp-<name>` in `platform_toolsets.cli` |
+| `K/N MCP tools available to agent` | Partial — some server's tools not in cli toolset list |
+| `No MCP servers connected` | MCP server failed to start (config / runtime issue) |
+
 ### Backup
 
 #### Automated daily snapshots → private GitHub repo (production setup)

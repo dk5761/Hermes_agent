@@ -7,21 +7,25 @@ Idempotent: re-running with the same desired state is a no-op. Preserves
 existing comments and formatting via ruamel.yaml round-trip.
 
 Usage:
-  scripts/patch-hermes-config.py
-  scripts/patch-hermes-config.py --config /path/to/config.yaml
-  scripts/patch-hermes-config.py --check       # dry-run, exit 1 if changes needed
-  scripts/patch-hermes-config.py --vps         # patch the VPS hermes via SSH
+  scripts/patch-hermes-config.py                            # patches local docker (./data/hermes-home/config.yaml)
+  scripts/patch-hermes-config.py --config /path/to/yaml     # custom path
+  scripts/patch-hermes-config.py --check                    # dry-run; exit 1 if changes needed
 
-Run after a Hermes upgrade or whenever you've changed the desired state below.
+Designed to run *on the host that owns the config*:
+  - Local docker:  run from this repo, no flags. Then `docker compose restart hermes gateway`.
+  - VPS:           git pull on the VPS, run with `--config /root/.hermes/config.yaml`.
+                   Then `systemctl restart hermes-dashboard hermes-gateway`.
+
+Dependency: ruamel.yaml (for round-trip + comment preservation).
+  - macOS:           python3 -m pip install --user ruamel.yaml
+  - Debian/Ubuntu:   apt-get install -y python3-ruamel.yaml
 """
 
 from __future__ import annotations
 
 import argparse
-import importlib
 import os
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
@@ -65,16 +69,21 @@ DESIRED_PLATFORM_TOOLSETS: dict[str, list[str]] = {
 
 
 def ensure_ruamel():
-    """Import ruamel.yaml; auto-install via pip if missing."""
+    """Import ruamel.yaml; print clear install instructions if missing."""
     try:
-        return importlib.import_module("ruamel.yaml")
+        import ruamel.yaml  # noqa: F401
+
+        return ruamel.yaml
     except ImportError:
-        print("[patch] installing ruamel.yaml...", file=sys.stderr)
-        subprocess.check_call(
-            [sys.executable, "-m", "pip", "install", "--quiet", "--user", "ruamel.yaml"],
-            stdout=subprocess.DEVNULL,
+        print(
+            "[patch] ruamel.yaml is not installed.\n"
+            "        Install one of:\n"
+            "          macOS:           python3 -m pip install --user ruamel.yaml\n"
+            "          Debian/Ubuntu:   apt-get install -y python3-ruamel.yaml\n"
+            "          Other:           pip install ruamel.yaml",
+            file=sys.stderr,
         )
-        return importlib.import_module("ruamel.yaml")
+        sys.exit(2)
 
 
 def patch(config_path: Path, *, dry_run: bool = False) -> int:
@@ -157,44 +166,16 @@ def patch(config_path: Path, *, dry_run: bool = False) -> int:
     return len(changes)
 
 
-def patch_vps() -> int:
-    """SSH into the VPS, copy the config, patch locally, copy back, restart."""
-    vps_host = os.environ.get("HERMES_VPS_HOST", "root@187.127.157.66")
-    remote_path = "/root/.hermes/config.yaml"
-    local_tmp = Path("/tmp/hermes-vps-config.yaml")
-
-    print(f"[patch] fetching {vps_host}:{remote_path}")
-    subprocess.check_call(["scp", "-q", f"{vps_host}:{remote_path}", str(local_tmp)])
-    rc = patch(local_tmp)
-    if rc <= 0:
-        return rc
-    print(f"[patch] uploading patched config back to {vps_host}")
-    subprocess.check_call(["scp", "-q", str(local_tmp), f"{vps_host}:{remote_path}"])
-    print("[patch] restarting hermes services on VPS")
-    subprocess.check_call(
-        ["ssh", vps_host, "systemctl restart hermes-dashboard hermes-gateway"]
-    )
-    return rc
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--config",
         type=Path,
         default=None,
-        help="Path to config.yaml (default: ./data/hermes-home/config.yaml relative to repo root)",
+        help="Path to config.yaml (default: <repo>/data/hermes-home/config.yaml — the local docker mount)",
     )
     parser.add_argument("--check", action="store_true", help="Dry-run; exit 1 if changes needed")
-    parser.add_argument("--vps", action="store_true", help="Patch VPS hermes via SSH")
     args = parser.parse_args()
-
-    if args.vps:
-        if args.check:
-            print("--check not supported with --vps (yet)", file=sys.stderr)
-            return 2
-        rc = patch_vps()
-        return 0 if rc >= 0 else 1
 
     repo_root = Path(__file__).resolve().parent.parent
     config_path = args.config or repo_root / "data/hermes-home/config.yaml"
