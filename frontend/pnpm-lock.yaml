@@ -34,6 +34,9 @@ importers:
       '@react-native-async-storage/async-storage':
         specifier: 2.2.0
         version: 2.2.0(react-native@0.83.6(patch_hash=4884b5e375a331cf1d6bc06c606472ec4a958852cabe451a423ec392fd7bea3f)(@babel/core@7.29.0)(@react-native/metro-config@0.85.2(@babel/core@7.29.0))(@types/react@19.2.14)(react@19.2.0))
+      '@shopify/flash-list':
+        specifier: ^2.3.1
+        version: 2.3.1(@babel/runtime@7.29.2)(react-native@0.83.6(patch_hash=4884b5e375a331cf1d6bc06c606472ec4a958852cabe451a423ec392fd7bea3f)(@babel/core@7.29.0)(@react-native/metro-config@0.85.2(@babel/core@7.29.0))(@types/react@19.2.14)(react@19.2.0))(react@19.2.0)
       '@tanstack/react-query':
         specifier: ^5.100.6
         version: 5.100.6(react@19.2.0)
@@ -1332,6 +1335,13 @@ packages:
 
   '@react-navigation/routers@7.5.3':
     resolution: {integrity: sha512-1tJHg4KKRJuQ1/EvJxatrMef3NZXEPzwUIUZ3n1yJ2t7Q97siwRtbynRpQG9/69ebbtiZ8W3ScOZF/OmhvM4Rg==}
+
+  '@shopify/flash-list@2.3.1':
+    resolution: {integrity: sha512-7oktg2NQR7KAODjFoDaWe8/OBzyYbdTE3zQTrUBMxjIbxHTHN7UXRX1hX3DHk8KvtkgQdRfZOV8Gjj2l4fGrXw==}
+    peerDependencies:
+      '@babel/runtime': '*'
+      react: '*'
+      react-native: '*'
 
   '@sinclair/typebox@0.27.10':
     resolution: {integrity: sha512-MTBk/3jGLNB2tVxv6uLlFh1iu64iYOQ2PbdOSK3NW8JZsmlaOh2q6sdtKowBhfw8QFLmYNzTW4/oK4uATIi6ZA==}
@@ -5452,6 +5462,12 @@ snapshots:
   '@react-navigation/routers@7.5.3':
     dependencies:
       nanoid: 3.3.11
+
+  '@shopify/flash-list@2.3.1(@babel/runtime@7.29.2)(react-native@0.83.6(patch_hash=4884b5e375a331cf1d6bc06c606472ec4a958852cabe451a423ec392fd7bea3f)(@babel/core@7.29.0)(@react-native/metro-config@0.85.2(@babel/core@7.29.0))(@types/react@19.2.14)(react@19.2.0))(react@19.2.0)':
+    dependencies:
+      '@babel/runtime': 7.29.2
+      react: 19.2.0
+      react-native: 0.83.6(patch_hash=4884b5e375a331cf1d6bc06c606472ec4a958852cabe451a423ec392fd7bea3f)(@babel/core@7.29.0)(@react-native/metro-config@0.85.2(@babel/core@7.29.0))(@types/react@19.2.14)(react@19.2.0)
 
   '@sinclair/typebox@0.27.10': {}
 

@@ -12,7 +12,8 @@
  * still has something to show in the empty state.
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, FlatList, Pressable, View } from "react-native";
+import { ActivityIndicator, Pressable, View } from "react-native";
+import { FlashList } from "@shopify/flash-list";
 import { router } from "expo-router";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
@@ -467,9 +468,10 @@ export default function SearchScreen() {
       ) : null}
 
       {!loading && !error && items.length > 0 ? (
-        <FlatList
+        <FlashList
           data={items}
           keyExtractor={(it) => it.key}
+          getItemType={(item) => item.kind}
           contentContainerStyle={{ paddingBottom: 32 }}
           renderItem={({ item }) =>
             item.kind === "section" ? (

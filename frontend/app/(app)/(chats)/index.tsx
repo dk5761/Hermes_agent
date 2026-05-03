@@ -13,13 +13,12 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 import {
   Alert,
-  FlatList,
   Pressable,
   RefreshControl,
   ScrollView,
   View,
-  type ListRenderItem,
 } from "react-native";
+import { FlashList, type ListRenderItem } from "@shopify/flash-list";
 import { useFocusEffect, useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -408,13 +407,12 @@ export default function SessionsScreen() {
         </ScrollView>
       </Stack>
 
-      <FlatList
+      <FlashList
         data={filtered}
         keyExtractor={keyExtractor}
         renderItem={renderItem}
         contentContainerStyle={{
           paddingBottom: tabBarBottomPadding(),
-          flexGrow: 1,
         }}
         ListEmptyComponent={
           sessionsQuery.isLoading ? (

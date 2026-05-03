@@ -963,7 +963,49 @@ function SearchHighlightWrap({
   return <View style={{ opacity: isMatch ? 1 : 0.35 }}>{children}</View>;
 }
 
-export const Message = memo(MessageInner);
+export const Message = memo(MessageInner, (prev, next) => {
+  if (prev.searchActive !== next.searchActive) return false;
+  if (prev.isMatch !== next.isMatch) return false;
+  if (prev.isActiveMatch !== next.isActiveMatch) return false;
+  if (prev.streaming !== next.streaming) return false;
+  if (prev.sessionId !== next.sessionId) return false;
+  if (prev.latestTodoToolId !== next.latestTodoToolId) return false;
+  if (prev.onCopy !== next.onCopy) return false;
+  if (prev.onRegenerate !== next.onRegenerate) return false;
+  const a = prev.message;
+  const b = next.message;
+  if (a === b) return true;
+  if (a.kind !== b.kind) return false;
+  if (a.id !== b.id) return false;
+  // Per-kind shallow checks — only the fields that actually change.
+  if (a.kind === "user" && b.kind === "user") {
+    return (
+      a.text === b.text &&
+      a.attachments === b.attachments &&
+      a.attachmentRefs === b.attachmentRefs
+    );
+  }
+  if (a.kind === "assistant" && b.kind === "assistant") {
+    return (
+      a.text === b.text &&
+      a.reasoning === b.reasoning &&
+      a.warning === b.warning &&
+      a.reasoningDurationMs === b.reasoningDurationMs
+    );
+  }
+  if (a.kind === "tool" && b.kind === "tool") {
+    return (
+      a.name === b.name &&
+      a.status === b.status &&
+      a.detail === b.detail &&
+      a.subagents === b.subagents
+    );
+  }
+  if (a.kind === "error" && b.kind === "error") {
+    return a.message === b.message;
+  }
+  return false;
+});
 
 interface StreamingToolProps {
   data: ToolCallState;

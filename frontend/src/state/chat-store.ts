@@ -1,4 +1,4 @@
-import { create } from "zustand";
+import { create, type StoreApi } from "zustand";
 import type { GatewayEventEnvelope } from "../ws/events";
 import type { AttachmentDTO } from "../api/types";
 
@@ -478,6 +478,55 @@ function reduce(state: ChatSessionState, env: GatewayEventEnvelope): ChatSession
   }
 }
 
+// ─── RAF delta-coalescing buffer ─────────────────────────────────────────────
+// High-frequency message.delta / reasoning.delta events (100+ per second
+// during streaming) each trigger a Zustand set → synchronous re-render. We
+// accumulate them in a per-session buffer and flush at most once per animation
+// frame, dramatically reducing render throughput during streaming turns.
+
+interface PendingDelta {
+  messageDelta: string;
+  reasoningDelta: string;
+  timer: ReturnType<typeof requestAnimationFrame> | null;
+}
+
+const pendingBySession = new Map<string, PendingDelta>();
+
+type ChatStoreSet = StoreApi<ChatStore>["setState"];
+
+function flushPending(sessionId: string, set: ChatStoreSet) {
+  const p = pendingBySession.get(sessionId);
+  if (!p) return;
+  pendingBySession.delete(sessionId);
+  if (p.timer !== null) cancelAnimationFrame(p.timer);
+  // Build a single Zustand mutation that applies the accumulated text in two
+  // synthetic envelopes — messageDelta first, then reasoningDelta.
+  // id: 0 intentionally skips the lastEventId bump (guard is id > 0).
+  set((store) => {
+    let session = store.byId[sessionId];
+    if (!session) return store;
+    if (p.messageDelta.length > 0) {
+      session = reduce(session, {
+        id: 0,
+        sessionId,
+        type: "message.delta",
+        payload: { text: p.messageDelta },
+        createdAt: new Date().toISOString(),
+      });
+    }
+    if (p.reasoningDelta.length > 0) {
+      session = reduce(session, {
+        id: 0,
+        sessionId,
+        type: "reasoning.delta",
+        payload: { text: p.reasoningDelta },
+        createdAt: new Date().toISOString(),
+      });
+    }
+    return { byId: { ...store.byId, [sessionId]: session } };
+  });
+}
+
 export const useChatStore = create<ChatStore>((set, get) => ({
   byId: {},
   latestTodoToolIdById: {},
@@ -492,6 +541,13 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   },
 
   reset(id) {
+    // Cancel any buffered delta so a stale RAF flush doesn't mutate the newly
+    // reset session after the cold-load clears it.
+    const p = pendingBySession.get(id);
+    if (p) {
+      if (p.timer !== null) cancelAnimationFrame(p.timer);
+      pendingBySession.delete(id);
+    }
     set((s) => ({ byId: { ...s.byId, [id]: empty(id) } }));
   },
 
@@ -515,6 +571,13 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   },
 
   truncateLastTurn(id) {
+    // Discard any buffered delta for this session — the turn it belongs to is
+    // being wiped, so the text must not appear in the replacement turn.
+    const p = pendingBySession.get(id);
+    if (p) {
+      if (p.timer !== null) cancelAnimationFrame(p.timer);
+      pendingBySession.delete(id);
+    }
     set((s) => {
       const cur = s.byId[id];
       if (!cur) return s;
@@ -540,6 +603,35 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   },
 
   applyEnvelope(id, env) {
+    // Hot path: coalesce message.delta and reasoning.delta into a single
+    // Zustand mutation per animation frame to avoid 100+ synchronous
+    // re-renders per second during streaming.
+    if (env.type === "message.delta" || env.type === "reasoning.delta") {
+      const rawPayload = env.payload as Record<string, unknown> | null | undefined;
+      const text =
+        (rawPayload && typeof rawPayload["text"] === "string"
+          ? (rawPayload["text"] as string)
+          : undefined) ??
+        (rawPayload && typeof rawPayload["delta"] === "string"
+          ? (rawPayload["delta"] as string)
+          : undefined) ??
+        "";
+      if (!text) return;
+      let p = pendingBySession.get(id);
+      if (!p) {
+        p = { messageDelta: "", reasoningDelta: "", timer: null };
+        pendingBySession.set(id, p);
+      }
+      if (env.type === "message.delta") p.messageDelta += text;
+      else p.reasoningDelta += text;
+      if (p.timer === null) {
+        p.timer = requestAnimationFrame(() => flushPending(id, set));
+      }
+      return;
+    }
+    // For any other event type: flush any accumulated delta first (preserves
+    // ordering — text before tool.start, etc.), then apply the event.
+    flushPending(id, set);
     set((s) => {
       const cur = s.byId[id] ?? empty(id);
       const nextSession = reduce(cur, env);

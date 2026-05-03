@@ -10,13 +10,12 @@
  */
 import { useCallback, useMemo, useRef, useState } from "react";
 import {
-  FlatList,
   Pressable,
   RefreshControl,
   ScrollView,
   View,
-  type ListRenderItem,
 } from "react-native";
+import { FlashList, type ListRenderItem } from "@shopify/flash-list";
 import { useFocusEffect, useRouter } from "expo-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as Haptics from "expo-haptics";
@@ -241,13 +240,12 @@ export default function CronListScreen() {
         <Chip>Sort: name</Chip>
       </ScrollView>
 
-      <FlatList
+      <FlashList
         data={filtered}
         keyExtractor={keyExtractor}
         renderItem={renderItem}
         contentContainerStyle={{
           paddingBottom: TAB_BOTTOM_PAD,
-          flexGrow: 1,
         }}
         ListEmptyComponent={
           jobsQuery.isLoading ? (

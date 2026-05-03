@@ -8,8 +8,14 @@
  *
  * The library expects flat StyleSheet.NamedStyles, so we stay in inline-style
  * land here rather than Tailwind class names.
+ *
+ * Performance: `MarkdownView` splits incoming text on blank-line boundaries
+ * into paragraph blocks and renders each through a memoized `MarkdownBlock`.
+ * While a streaming LLM response appends tokens, only the trailing block
+ * re-parses; all preceding blocks hit React.memo and skip re-render entirely.
+ * Code fences that contain blank lines internally are never split.
  */
-import React, { useCallback, useMemo } from "react";
+import React, { memo, useCallback, useMemo } from "react";
 import {
   Linking,
   Pressable,
@@ -25,9 +31,66 @@ import * as Clipboard from "expo-clipboard";
 import { Icon } from "./Icon";
 import { useThemeTokens, type ThemeTokens } from "./tokens";
 
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+
 export interface MarkdownViewProps {
   text: string;
 }
+
+// ---------------------------------------------------------------------------
+// Block splitter
+// ---------------------------------------------------------------------------
+
+/**
+ * Split markdown text into top-level paragraph blocks separated by one or
+ * more blank lines. Code fences (lines that start with ```) are kept whole
+ * even when they contain blank lines internally — splitting a fence would
+ * break syntax detection and cause the trailing block to re-parse on every
+ * new token during streaming.
+ *
+ * Edge cases:
+ * - Empty / whitespace-only string  → returns []
+ * - Text with no blank lines        → returns a single-element array
+ * - Unclosed fence at end of text   → treated as open; blank lines inside
+ *   are not treated as block boundaries (safe for in-progress streaming)
+ */
+function splitMarkdownBlocks(text: string): string[] {
+  if (!text) return [];
+  const lines = text.split("\n");
+  const blocks: string[] = [];
+  let current: string[] = [];
+  let inFence = false;
+
+  const flush = (): void => {
+    if (current.length === 0) return;
+    const joined = current.join("\n").trim();
+    if (joined.length > 0) blocks.push(joined);
+    current = [];
+  };
+
+  for (const line of lines) {
+    const isFenceLine = /^\s*```/.test(line);
+    if (isFenceLine) {
+      inFence = !inFence;
+    }
+
+    if (!inFence && line.trim() === "" && current.length > 0) {
+      flush();
+      continue;
+    }
+
+    current.push(line);
+  }
+
+  flush();
+  return blocks;
+}
+
+// ---------------------------------------------------------------------------
+// Styles
+// ---------------------------------------------------------------------------
 
 function buildStyles(t: ThemeTokens): Record<string, TextStyle | ViewStyle> {
   // Type scale numbers mirror global.css `text-*` utilities so on-screen
@@ -211,6 +274,10 @@ function buildStyles(t: ThemeTokens): Record<string, TextStyle | ViewStyle> {
   });
 }
 
+// ---------------------------------------------------------------------------
+// CodeBlock — custom fenced code renderer
+// ---------------------------------------------------------------------------
+
 // Custom fenced code block renderer: language label + Copy + Share icons in
 // a header strip, code body styled with the same fence styles below. Mirrors
 // the ChatGPT/Claude layout so users can grab snippets without having to
@@ -313,17 +380,57 @@ function CodeBlock({
   );
 }
 
+// ---------------------------------------------------------------------------
+// MarkdownBlock — memoized single-block renderer
+// ---------------------------------------------------------------------------
+
+interface MarkdownBlockProps {
+  text: string;
+  styleProp: Record<string, object>;
+  rules: RenderRules;
+  onLinkPress: (url: string) => boolean;
+}
+
+/**
+ * Renders a single paragraph block of markdown. Wrapped in React.memo with
+ * the default shallow-equal comparator so that:
+ * - Blocks whose `text` has not changed are skipped on every streaming token.
+ * - All blocks correctly re-render when `styleProp` or `rules` get new
+ *   references (i.e. when the active theme changes).
+ */
+const MarkdownBlock = memo(function MarkdownBlock({
+  text,
+  styleProp,
+  rules,
+  onLinkPress,
+}: MarkdownBlockProps): React.ReactElement {
+  return (
+    <Markdown style={styleProp} onLinkPress={onLinkPress} rules={rules}>
+      {text}
+    </Markdown>
+  );
+});
+
+// ---------------------------------------------------------------------------
+// MarkdownView — public export
+// ---------------------------------------------------------------------------
+
 export function MarkdownView({ text }: MarkdownViewProps): React.ReactElement {
   const tokens = useThemeTokens();
   const styles = useMemo(() => buildStyles(tokens), [tokens]);
   // Library typings expect StyleSheet.NamedStyles<any>; cast at the call site
   // to avoid a leaky any in our public surface.
-  const styleProp = styles as unknown as Record<string, object>;
-  const onLinkPress = (url: string): boolean => {
+  const styleProp = useMemo(
+    () => styles as unknown as Record<string, object>,
+    [styles],
+  );
+
+  const onLinkPress = useCallback((url: string): boolean => {
     void Linking.openURL(url).catch(() => undefined);
     // Return true so the library doesn't fall back to its default opener.
     return true;
-  };
+  }, []);
+
   // Override the library's default fence + code_block renderers so each
   // snippet gets a header bar with copy/share. The library passes us the
   // full markdown-it node — `node.content` is the code text, `node.sourceInfo`
@@ -355,11 +462,43 @@ export function MarkdownView({ text }: MarkdownViewProps): React.ReactElement {
     }),
     [tokens],
   );
+
+  const blocks = useMemo(() => splitMarkdownBlocks(text), [text]);
+
+  // Empty / whitespace-only text: render a single space so bubble heights
+  // remain stable (matches the previous single-space fallback).
+  if (blocks.length === 0) {
+    return (
+      <Markdown style={styleProp} onLinkPress={onLinkPress} rules={rules}>
+        {" "}
+      </Markdown>
+    );
+  }
+
+  // Single block: skip the wrapping View to preserve the previous layout
+  // contract for callers that embed MarkdownView directly in a flex column.
+  if (blocks.length === 1) {
+    return (
+      <MarkdownBlock
+        text={blocks[0]}
+        styleProp={styleProp}
+        rules={rules}
+        onLinkPress={onLinkPress}
+      />
+    );
+  }
+
   return (
-    // The library's default props type doesn't accept ReactNode children well
-    // when text is empty; pass a single space to keep heights stable.
-    <Markdown style={styleProp} onLinkPress={onLinkPress} rules={rules}>
-      {text.length > 0 ? text : " "}
-    </Markdown>
+    <View>
+      {blocks.map((block, i) => (
+        <MarkdownBlock
+          key={i}
+          text={block}
+          styleProp={styleProp}
+          rules={rules}
+          onLinkPress={onLinkPress}
+        />
+      ))}
+    </View>
   );
 }

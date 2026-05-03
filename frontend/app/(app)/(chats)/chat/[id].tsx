@@ -14,17 +14,16 @@
  *   - Inline ApprovalCard stays here. Push-notification opening of an
  *     approval routes to /chat/[id]/approval/[requestId] which Agent B builds.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
-  FlatList,
   KeyboardAvoidingView,
   Platform,
   Pressable,
   TextInput,
   View,
-  type ListRenderItem,
 } from "react-native";
+import { FlashList, type FlashListRef, type ListRenderItem } from "@shopify/flash-list";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
@@ -84,6 +83,37 @@ type Row =
   | { rowKind: "stream-tool"; data: ToolCallState }
   | { rowKind: "stream-msg"; data: AssistantMessage }
   | { rowKind: "approval"; data: ApprovalRequest };
+
+// Wraps the stream-tool branch of renderItem so the synthesized ToolCallCard
+// object is memoized by (id, name, status, detail, createdAt, subagents) — not
+// re-created on every renderItem call. Without this wrapper the object literal
+// inside renderItem always has a fresh identity, defeating Message's memo.
+const StreamToolMessageRow = memo(function StreamToolMessageRow(props: {
+  data: ToolCallState;
+  sessionId: string | null;
+  latestTodoToolId: string | null | undefined;
+}) {
+  const { data, sessionId, latestTodoToolId } = props;
+  const message = useMemo<Message>(
+    () => ({
+      kind: "tool",
+      id: data.id,
+      name: data.name,
+      status: data.status,
+      detail: data.detail,
+      createdAt: data.createdAt,
+      ...(data.subagents ? { subagents: data.subagents } : {}),
+    }),
+    [data.id, data.name, data.status, data.detail, data.createdAt, data.subagents],
+  );
+  return (
+    <MessageRow
+      message={message}
+      sessionId={sessionId}
+      latestTodoToolId={latestTodoToolId}
+    />
+  );
+});
 
 function buildRows(state: ChatSessionState | undefined): Row[] {
   if (!state) return [];
@@ -333,7 +363,7 @@ export default function ChatScreen() {
   const queryClient = useQueryClient();
   const sheetRef = useRef<SheetHandle>(null);
 
-  const flatListRef = useRef<FlatList<Row>>(null);
+  const flatListRef = useRef<FlashListRef<Row>>(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [matchIdx, setMatchIdx] = useState(0);
@@ -585,9 +615,10 @@ export default function ChatScreen() {
     return null;
   }, [pinnedToolId, sessionState, messagesQuery.data]);
 
-  // Inverted FlatList: newest at the bottom visually, so the underlying data
-  // array is reversed.
-  const reversed = useMemo(() => rows.slice().reverse(), [rows]);
+  // FlashList v2 with startRenderingFromBottom anchors the END of the data
+  // array to the bottom of the viewport, so chronological order (oldest first,
+  // newest last) is what we want — no reversal needed.
+  const reversed = useMemo(() => rows, [rows]);
 
   // ─── search-in-chat ──────────────────────────────────────────────────────
   // Match against user/assistant text (case-insensitive substring). Approval,
@@ -620,22 +651,18 @@ export default function ChatScreen() {
     setMatchIdx(0);
   }, [trimmedQuery]);
 
-  // Scroll the inverted FlatList to the active match.
+  // Scroll the FlashList to the active search match.
   useEffect(() => {
     if (!activeMatchId || !flatListRef.current) return;
     const idx = reversed.findIndex(
       (r) => r.rowKind === "msg" && r.data.id === activeMatchId,
     );
     if (idx < 0) return;
-    try {
-      flatListRef.current.scrollToIndex({
-        index: idx,
-        animated: true,
-        viewPosition: 0.5,
+    flatListRef.current
+      .scrollToIndex({ index: idx, animated: true, viewPosition: 0.5 })
+      .catch(() => {
+        /* ignore — index may be temporarily out-of-range during re-render */
       });
-    } catch {
-      /* ignore — index may be temporarily out-of-range during re-render */
-    }
   }, [activeMatchId, reversed]);
 
   const onSearchOpen = useCallback(() => {
@@ -905,19 +932,9 @@ export default function ChatScreen() {
         );
       }
       if (item.rowKind === "stream-tool") {
-        // Streaming tool calls share the same renderer as completed ones.
-        // The Message component takes a ToolCallCard but a ToolCallState has
-        // the same shape minus the discriminator — synth one.
         return (
-          <MessageRow
-            message={{
-              kind: "tool",
-              id: item.data.id,
-              name: item.data.name,
-              status: item.data.status,
-              detail: item.data.detail,
-              createdAt: item.data.createdAt,
-            }}
+          <StreamToolMessageRow
+            data={item.data}
             sessionId={sessionId}
             latestTodoToolId={latestTodoToolId}
           />
@@ -1185,25 +1202,20 @@ export default function ChatScreen() {
             <SkeletonChat count={5} />
           </View>
         ) : (
-          <FlatList
+          <FlashList
             ref={flatListRef}
-            inverted
             data={reversed}
             keyExtractor={keyExtractor}
             renderItem={renderItem}
+            getItemType={(item) => item.rowKind}
+            maintainVisibleContentPosition={{
+              startRenderingFromBottom: true,
+              autoscrollToBottomThreshold: 0.2,
+            }}
             contentContainerStyle={{ paddingVertical: 12 }}
             keyboardDismissMode="interactive"
             keyboardShouldPersistTaps="handled"
             style={{ flex: 1 }}
-            onScrollToIndexFailed={(info) => {
-              setTimeout(() => {
-                flatListRef.current?.scrollToIndex({
-                  index: info.index,
-                  animated: false,
-                  viewPosition: 0.5,
-                });
-              }, 50);
-            }}
           />
         )}
 
