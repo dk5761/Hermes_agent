@@ -19,11 +19,17 @@ services:
       # host directory at the same path inside Hermes' container — read-only
       # is sufficient (Hermes only needs to load the bytes for the model).
       - ./backend/data/blobs:/app/data/blobs:ro
+      # Obsidian vault — kept in sync with cloud by the obsidian-sync service.
+      # Hermes' bundled note-taking-obsidian skill reads/writes here.
+      # Convention: agent writes only under ${VAULT}/Hermes/ (enforced via
+      # system prompt, not OS perms).
+      - ./data/obsidian-vault:/vault
     environment:
       HERMES_UID: ${HERMES_UID:-10000}
       HERMES_GID: ${HERMES_GID:-10000}
       # Required to enable the JSON-RPC /api/ws endpoint (off by default).
       HERMES_DASHBOARD_TUI: "1"
+      OBSIDIAN_VAULT_PATH: /vault
     command:
       - dashboard
       - --host
@@ -55,12 +61,36 @@ services:
     volumes:
       - ./data/hermes-home:/opt/data
       - ./backend/data/blobs:/app/data/blobs:ro
+      # Cron jobs may write into the vault (e.g. daily dashboard notes), so
+      # the cron worker also needs the same bind-mount as the dashboard.
+      - ./data/obsidian-vault:/vault
     environment:
       HERMES_UID: ${HERMES_UID:-10000}
       HERMES_GID: ${HERMES_GID:-10000}
+      OBSIDIAN_VAULT_PATH: /vault
     command:
       - gateway
       - run
+
+  # Obsidian Sync headless client. Keeps ./data/obsidian-vault in sync with
+  # your remote Obsidian Sync vault end-to-end encrypted. UID/GID are pinned
+  # to HERMES_UID/HERMES_GID so files written here are read+writeable by the
+  # hermes container without permission gymnastics.
+  #
+  # Credentials live in ./obsidian-sync.env (gitignored). First-run setup:
+  #   docker compose run --rm --entrypoint get-token obsidian-sync
+  # Paste the printed token into obsidian-sync.env as OBSIDIAN_AUTH_TOKEN.
+  obsidian-sync:
+    image: ghcr.io/belphemur/obsidian-headless-sync-docker:latest
+    container_name: obsidian-sync
+    restart: unless-stopped
+    env_file:
+      - ./obsidian-sync.env
+    environment:
+      PUID: ${HERMES_UID:-10000}
+      PGID: ${HERMES_GID:-10000}
+    volumes:
+      - ./data/obsidian-vault:/vault
 
   gateway:
     build:

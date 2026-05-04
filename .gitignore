@@ -21,6 +21,9 @@ pnpm-debug.*
 .env.local
 .env.*.local
 
+# Obsidian Sync credentials — never commit. Template at obsidian-sync.env.example
+/obsidian-sync.env
+
 # Docker-managed runtime state — hermes home (state.db, cron, sessions,
 # memory, secrets in its own .env, model cache). Never commit.
 /data/

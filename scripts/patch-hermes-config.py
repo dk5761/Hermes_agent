@@ -62,6 +62,10 @@ DESIRED_PLATFORM_TOOLSETS: dict[str, list[str]] = {
         "hermes-cli",
         # MCP-derived toolsets: one entry per server in DESIRED_MCP_SERVERS.
         "mcp-fs",
+        # Bundled Hermes skill — reads/writes the vault at OBSIDIAN_VAULT_PATH.
+        # Convention: agent must write only inside ${VAULT}/Hermes/ (set via
+        # system prompt). Read access is unrestricted across the vault.
+        "obsidian",
     ],
 }
 
