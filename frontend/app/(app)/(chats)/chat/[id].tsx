@@ -23,6 +23,8 @@ import {
   TextInput,
   View,
 } from "react-native";
+import { MicButton } from "@/voice";
+import { useVoiceSettings } from "@/state/voice-settings";
 import { FlashList, type FlashListRef, type ListRenderItem } from "@shopify/flash-list";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -383,6 +385,15 @@ export default function ChatScreen() {
   const stream = useChatStream(sessionId);
   const [input, setInput] = useState("");
   const inputRef = useRef<TextInput>(null);
+
+  // ─── voice input ─────────────────────────────────────────────────────────
+  const voiceEnabled = useVoiceSettings((s) => s.enabled);
+  const voiceMode = useVoiceSettings((s) => s.mode);
+  const voiceLanguage = useVoiceSettings((s) => s.language);
+  const voiceAddsPunctuation = useVoiceSettings((s) => s.addsPunctuation);
+  // Partial transcript from MicButton's live preview (D2). Cleared when the
+  // final transcript fires and is promoted into `input`.
+  const [partialVoice, setPartialVoice] = useState("");
   const pendingList = usePendingAttachments(
     (s) => (sessionId ? (s.bySession[sessionId] ?? EMPTY_PENDING) : EMPTY_PENDING),
   );
@@ -832,6 +843,14 @@ export default function ChatScreen() {
       Alert.alert("Document picker", msg);
     }
   }, [sessionId, addPending]);
+
+  const onVoiceTranscript = useCallback(
+    (t: string) => {
+      setPartialVoice("");
+      setInput((prev) => (prev.trim() ? `${prev.trim()} ${t}` : t));
+    },
+    [],
+  );
 
   const actionSheetRef = useRef<ActionSheetHandle>(null);
   const onAttachPress = useCallback(() => {
@@ -1317,6 +1336,22 @@ export default function ChatScreen() {
           </View>
         ) : null}
 
+        {/* Live partial-transcript preview (D2). Shown below the composer pill
+            while recording; hidden as soon as recording stops. Uses a separate
+            line (Approach B) rather than injecting into the TextInput value so
+            the cursor position and onChangeText flow are not disturbed. */}
+        {partialVoice ? (
+          <View style={{ paddingHorizontal: 16, paddingTop: 2, paddingBottom: 2 }}>
+            <Text
+              kind="caption"
+              color={tokens.ink3}
+              style={{ fontStyle: "italic" }}
+            >
+              {partialVoice}
+            </Text>
+          </View>
+        ) : null}
+
         {/* Pill composer */}
         <View
           style={{
@@ -1371,6 +1406,34 @@ export default function ChatScreen() {
                 maxHeight: 120,
               }}
             />
+            {/* MicButton — left of the send/stop control, right of the TextInput.
+                Disabled while the agent is streaming to prevent interleaving (D3). */}
+            {voiceEnabled ? (
+              <MicButton
+                mode={voiceMode}
+                language={voiceLanguage ?? undefined}
+                addsPunctuation={voiceAddsPunctuation}
+                disabled={isStreaming}
+                onPartial={setPartialVoice}
+                onTranscript={onVoiceTranscript}
+                onError={(err) => {
+                  // TODO: integrate with project showToast once a suitable
+                  // message template is defined. For now, surface
+                  // permission_denied via a native Alert so the user has
+                  // a clear path to fix it.
+                  if (err.kind === "permission_denied") {
+                    Alert.alert(
+                      "Microphone access needed",
+                      "Open Settings to allow Hermes to use the microphone.",
+                      [{ text: "OK", style: "default" }],
+                    );
+                  } else {
+                    console.warn("Voice error:", err);
+                  }
+                }}
+                size={32}
+              />
+            ) : null}
             {isStreaming ? (
               <Pressable
                 onPress={onAbort}
