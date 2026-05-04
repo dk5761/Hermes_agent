@@ -144,14 +144,40 @@ def patch(config_path: Path, *, dry_run: bool = False) -> int:
         return -1
 
     changes: list[str] = []
+    # Servers we skip because their command path doesn't exist on this host.
+    # Used below to also skip the matching `mcp-<name>` toolset entry so we
+    # don't leave a dangling toolset reference.
+    skipped_servers: set[str] = set()
 
     # 1) mcp_servers — additive merge by server name.
+    #
+    # Environment-aware: skip an entry if its absolute `command` path doesn't
+    # exist on this host. Lets the same script run against:
+    #   - VPS (/root/.hermes/config.yaml + /root/repos/... wrapper exists)
+    #   - Local docker (./data/hermes-home/config.yaml; VPS-only paths skipped)
+    # without writing broken paths into the docker container's view.
     mcp = cfg.get("mcp_servers")
     if mcp is None:
         cfg["mcp_servers"] = {}
         mcp = cfg["mcp_servers"]
         changes.append("created mcp_servers")
     for name, server_cfg in DESIRED_MCP_SERVERS.items():
+        cmd = server_cfg.get("command", "")
+        # Only treat absolute paths as a presence check — relative names like
+        # "node" / "npx" / "bunx" resolve via PATH at spawn time and we don't
+        # want false negatives.
+        if isinstance(cmd, str) and cmd.startswith("/") and not Path(cmd).exists():
+            skipped_servers.add(name)
+            if name not in mcp:
+                print(
+                    f"[patch] SKIP mcp_servers.{name}: command not found on this host: {cmd}",
+                )
+            else:
+                print(
+                    f"[patch] WARN mcp_servers.{name}: command path missing on this host "
+                    f"({cmd}); leaving existing entry alone.",
+                )
+            continue
         if name not in mcp:
             mcp[name] = server_cfg
             changes.append(f"added mcp_servers.{name}")
@@ -189,12 +215,27 @@ def patch(config_path: Path, *, dry_run: bool = False) -> int:
         pt = cfg["platform_toolsets"]
         changes.append("created platform_toolsets")
     for platform, toolsets in DESIRED_PLATFORM_TOOLSETS.items():
+        # Filter out toolsets that reference a skipped MCP server. The naming
+        # convention `mcp-<server-name>` (e.g. mcp-ios-tools → ios-tools)
+        # links the two; if the server was skipped above, drop the toolset.
+        eligible = [
+            ts for ts in toolsets
+            if not (ts.startswith("mcp-") and ts[len("mcp-"):] in skipped_servers)
+        ]
+        if len(eligible) != len(toolsets):
+            for ts in toolsets:
+                if ts not in eligible:
+                    print(
+                        f"[patch] SKIP platform_toolsets.{platform}.{ts}: "
+                        f"references skipped server",
+                    )
         existing = pt.get(platform)
         if existing is None:
-            pt[platform] = list(toolsets)
-            changes.append(f"created platform_toolsets.{platform}")
+            pt[platform] = list(eligible)
+            if eligible:
+                changes.append(f"created platform_toolsets.{platform}")
         else:
-            for ts in toolsets:
+            for ts in eligible:
                 if ts not in existing:
                     existing.append(ts)
                     changes.append(f"added platform_toolsets.{platform}.{ts}")
