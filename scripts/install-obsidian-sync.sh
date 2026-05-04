@@ -180,8 +180,18 @@ else
       c_green "  inserted new line"
     fi
     systemctl daemon-reload
-    c_yellow "  hermes-dashboard.service env changed — restart needed:"
-    c_yellow "    systemctl restart hermes-dashboard"
+    c_yellow "  hermes-dashboard.service env changed — restarting dashboard + gateway"
+    # Hermes 0.12+ generates a fresh _SESSION_TOKEN on every dashboard restart.
+    # The gateway caches the token (scraped from /index.html) and only re-scrapes
+    # on HTTP 401. The upstream-WS open failure path manifests as "non-101
+    # status" (not 401) — so the gateway gets stuck with a stale token after
+    # any dashboard restart. Restarting the gateway forces a fresh scrape.
+    systemctl restart hermes-dashboard
+    sleep 2
+    if systemctl is-enabled --quiet hermes-gateway 2>/dev/null; then
+      systemctl restart hermes-gateway
+      c_green "    hermes-gateway restarted (forces fresh token scrape)"
+    fi
   fi
 fi
 

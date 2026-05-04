@@ -153,13 +153,16 @@ After that, re-run the install script — it'll detect the bound vault and finis
 
 ### Final restart of Hermes services
 
-If the script reports "hermes-dashboard.service env changed":
+The install script restarts both `hermes-dashboard` and `hermes-gateway` if it touched the dashboard env. **Always restart both together** — never just dashboard.
 
-```bash
-systemctl restart hermes-dashboard
-```
-
-That picks up the new `OBSIDIAN_VAULT_PATH` env so the agent can find the vault.
+> **Why both?** Hermes 0.12+ regenerates an in-memory `_SESSION_TOKEN` on every dashboard startup. The gateway scrapes that token from `/index.html` once at gateway-start time and reuses it. A bare `systemctl restart hermes-dashboard` rotates the token but the gateway keeps using the old one — and because the upstream-WS open failure manifests as "non-101 status" rather than HTTP 401, the gateway's auto-refresh path (which only triggers on 401) never fires. Result: chat hangs forever.
+>
+> Manual restart sequence if you ever touch the dashboard alone:
+>
+> ```bash
+> systemctl restart hermes-dashboard
+> systemctl restart hermes-gateway
+> ```
 
 ### Verify
 

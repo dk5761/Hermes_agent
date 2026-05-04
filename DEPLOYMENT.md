@@ -62,7 +62,7 @@ ssh root@<vps> "journalctl -u hermes-dashboard -f"
 ssh root@<vps> "systemctl restart hermes-dashboard hermes-gateway"
 ```
 
-The gateway re-scrapes Hermes' auth token on every WS connect, so order is not strict — but restarting `hermes-dashboard` while the gateway is running causes a transient upstream-disconnect that the gateway recovers from on its own.
+**Always restart both together.** Hermes 0.12+ regenerates an in-memory `_SESSION_TOKEN` on every dashboard startup. The gateway scrapes that token from `/index.html` once at start time and reuses it for every upstream WS open. The auto-refresh path only triggers on HTTP 401, but a stale-token WS upgrade gets rejected with a "non-101 status" error that the gateway doesn't recognize as auth-related — so it never re-scrapes. Result: every chat hangs with `upstream_ws_open_failed`. Bare `systemctl restart hermes-dashboard` (without restarting the gateway) is what causes this; the one-liner above is correct.
 
 ### Restart and verify (one command, run after any deploy or VPS reboot)
 
