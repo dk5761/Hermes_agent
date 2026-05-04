@@ -247,6 +247,14 @@ export default function SettingsIndexScreen() {
               chevron
               onPress={goto("/(settings)/storage")}
             />
+            {/* SPIKE — Phase 0 of voice input. Delete this row when Phase 1 lands. */}
+            <ListRow
+              icon="bolt"
+              title="Voice spike (Phase 0)"
+              detail="dev only"
+              chevron
+              onPress={goto("/voice-spike")}
+            />
           </ListGroup>
 
           <ListGroup header="Account">
