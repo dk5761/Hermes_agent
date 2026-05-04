@@ -1,6 +1,6 @@
 # Search Across All Chats + Quick Switcher
 
-**Status:** Phase 0 in progress. Captured 2026-05-05. Open questions resolved 2026-05-05 (see §6 — Locked decisions).
+**Status:** Phase 0 complete. Phase 1 green-lit. Captured 2026-05-05. Open questions resolved 2026-05-05 (see §6 — Locked decisions).
 
 Spotlight-style fuzzy + full-text search across every chat session. Trigger from anywhere in the app. Tap a result → open that chat scrolled to the matched message.
 
@@ -86,7 +86,30 @@ Spotlight-style fuzzy + full-text search across every chat session. Trigger from
 
 ## 4. Phases
 
-### Phase 0 — Spike + scope vetting (1-2 hours)
+### Phase 0 spike findings (completed 2026-05-05)
+
+Full report in commit message + `backend/spike-search/spike.mjs`. Key results:
+
+| Query | Mean | p95 | p99 |
+|---|---|---|---|
+| Single word (`calendar`) | 0.084 ms | 0.097 ms | 0.169 ms |
+| AND (`calendar event`) | 0.093 ms | 0.104 ms | 0.166 ms |
+| Phrase (`"OAuth token"`) | 0.062 ms | 0.072 ms | 0.087 ms |
+| Prefix (`auth*`) | 0.049 ms | 0.058 ms | 0.061 ms |
+| No-match | 0.006 ms | 0.009 ms | 0.016 ms |
+
+All queries p99 well under the 50ms acceptance bar — orders of magnitude of
+headroom. **Phase 1 green-lit** with the column-name + snippet-index +
+docsize-count corrections folded in above.
+
+**Schema decision: Approach A** (TypeScript writes `search_text` at insert
+time; SQL triggers mirror it to FTS). Three reasons:
+- Per-kind truncation (reasoning 4KB, others 16KB) is awkward in pure SQL
+- New `kind` values don't need a migration; just update the helper
+- Backfill is `WHERE search_text IS NULL` — trivial
+- Helper is unit-testable as a pure function, no DB needed
+
+### Phase 0 — Spike + scope vetting (1-2 hours) — COMPLETE
 
 **Goal:** confirm FTS5 + better-sqlite3 + drizzle work cleanly together; decide schema details.
 
@@ -109,46 +132,44 @@ Files: throwaway `backend/spike-search/` — don't commit.
 `backend/src/db/migrations/000X_search_fts.sql`:
 
 ```sql
--- FTS5 virtual table mirroring searchable text from chat_history.
--- Schema: external content table to avoid duplicating storage.
--- session_id is denormalized for fast filtering by session.
+-- Add search_text column populated at insert time by the app (Approach A).
+-- See backend/spike-search/spike.mjs for the rationale (Approach A vs B).
+ALTER TABLE chat_history ADD COLUMN search_text TEXT;
+
+-- FTS5 virtual table mirroring chat_history.search_text.
+--
+-- IMPORTANT: column names MUST match chat_history columns exactly. FTS5
+-- external-content tables map virtual cols → content cols by name. A
+-- mismatch causes "no such column" errors on rebuild + snippet().
 CREATE VIRTUAL TABLE chat_history_fts USING fts5(
-  session_id UNINDEXED,
-  role UNINDEXED,
-  text,
+  app_session_id UNINDEXED,   -- matches chat_history.app_session_id
+  search_text,                -- matches chat_history.search_text
   content='chat_history',
   content_rowid='id',
   tokenize='unicode61 remove_diacritics 2'
 );
 
--- Triggers to keep FTS in sync. Triggered on every chat_history mutation.
--- We extract text from payload_json's structured shape (kind='message', etc.)
--- via app-level JSON parsing — see indexer.ts. The trigger here just calls
--- a per-row insert with rowid; the actual text comes from a populated column
--- that the app code keeps fresh.
-
--- (Alternative: add a generated column `search_text` to chat_history that's
---  populated by app code at insert time, and FTS indexes that.)
-
--- For simplicity in v1: add a search_text column to chat_history.
-ALTER TABLE chat_history ADD COLUMN search_text TEXT;
-
--- Repopulate triggers:
+-- Triggers keep FTS in sync. The actual text extraction is in the app code
+-- (see indexer.ts → extractSearchableText). Triggers just mirror search_text.
 CREATE TRIGGER chat_history_fts_ai AFTER INSERT ON chat_history BEGIN
-  INSERT INTO chat_history_fts(rowid, session_id, role, text)
-    VALUES (new.id, new.app_session_id, '', COALESCE(new.search_text, ''));
+  INSERT INTO chat_history_fts(rowid, app_session_id, search_text)
+    VALUES (new.id, new.app_session_id, COALESCE(new.search_text, ''));
 END;
 CREATE TRIGGER chat_history_fts_ad AFTER DELETE ON chat_history BEGIN
-  INSERT INTO chat_history_fts(chat_history_fts, rowid, session_id, role, text)
-    VALUES('delete', old.id, old.app_session_id, '', COALESCE(old.search_text, ''));
+  INSERT INTO chat_history_fts(chat_history_fts, rowid, app_session_id, search_text)
+    VALUES('delete', old.id, old.app_session_id, COALESCE(old.search_text, ''));
 END;
 CREATE TRIGGER chat_history_fts_au AFTER UPDATE ON chat_history BEGIN
-  INSERT INTO chat_history_fts(chat_history_fts, rowid, session_id, role, text)
-    VALUES('delete', old.id, old.app_session_id, '', COALESCE(old.search_text, ''));
-  INSERT INTO chat_history_fts(rowid, session_id, role, text)
-    VALUES (new.id, new.app_session_id, '', COALESCE(new.search_text, ''));
+  INSERT INTO chat_history_fts(chat_history_fts, rowid, app_session_id, search_text)
+    VALUES('delete', old.id, old.app_session_id, COALESCE(old.search_text, ''));
+  INSERT INTO chat_history_fts(rowid, app_session_id, search_text)
+    VALUES (new.id, new.app_session_id, COALESCE(new.search_text, ''));
 END;
 ```
+
+**Counting FTS rows:** `SELECT count(*) FROM chat_history_fts` does NOT work on
+external-content tables. Use `SELECT count(*) FROM chat_history_fts_docsize`
+in the boot-time backfill verification.
 
 #### Schema update
 
@@ -174,16 +195,26 @@ Run on every server boot (idempotent — only touches rows with `search_text IS 
 
 #### Helper: extract text from payload
 
+Per Phase 0 spike's prod-payload survey (see `backend/spike-search/spike.mjs`),
+the canonical kind names use **dot notation** (not underscores):
+
 ```ts
-// chat_history kinds we care about (skip streaming-only kinds):
-//   - "message" (role=user|assistant): payload.text
-//   - "tool_call": payload.tool_name + JSON.stringify(payload.input)
-//   - "tool_result": payload.text or stringified output
-//   - "reasoning": payload.text (may be long; truncate to 4KB)
+// chat_history kinds observed in prod + their text shapes:
+//   - "user.message"      → { text, finalText } — prefer finalText
+//   - "assistant.message" → { text }
+//   - "reasoning"         → { text } — can be very long, truncate to 4KB
+//   - "tool.call"         → { name, ...tool-specific named fields }
+//                           Index `name` + stringify rest minus tool_id/duration_s
+//   - "approval.request"  → { description, command, pattern_keys }
+//                           Index description + command
+//   - "tool.result"       → not seen in prod (folded into tool.call) — handle defensively
+//   - other kinds         → { text } if present, else null
+//
+// Normalize underscores → dots before matching so callers can pass either form.
 function extractSearchableText(kind: string, payload: unknown): string | null { ... }
 ```
 
-Truncate per-row to 16KB to keep FTS table compact.
+All extracted text capped at **16KB** per row (4KB for `reasoning`).
 
 Acceptance: deploy, indexer runs at boot, log shows "indexed N rows" once. Verify with `SELECT count(*) FROM chat_history_fts`.
 
@@ -231,7 +262,9 @@ SELECT
   ch.kind          AS role,
   ch.created_at    AS created_at,
   bm25(chat_history_fts) AS rank,
-  snippet(chat_history_fts, 2, '<b>', '</b>', '…', 12) AS snippet
+  -- snippet(table, col_idx, ...) — col_idx is 1 (search_text is the 2nd
+  -- col, 0=app_session_id, 1=search_text in our schema)
+  snippet(chat_history_fts, 1, '<b>', '</b>', '…', 12) AS snippet
 FROM chat_history_fts
 JOIN chat_history ch ON ch.id = chat_history_fts.rowid
 JOIN app_sessions s ON s.id = ch.app_session_id
