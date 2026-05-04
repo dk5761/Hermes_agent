@@ -25,7 +25,11 @@
         "NSPhotoLibraryUsageDescription": "Hermes attaches photos you pick from your library to your chats.",
         "NSCameraUsageDescription": "Hermes uses the camera to capture photos to attach to your chats.",
         "NSFaceIDUsageDescription": "Hermes uses Face ID to unlock the app when biometric lock is enabled.",
-        "NSDocumentsFolderUsageDescription": "Hermes lets you attach documents from Files to your chats."
+        "NSDocumentsFolderUsageDescription": "Hermes lets you attach documents from Files to your chats.",
+        "NSCalendarsFullAccessUsageDescription": "Hermes reads and writes your Calendar events so the AI assistant can schedule, list, and delete events on your behalf.",
+        "NSRemindersFullAccessUsageDescription": "Hermes reads and writes your Reminders so the AI assistant can add, list, and complete tasks on your behalf.",
+        "NSCalendarsUsageDescription": "Hermes reads and writes your Calendar events so the AI assistant can schedule, list, and delete events on your behalf.",
+        "NSRemindersUsageDescription": "Hermes reads and writes your Reminders so the AI assistant can add, list, and complete tasks on your behalf."
       },
       "entitlements": {
         "com.apple.security.application-groups": [

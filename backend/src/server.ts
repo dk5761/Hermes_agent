@@ -21,6 +21,8 @@ import { registerAccountRoutes } from "./routes/account.js";
 import { registerUploadsRoutes } from "./routes/uploads.js";
 import { registerBlobsRoutes } from "./routes/blobs.js";
 import { registerGatewayWsRoute } from "./ws/gateway-ws.js";
+import { IosToolsRouter } from "./ws/ios-tools-router.js";
+import { registerInternalIosToolsRoutes } from "./routes/internal-ios-tools.js";
 import { registerLiveActivityRoutes } from "./routes/live-activity.js";
 import { registerPrefsRoutes } from "./routes/prefs.js";
 import { LiveActivityPusher } from "./push/apns-live-activity.js";
@@ -261,6 +263,26 @@ export async function buildServer(deps: BuildServerDeps): Promise<FastifyInstanc
       })
     : undefined;
 
+  // Phase 4 (iOS native tools): IOS_MCP_TOKEN present → enable the router
+  // and the /internal/ios-tool endpoint. Without the token the feature is
+  // disabled entirely (no-op) so existing deploys don't break.
+  const iosToolsRouter = deps.config.IOS_MCP_TOKEN
+    ? new IosToolsRouter({
+        db: deps.dbHandle.db,
+        logger: deps.logger,
+        expoAccessToken: deps.config.EXPO_ACCESS_TOKEN,
+      })
+    : undefined;
+
+  if (iosToolsRouter) {
+    iosToolsRouter.startSweeper();
+    await registerInternalIosToolsRoutes(app, {
+      iosToolsRouter,
+      iosMcpToken: deps.config.IOS_MCP_TOKEN!,
+      logger: deps.logger,
+    });
+  }
+
   await registerGatewayWsRoute(app, {
     db: deps.dbHandle.db,
     jwt: jwtConfig,
@@ -270,6 +292,7 @@ export async function buildServer(deps: BuildServerDeps): Promise<FastifyInstanc
     liveActivityPusher,
     ...(deps.chatRunTimer ? { chatRunTimer: deps.chatRunTimer } : {}),
     ...(chatCompleteNotifier ? { chatCompleteNotifier } : {}),
+    ...(iosToolsRouter ? { iosToolsRouter } : {}),
   });
 
   return app;

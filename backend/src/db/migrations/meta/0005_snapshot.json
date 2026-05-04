@@ -1,0 +1,310 @@
+{
+  "version": "6",
+  "dialect": "sqlite",
+  "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "prevId": "db06f945-9e12-4a6d-b04c-7b20ca09beb6",
+  "tables": {
+    "app_sessions": {
+      "name": "app_sessions",
+      "columns": {
+        "id": { "name": "id", "type": "text", "primaryKey": true, "notNull": true, "autoincrement": false },
+        "user_id": { "name": "user_id", "type": "text", "primaryKey": false, "notNull": true, "autoincrement": false },
+        "hermes_session_id": { "name": "hermes_session_id", "type": "text", "primaryKey": false, "notNull": false, "autoincrement": false },
+        "title_override": { "name": "title_override", "type": "text", "primaryKey": false, "notNull": false, "autoincrement": false },
+        "archived_at": { "name": "archived_at", "type": "integer", "primaryKey": false, "notNull": false, "autoincrement": false },
+        "model_override": { "name": "model_override", "type": "text", "primaryKey": false, "notNull": false, "autoincrement": false },
+        "provider_override": { "name": "provider_override", "type": "text", "primaryKey": false, "notNull": false, "autoincrement": false },
+        "created_at": { "name": "created_at", "type": "integer", "primaryKey": false, "notNull": true, "autoincrement": false },
+        "updated_at": { "name": "updated_at", "type": "integer", "primaryKey": false, "notNull": true, "autoincrement": false }
+      },
+      "indexes": {
+        "app_sessions_user_archived_idx": { "name": "app_sessions_user_archived_idx", "columns": ["user_id", "archived_at"], "isUnique": false },
+        "app_sessions_hermes_session_idx": { "name": "app_sessions_hermes_session_idx", "columns": ["hermes_session_id"], "isUnique": false }
+      },
+      "foreignKeys": {
+        "app_sessions_user_id_users_id_fk": { "name": "app_sessions_user_id_users_id_fk", "tableFrom": "app_sessions", "tableTo": "users", "columnsFrom": ["user_id"], "columnsTo": ["id"], "onDelete": "cascade", "onUpdate": "no action" }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "attachments": {
+      "name": "attachments",
+      "columns": {
+        "id": { "name": "id", "type": "text", "primaryKey": true, "notNull": true, "autoincrement": false },
+        "app_session_id": { "name": "app_session_id", "type": "text", "primaryKey": false, "notNull": false, "autoincrement": false },
+        "blob_id": { "name": "blob_id", "type": "text", "primaryKey": false, "notNull": true, "autoincrement": false },
+        "kind": { "name": "kind", "type": "text", "primaryKey": false, "notNull": true, "autoincrement": false },
+        "thumb_blob_id": { "name": "thumb_blob_id", "type": "text", "primaryKey": false, "notNull": false, "autoincrement": false },
+        "derived_text_blob_id": { "name": "derived_text_blob_id", "type": "text", "primaryKey": false, "notNull": false, "autoincrement": false },
+        "created_at": { "name": "created_at", "type": "integer", "primaryKey": false, "notNull": true, "autoincrement": false }
+      },
+      "indexes": {
+        "attachments_session_idx": { "name": "attachments_session_idx", "columns": ["app_session_id"], "isUnique": false },
+        "attachments_blob_idx": { "name": "attachments_blob_idx", "columns": ["blob_id"], "isUnique": false }
+      },
+      "foreignKeys": {
+        "attachments_app_session_id_app_sessions_id_fk": { "name": "attachments_app_session_id_app_sessions_id_fk", "tableFrom": "attachments", "tableTo": "app_sessions", "columnsFrom": ["app_session_id"], "columnsTo": ["id"], "onDelete": "set null", "onUpdate": "no action" },
+        "attachments_blob_id_blob_objects_id_fk": { "name": "attachments_blob_id_blob_objects_id_fk", "tableFrom": "attachments", "tableTo": "blob_objects", "columnsFrom": ["blob_id"], "columnsTo": ["id"], "onDelete": "restrict", "onUpdate": "no action" },
+        "attachments_thumb_blob_id_blob_objects_id_fk": { "name": "attachments_thumb_blob_id_blob_objects_id_fk", "tableFrom": "attachments", "tableTo": "blob_objects", "columnsFrom": ["thumb_blob_id"], "columnsTo": ["id"], "onDelete": "set null", "onUpdate": "no action" },
+        "attachments_derived_text_blob_id_blob_objects_id_fk": { "name": "attachments_derived_text_blob_id_blob_objects_id_fk", "tableFrom": "attachments", "tableTo": "blob_objects", "columnsFrom": ["derived_text_blob_id"], "columnsTo": ["id"], "onDelete": "set null", "onUpdate": "no action" }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "blob_objects": {
+      "name": "blob_objects",
+      "columns": {
+        "id": { "name": "id", "type": "text", "primaryKey": true, "notNull": true, "autoincrement": false },
+        "bucket": { "name": "bucket", "type": "text", "primaryKey": false, "notNull": true, "autoincrement": false },
+        "object_key": { "name": "object_key", "type": "text", "primaryKey": false, "notNull": true, "autoincrement": false },
+        "sha256": { "name": "sha256", "type": "text", "primaryKey": false, "notNull": true, "autoincrement": false },
+        "mime_type": { "name": "mime_type", "type": "text", "primaryKey": false, "notNull": true, "autoincrement": false },
+        "size_bytes": { "name": "size_bytes", "type": "integer", "primaryKey": false, "notNull": true, "autoincrement": false },
+        "original_name": { "name": "original_name", "type": "text", "primaryKey": false, "notNull": false, "autoincrement": false },
+        "user_id": { "name": "user_id", "type": "text", "primaryKey": false, "notNull": true, "autoincrement": false },
+        "created_at": { "name": "created_at", "type": "integer", "primaryKey": false, "notNull": true, "autoincrement": false }
+      },
+      "indexes": {
+        "blob_objects_object_key_idx": { "name": "blob_objects_object_key_idx", "columns": ["object_key"], "isUnique": true },
+        "blob_objects_sha256_idx": { "name": "blob_objects_sha256_idx", "columns": ["sha256"], "isUnique": false },
+        "blob_objects_user_idx": { "name": "blob_objects_user_idx", "columns": ["user_id"], "isUnique": false }
+      },
+      "foreignKeys": {
+        "blob_objects_user_id_users_id_fk": { "name": "blob_objects_user_id_users_id_fk", "tableFrom": "blob_objects", "tableTo": "users", "columnsFrom": ["user_id"], "columnsTo": ["id"], "onDelete": "cascade", "onUpdate": "no action" }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "chat_history": {
+      "name": "chat_history",
+      "columns": {
+        "id": { "name": "id", "type": "integer", "primaryKey": true, "notNull": true, "autoincrement": true },
+        "app_session_id": { "name": "app_session_id", "type": "text", "primaryKey": false, "notNull": true, "autoincrement": false },
+        "kind": { "name": "kind", "type": "text", "primaryKey": false, "notNull": true, "autoincrement": false },
+        "payload_json": { "name": "payload_json", "type": "text", "primaryKey": false, "notNull": true, "autoincrement": false },
+        "created_at": { "name": "created_at", "type": "integer", "primaryKey": false, "notNull": true, "autoincrement": false }
+      },
+      "indexes": {
+        "chat_history_session_id_idx": { "name": "chat_history_session_id_idx", "columns": ["app_session_id", "id"], "isUnique": false }
+      },
+      "foreignKeys": {
+        "chat_history_app_session_id_app_sessions_id_fk": { "name": "chat_history_app_session_id_app_sessions_id_fk", "tableFrom": "chat_history", "tableTo": "app_sessions", "columnsFrom": ["app_session_id"], "columnsTo": ["id"], "onDelete": "cascade", "onUpdate": "no action" }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "cron_prefs": {
+      "name": "cron_prefs",
+      "columns": {
+        "id": { "name": "id", "type": "text", "primaryKey": true, "notNull": true, "autoincrement": false },
+        "user_id": { "name": "user_id", "type": "text", "primaryKey": false, "notNull": true, "autoincrement": false },
+        "hermes_job_id": { "name": "hermes_job_id", "type": "text", "primaryKey": false, "notNull": true, "autoincrement": false },
+        "notify_on_complete": { "name": "notify_on_complete", "type": "integer", "primaryKey": false, "notNull": true, "autoincrement": false, "default": 0 },
+        "last_seen_output_id": { "name": "last_seen_output_id", "type": "text", "primaryKey": false, "notNull": false, "autoincrement": false },
+        "updated_at": { "name": "updated_at", "type": "integer", "primaryKey": false, "notNull": true, "autoincrement": false }
+      },
+      "indexes": {
+        "cron_prefs_user_job_idx": { "name": "cron_prefs_user_job_idx", "columns": ["user_id", "hermes_job_id"], "isUnique": true },
+        "cron_prefs_job_idx": { "name": "cron_prefs_job_idx", "columns": ["hermes_job_id"], "isUnique": false }
+      },
+      "foreignKeys": {
+        "cron_prefs_user_id_users_id_fk": { "name": "cron_prefs_user_id_users_id_fk", "tableFrom": "cron_prefs", "tableTo": "users", "columnsFrom": ["user_id"], "columnsTo": ["id"], "onDelete": "cascade", "onUpdate": "no action" }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "derived_artifacts": {
+      "name": "derived_artifacts",
+      "columns": {
+        "id": { "name": "id", "type": "text", "primaryKey": true, "notNull": true, "autoincrement": false },
+        "parent_blob_id": { "name": "parent_blob_id", "type": "text", "primaryKey": false, "notNull": true, "autoincrement": false },
+        "kind": { "name": "kind", "type": "text", "primaryKey": false, "notNull": true, "autoincrement": false },
+        "blob_id": { "name": "blob_id", "type": "text", "primaryKey": false, "notNull": true, "autoincrement": false },
+        "meta_json": { "name": "meta_json", "type": "text", "primaryKey": false, "notNull": false, "autoincrement": false },
+        "created_at": { "name": "created_at", "type": "integer", "primaryKey": false, "notNull": true, "autoincrement": false }
+      },
+      "indexes": {
+        "derived_artifacts_parent_idx": { "name": "derived_artifacts_parent_idx", "columns": ["parent_blob_id"], "isUnique": false }
+      },
+      "foreignKeys": {
+        "derived_artifacts_parent_blob_id_blob_objects_id_fk": { "name": "derived_artifacts_parent_blob_id_blob_objects_id_fk", "tableFrom": "derived_artifacts", "tableTo": "blob_objects", "columnsFrom": ["parent_blob_id"], "columnsTo": ["id"], "onDelete": "cascade", "onUpdate": "no action" },
+        "derived_artifacts_blob_id_blob_objects_id_fk": { "name": "derived_artifacts_blob_id_blob_objects_id_fk", "tableFrom": "derived_artifacts", "tableTo": "blob_objects", "columnsFrom": ["blob_id"], "columnsTo": ["id"], "onDelete": "cascade", "onUpdate": "no action" }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "ios_tool_queue": {
+      "name": "ios_tool_queue",
+      "columns": {
+        "id": { "name": "id", "type": "text", "primaryKey": true, "notNull": true, "autoincrement": false },
+        "user_id": { "name": "user_id", "type": "text", "primaryKey": false, "notNull": true, "autoincrement": false },
+        "tool": { "name": "tool", "type": "text", "primaryKey": false, "notNull": true, "autoincrement": false },
+        "args_json": { "name": "args_json", "type": "text", "primaryKey": false, "notNull": true, "autoincrement": false },
+        "queued_at": { "name": "queued_at", "type": "integer", "primaryKey": false, "notNull": true, "autoincrement": false },
+        "attempts": { "name": "attempts", "type": "integer", "primaryKey": false, "notNull": true, "autoincrement": false, "default": 0 },
+        "last_attempt_at": { "name": "last_attempt_at", "type": "integer", "primaryKey": false, "notNull": false, "autoincrement": false }
+      },
+      "indexes": {
+        "ios_tool_queue_user_idx": { "name": "ios_tool_queue_user_idx", "columns": ["user_id"], "isUnique": false },
+        "ios_tool_queue_queued_at_idx": { "name": "ios_tool_queue_queued_at_idx", "columns": ["queued_at"], "isUnique": false }
+      },
+      "foreignKeys": {
+        "ios_tool_queue_user_id_users_id_fk": { "name": "ios_tool_queue_user_id_users_id_fk", "tableFrom": "ios_tool_queue", "tableTo": "users", "columnsFrom": ["user_id"], "columnsTo": ["id"], "onDelete": "cascade", "onUpdate": "no action" }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "live_activity_tokens": {
+      "name": "live_activity_tokens",
+      "columns": {
+        "activity_id": { "name": "activity_id", "type": "text", "primaryKey": true, "notNull": true, "autoincrement": false },
+        "app_session_id": { "name": "app_session_id", "type": "text", "primaryKey": false, "notNull": true, "autoincrement": false },
+        "user_id": { "name": "user_id", "type": "text", "primaryKey": false, "notNull": true, "autoincrement": false },
+        "push_token": { "name": "push_token", "type": "text", "primaryKey": false, "notNull": true, "autoincrement": false },
+        "kind": { "name": "kind", "type": "text", "primaryKey": false, "notNull": true, "autoincrement": false },
+        "created_at": { "name": "created_at", "type": "integer", "primaryKey": false, "notNull": true, "autoincrement": false },
+        "updated_at": { "name": "updated_at", "type": "integer", "primaryKey": false, "notNull": true, "autoincrement": false }
+      },
+      "indexes": {
+        "live_activity_tokens_session_idx": { "name": "live_activity_tokens_session_idx", "columns": ["app_session_id"], "isUnique": false }
+      },
+      "foreignKeys": {
+        "live_activity_tokens_app_session_id_app_sessions_id_fk": { "name": "live_activity_tokens_app_session_id_app_sessions_id_fk", "tableFrom": "live_activity_tokens", "tableTo": "app_sessions", "columnsFrom": ["app_session_id"], "columnsTo": ["id"], "onDelete": "cascade", "onUpdate": "no action" },
+        "live_activity_tokens_user_id_users_id_fk": { "name": "live_activity_tokens_user_id_users_id_fk", "tableFrom": "live_activity_tokens", "tableTo": "users", "columnsFrom": ["user_id"], "columnsTo": ["id"], "onDelete": "cascade", "onUpdate": "no action" }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "message_meta": {
+      "name": "message_meta",
+      "columns": {
+        "id": { "name": "id", "type": "text", "primaryKey": true, "notNull": true, "autoincrement": false },
+        "app_session_id": { "name": "app_session_id", "type": "text", "primaryKey": false, "notNull": true, "autoincrement": false },
+        "client_message_id": { "name": "client_message_id", "type": "text", "primaryKey": false, "notNull": true, "autoincrement": false },
+        "role": { "name": "role", "type": "text", "primaryKey": false, "notNull": true, "autoincrement": false },
+        "created_at": { "name": "created_at", "type": "integer", "primaryKey": false, "notNull": true, "autoincrement": false }
+      },
+      "indexes": {
+        "message_meta_session_idx": { "name": "message_meta_session_idx", "columns": ["app_session_id"], "isUnique": false },
+        "message_meta_session_client_idx": { "name": "message_meta_session_client_idx", "columns": ["app_session_id", "client_message_id"], "isUnique": true }
+      },
+      "foreignKeys": {
+        "message_meta_app_session_id_app_sessions_id_fk": { "name": "message_meta_app_session_id_app_sessions_id_fk", "tableFrom": "message_meta", "tableTo": "app_sessions", "columnsFrom": ["app_session_id"], "columnsTo": ["id"], "onDelete": "cascade", "onUpdate": "no action" }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "push_tokens": {
+      "name": "push_tokens",
+      "columns": {
+        "id": { "name": "id", "type": "text", "primaryKey": true, "notNull": true, "autoincrement": false },
+        "user_id": { "name": "user_id", "type": "text", "primaryKey": false, "notNull": true, "autoincrement": false },
+        "expo_token": { "name": "expo_token", "type": "text", "primaryKey": false, "notNull": true, "autoincrement": false },
+        "platform": { "name": "platform", "type": "text", "primaryKey": false, "notNull": true, "autoincrement": false },
+        "created_at": { "name": "created_at", "type": "integer", "primaryKey": false, "notNull": true, "autoincrement": false },
+        "last_seen_at": { "name": "last_seen_at", "type": "integer", "primaryKey": false, "notNull": true, "autoincrement": false }
+      },
+      "indexes": {
+        "push_tokens_expo_token_idx": { "name": "push_tokens_expo_token_idx", "columns": ["expo_token"], "isUnique": true },
+        "push_tokens_user_idx": { "name": "push_tokens_user_idx", "columns": ["user_id"], "isUnique": false }
+      },
+      "foreignKeys": {
+        "push_tokens_user_id_users_id_fk": { "name": "push_tokens_user_id_users_id_fk", "tableFrom": "push_tokens", "tableTo": "users", "columnsFrom": ["user_id"], "columnsTo": ["id"], "onDelete": "cascade", "onUpdate": "no action" }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "refresh_tokens": {
+      "name": "refresh_tokens",
+      "columns": {
+        "id": { "name": "id", "type": "text", "primaryKey": true, "notNull": true, "autoincrement": false },
+        "user_id": { "name": "user_id", "type": "text", "primaryKey": false, "notNull": true, "autoincrement": false },
+        "token_hash": { "name": "token_hash", "type": "text", "primaryKey": false, "notNull": true, "autoincrement": false },
+        "expires_at": { "name": "expires_at", "type": "integer", "primaryKey": false, "notNull": true, "autoincrement": false },
+        "revoked_at": { "name": "revoked_at", "type": "integer", "primaryKey": false, "notNull": false, "autoincrement": false },
+        "created_at": { "name": "created_at", "type": "integer", "primaryKey": false, "notNull": true, "autoincrement": false }
+      },
+      "indexes": {
+        "refresh_tokens_token_hash_idx": { "name": "refresh_tokens_token_hash_idx", "columns": ["token_hash"], "isUnique": true },
+        "refresh_tokens_user_idx": { "name": "refresh_tokens_user_idx", "columns": ["user_id"], "isUnique": false }
+      },
+      "foreignKeys": {
+        "refresh_tokens_user_id_users_id_fk": { "name": "refresh_tokens_user_id_users_id_fk", "tableFrom": "refresh_tokens", "tableTo": "users", "columnsFrom": ["user_id"], "columnsTo": ["id"], "onDelete": "cascade", "onUpdate": "no action" }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "user_prefs": {
+      "name": "user_prefs",
+      "columns": {
+        "user_id": { "name": "user_id", "type": "text", "primaryKey": true, "notNull": true, "autoincrement": false },
+        "notify_chat_complete": { "name": "notify_chat_complete", "type": "integer", "primaryKey": false, "notNull": true, "autoincrement": false, "default": 1 },
+        "updated_at": { "name": "updated_at", "type": "integer", "primaryKey": false, "notNull": true, "autoincrement": false }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "user_prefs_user_id_users_id_fk": { "name": "user_prefs_user_id_users_id_fk", "tableFrom": "user_prefs", "tableTo": "users", "columnsFrom": ["user_id"], "columnsTo": ["id"], "onDelete": "cascade", "onUpdate": "no action" }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "users": {
+      "name": "users",
+      "columns": {
+        "id": { "name": "id", "type": "text", "primaryKey": true, "notNull": true, "autoincrement": false },
+        "username": { "name": "username", "type": "text", "primaryKey": false, "notNull": true, "autoincrement": false },
+        "password_hash": { "name": "password_hash", "type": "text", "primaryKey": false, "notNull": true, "autoincrement": false },
+        "created_at": { "name": "created_at", "type": "integer", "primaryKey": false, "notNull": true, "autoincrement": false }
+      },
+      "indexes": {
+        "users_username_unique": { "name": "users_username_unique", "columns": ["username"], "isUnique": true }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "ws_events": {
+      "name": "ws_events",
+      "columns": {
+        "id": { "name": "id", "type": "integer", "primaryKey": true, "notNull": true, "autoincrement": true },
+        "app_session_id": { "name": "app_session_id", "type": "text", "primaryKey": false, "notNull": true, "autoincrement": false },
+        "type": { "name": "type", "type": "text", "primaryKey": false, "notNull": true, "autoincrement": false },
+        "payload_json": { "name": "payload_json", "type": "text", "primaryKey": false, "notNull": true, "autoincrement": false },
+        "created_at": { "name": "created_at", "type": "integer", "primaryKey": false, "notNull": true, "autoincrement": false }
+      },
+      "indexes": {
+        "ws_events_session_id_idx": { "name": "ws_events_session_id_idx", "columns": ["app_session_id", "id"], "isUnique": false },
+        "ws_events_created_at_idx": { "name": "ws_events_created_at_idx", "columns": ["created_at"], "isUnique": false }
+      },
+      "foreignKeys": {
+        "ws_events_app_session_id_app_sessions_id_fk": { "name": "ws_events_app_session_id_app_sessions_id_fk", "tableFrom": "ws_events", "tableTo": "app_sessions", "columnsFrom": ["app_session_id"], "columnsTo": ["id"], "onDelete": "cascade", "onUpdate": "no action" }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    }
+  },
+  "views": {},
+  "enums": {},
+  "_meta": {
+    "schemas": {},
+    "tables": {},
+    "columns": {}
+  },
+  "internal": {
+    "indexes": {}
+  }
+}

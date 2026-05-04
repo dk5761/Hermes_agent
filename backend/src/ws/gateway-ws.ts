@@ -27,6 +27,8 @@ import type { ChatRunTimer } from "../observability/chat-run-timer.js";
 import type { LiveActivityPusher } from "../push/apns-live-activity.js";
 import type { ChatCompleteNotifier } from "../push/chat-complete.js";
 import { liveActivityTokens } from "../db/schema.js";
+import type { IosToolsRouter } from "./ios-tools-router.js";
+import { type IosToolResultFrame } from "../types/ios-tools.js";
 
 export interface GatewayWsDeps {
   db: Db;
@@ -40,6 +42,9 @@ export interface GatewayWsDeps {
   liveActivityPusher?: LiveActivityPusher;
   // Chat-complete Expo push notifier. Optional so tests can omit it.
   chatCompleteNotifier?: ChatCompleteNotifier;
+  // Phase 4 (iOS native tools): request/response correlator. Optional so
+  // existing tests and deployments without the feature continue to work.
+  iosToolsRouter?: IosToolsRouter;
 }
 
 // Reverse map hermes_session_id -> app_session_id, populated lazily as
@@ -123,9 +128,24 @@ type ClientFrame =
   | { type: "clarify.respond"; requestId: string; text: string }
   | { type: "sudo.respond"; requestId: string; choice: string }
   | { type: "secret.respond"; requestId: string; value: string }
-  | { type: "ping" };
+  | { type: "ping" }
+  // Phase 4: iOS native tools — result frames sent mobile → gateway.
+  | IosToolResultFrame;
 
-const clientFrameSchema: z.ZodType<ClientFrame> = z.discriminatedUnion("type", [
+const iosToolResultFrameSchema = z.object({
+  type: z.literal("ios_tool_result"),
+  call_id: z.string().min(1),
+  ok: z.boolean(),
+  result: z.record(z.unknown()).optional(),
+  error: z
+    .object({
+      code: z.string().min(1),
+      message: z.string(),
+    })
+    .optional(),
+});
+
+const clientFrameSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("resume"), lastEventId: z.number().int().nonnegative() }),
   z.object({
     type: z.literal("chat.send"),
@@ -144,6 +164,7 @@ const clientFrameSchema: z.ZodType<ClientFrame> = z.discriminatedUnion("type", [
   z.object({ type: z.literal("sudo.respond"), requestId: z.string(), choice: z.string() }),
   z.object({ type: z.literal("secret.respond"), requestId: z.string(), value: z.string() }),
   z.object({ type: z.literal("ping") }),
+  iosToolResultFrameSchema,
 ]);
 
 export async function registerGatewayWsRoute(
@@ -220,6 +241,7 @@ class GatewayClientHandler {
   private readonly log: AppLogger;
   private detachUpstream: (() => void) | null = null;
   private detachSubscribe: (() => void) | null = null;
+  private detachIosTools: (() => void) | null = null;
   private appSessionId: string | null = null;
   private userId: string | null = null;
 
@@ -262,6 +284,12 @@ class GatewayClientHandler {
 
     this.userId = user.id;
     this.appSessionId = appSessionId;
+
+    // Register with the iOS tools router so tool call frames can be forwarded
+    // to this WS and results correlated back to pending calls.
+    if (this.deps.iosToolsRouter) {
+      this.detachIosTools = this.deps.iosToolsRouter.registerWs(user.id, this.socket);
+    }
 
     // Acquire upstream WS slot for this app session (refcount-based).
     const acquired = this.deps.wsPool.acquire(appSessionId);
@@ -338,6 +366,11 @@ class GatewayClientHandler {
         return;
       case "ping":
         this.sendControl("ack", { pong: true });
+        return;
+      case "ios_tool_result":
+        if (this.deps.iosToolsRouter) {
+          this.deps.iosToolsRouter.onResult(frame);
+        }
         return;
     }
   }
@@ -827,6 +860,10 @@ class GatewayClientHandler {
   }
 
   private cleanup(): void {
+    if (this.detachIosTools) {
+      this.detachIosTools();
+      this.detachIosTools = null;
+    }
     if (this.detachSubscribe) {
       this.detachSubscribe();
       this.detachSubscribe = null;

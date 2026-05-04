@@ -108,6 +108,12 @@ const envSchema = z
     RATE_LIMIT_UPLOAD_MAX: z.coerce.number().int().positive().default(60),
     RATE_LIMIT_UPLOAD_WINDOW_MS: z.coerce.number().int().positive().default(60_000),
 
+    // Phase 4 (iOS native tools): shared bearer token used by the MCP stdio
+    // server (Phase 5) to authenticate POST /internal/ios-tool requests.
+    // Must be at least 16 characters. Generate once:
+    //   node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+    IOS_MCP_TOKEN: z.string().min(16, "IOS_MCP_TOKEN must be >= 16 chars").optional(),
+
     // Phase 7: cleanup sweepers. Disabling is for tests / first-boot diagnostics.
     CLEANUP_ENABLED: z
       .union([z.literal("true"), z.literal("false")])

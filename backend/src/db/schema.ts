@@ -238,6 +238,31 @@ export const userPrefs = sqliteTable("user_prefs", {
   updatedAt: integer("updated_at").notNull(),
 });
 
+// Server-side persisted queue for iOS tool calls when the mobile app is
+// unreachable. Drained on the next WS reconnect for a given user.
+// MAX_QUEUE_AGE_S (default 6h) is enforced at drain time; purgeOlderThan()
+// is called periodically by the IosToolsRouter sweeper.
+export const iosToolQueue = sqliteTable(
+  "ios_tool_queue",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    tool: text("tool").notNull(),
+    argsJson: text("args_json").notNull(),
+    queuedAt: integer("queued_at").notNull(),
+    attempts: integer("attempts").notNull().default(0),
+    lastAttemptAt: integer("last_attempt_at"),
+  },
+  (t) => ({
+    userIdx: index("ios_tool_queue_user_idx").on(t.userId),
+    queuedAtIdx: index("ios_tool_queue_queued_at_idx").on(t.queuedAt),
+  }),
+);
+
+export type IosToolQueueRow = typeof iosToolQueue.$inferSelect;
+
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
 export type RefreshToken = typeof refreshTokens.$inferSelect;
