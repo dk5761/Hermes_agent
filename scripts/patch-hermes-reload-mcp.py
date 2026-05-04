@@ -52,20 +52,18 @@ import argparse
 import sys
 from pathlib import Path
 
-DEFAULT_TARGET = Path("/usr/local/lib/hermes-agent/gateway/run.py")
+DEFAULT_HERMES_LIB = Path("/usr/local/lib/hermes-agent")
 
-ANCHOR = "            new_tools = await loop.run_in_executor(None, discover_mcp_tools)"
-
-MARK_START = "            # HERMES_PATCH:reload-mcp-clear-cache:start"
-MARK_END = "            # HERMES_PATCH:reload-mcp-clear-cache:end"
-
-PATCH_BLOCK = f"""\
-{MARK_START}
-            # Custom patch (project: hermes-app). Without this, existing
-            # sessions keep their cached AIAgent (and frozen enabled_toolsets)
-            # forever — new MCP servers added via patch-hermes-config.py
-            # never appear in already-open chats. See
-            # `scripts/patch-hermes-reload-mcp.py` for full context.
+# ─── Patch 1: clear caches on /reload-mcp ────────────────────────────────────
+P1_TARGET = "gateway/run.py"
+P1_ANCHOR = "            new_tools = await loop.run_in_executor(None, discover_mcp_tools)"
+P1_MARK_START = "            # HERMES_PATCH:reload-mcp-clear-cache:start"
+P1_MARK_END = "            # HERMES_PATCH:reload-mcp-clear-cache:end"
+P1_BLOCK = f"""\
+{P1_MARK_START}
+            # Without this, existing sessions keep their cached AIAgent (and
+            # frozen enabled_toolsets) forever — new MCP servers added via
+            # patch-hermes-config.py never appear in already-open chats.
             try:
                 from hermes_cli import config as _hermes_cli_config
                 if hasattr(_hermes_cli_config, "_RAW_CONFIG_CACHE"):
@@ -82,96 +80,120 @@ PATCH_BLOCK = f"""\
                 logger.warning(
                     "HERMES_PATCH: clearing tui_gateway._sessions failed: %s", _exc,
                 )
-{MARK_END}\
+{P1_MARK_END}\
 """
+
+# ─── Patch 2: dashboard discovers MCP tools at startup ───────────────────────
+# Without this, the hermes-dashboard process starts with an empty MCP _tools
+# registry. Chat agents (which run in the dashboard process via tui_gateway)
+# have ZERO MCP tools until the user manually /reload-mcp. That means after
+# every systemd restart, the user has to remember to reload — and the first
+# chat after restart fails with "MCP server offline."
+P2_TARGET = "hermes_cli/main.py"
+P2_ANCHOR = '    embedded_chat = args.tui or os.environ.get("HERMES_DASHBOARD_TUI") == "1"'
+P2_MARK_START = "    # HERMES_PATCH:dashboard-discover-mcp:start"
+P2_MARK_END = "    # HERMES_PATCH:dashboard-discover-mcp:end"
+P2_BLOCK = f"""\
+{P2_MARK_START}
+    # Discover MCP tools in the dashboard process so the chat agent (which
+    # runs in this same process via tui_gateway) sees them on the first
+    # turn after restart. Without this, every restart silently zeroes out
+    # the MCP toolset until the user remembers to /reload-mcp.
+    try:
+        from tools.mcp_tool import discover_mcp_tools
+        discover_mcp_tools()
+    except Exception as _exc:
+        import logging as _logging
+        _logging.getLogger(__name__).warning(
+            "HERMES_PATCH: dashboard startup MCP discover failed: %s", _exc,
+        )
+{P2_MARK_END}\
+"""
+
+PATCHES = [
+    {
+        "name": "reload-mcp-clear-cache",
+        "target": P1_TARGET,
+        "anchor": P1_ANCHOR,
+        "mark_start": P1_MARK_START,
+        "mark_end": P1_MARK_END,
+        "block": P1_BLOCK,
+    },
+    {
+        "name": "dashboard-discover-mcp",
+        "target": P2_TARGET,
+        "anchor": P2_ANCHOR,
+        "mark_start": P2_MARK_START,
+        "mark_end": P2_MARK_END,
+        "block": P2_BLOCK,
+    },
+]
 
 # ─── implementation ──────────────────────────────────────────────────────────
 
 
-def is_patched(src: str) -> bool:
-    return MARK_START in src and MARK_END in src
+def is_patched(src: str, p: dict) -> bool:
+    return p["mark_start"] in src and p["mark_end"] in src
 
 
-def apply_patch(src: str) -> str | None:
+def apply_patch(src: str, p: dict) -> str | None:
     """Return patched source, or None if the anchor isn't found."""
-    if ANCHOR not in src:
+    if p["anchor"] not in src:
         return None
-    return src.replace(ANCHOR, ANCHOR + "\n" + PATCH_BLOCK, 1)
+    return src.replace(p["anchor"], p["anchor"] + "\n" + p["block"], 1)
 
 
-def remove_patch(src: str) -> str:
-    """Strip the patch block. Returns original-looking source."""
-    if not is_patched(src):
+def remove_patch(src: str, p: dict) -> str:
+    if not is_patched(src, p):
         return src
-    start = src.index(MARK_START)
-    end = src.index(MARK_END) + len(MARK_END)
-    # Also drop the leading newline we inserted before MARK_START.
+    start = src.index(p["mark_start"])
+    end = src.index(p["mark_end"]) + len(p["mark_end"])
     if start > 0 and src[start - 1] == "\n":
         start -= 1
     return src[:start] + src[end:]
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--target",
-        type=Path,
-        default=DEFAULT_TARGET,
-        help=f"Path to gateway/run.py (default: {DEFAULT_TARGET})",
-    )
-    parser.add_argument(
-        "--check",
-        action="store_true",
-        help="Dry-run; report state and exit. 0 = already patched, 1 = needs patch, 2 = anchor missing",
-    )
-    parser.add_argument(
-        "--unpatch",
-        action="store_true",
-        help="Remove the patch (restores upstream source for our patch block only)",
-    )
-    args = parser.parse_args()
-
-    target: Path = args.target
+def process_patch(p: dict, hermes_lib: Path, *, check: bool, unpatch: bool) -> int:
+    target = hermes_lib / p["target"]
     if not target.exists():
-        print(f"[patch] target not found: {target}", file=sys.stderr)
-        print("        Pass --target to override, or check Hermes is installed.", file=sys.stderr)
+        print(f"[patch:{p['name']}] target not found: {target}", file=sys.stderr)
         return 3
 
     src = target.read_text(encoding="utf-8")
 
-    if args.check:
-        if is_patched(src):
-            print(f"[patch] {target}: already patched")
+    if check:
+        if is_patched(src, p):
+            print(f"[patch:{p['name']}] {target}: already patched")
             return 0
-        if ANCHOR not in src:
-            print(f"[patch] {target}: anchor missing — Hermes may have refactored", file=sys.stderr)
-            print(f"        Anchor: {ANCHOR.strip()!r}", file=sys.stderr)
+        if p["anchor"] not in src:
+            print(f"[patch:{p['name']}] {target}: anchor missing", file=sys.stderr)
+            print(f"        Anchor: {p['anchor'].strip()!r}", file=sys.stderr)
             return 2
-        print(f"[patch] {target}: needs patch")
+        print(f"[patch:{p['name']}] {target}: needs patch")
         return 1
 
-    if args.unpatch:
-        if not is_patched(src):
-            print(f"[patch] {target}: not currently patched (no-op)")
+    if unpatch:
+        if not is_patched(src, p):
+            print(f"[patch:{p['name']}] {target}: not patched (no-op)")
             return 0
-        new_src = remove_patch(src)
+        new_src = remove_patch(src, p)
         backup = target.with_suffix(target.suffix + ".bak")
         backup.write_text(src, encoding="utf-8")
         target.write_text(new_src, encoding="utf-8")
-        print(f"[patch] unpatched {target} (backup: {backup})")
+        print(f"[patch:{p['name']}] unpatched {target}")
         return 0
 
-    if is_patched(src):
-        print(f"[patch] {target}: already patched")
+    if is_patched(src, p):
+        print(f"[patch:{p['name']}] {target}: already patched")
         return 0
 
-    new_src = apply_patch(src)
+    new_src = apply_patch(src, p)
     if new_src is None:
-        print(f"[patch] {target}: anchor not found", file=sys.stderr)
-        print(f"        Looked for: {ANCHOR.strip()!r}", file=sys.stderr)
+        print(f"[patch:{p['name']}] {target}: anchor not found", file=sys.stderr)
+        print(f"        Looked for: {p['anchor'].strip()!r}", file=sys.stderr)
         print(
-            "        Hermes likely changed `_execute_mcp_reload`. Read the function "
-            "and update ANCHOR / PATCH_BLOCK in this script.",
+            f"        Hermes refactored {p['target']}. "
+            f"Update PATCHES[{p['name']!r}] in this script.",
             file=sys.stderr,
         )
         return 4
@@ -179,11 +201,42 @@ def main() -> int:
     backup = target.with_suffix(target.suffix + ".bak")
     backup.write_text(src, encoding="utf-8")
     target.write_text(new_src, encoding="utf-8")
-    print(f"[patch] applied to {target} (backup: {backup})")
-    print()
-    print("Next: restart services so the new code is loaded.")
-    print("  systemctl restart hermes-dashboard hermes-gateway hermes-cron")
+    print(f"[patch:{p['name']}] applied to {target}")
     return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--hermes-lib",
+        type=Path,
+        default=DEFAULT_HERMES_LIB,
+        help=f"Path to hermes-agent install root (default: {DEFAULT_HERMES_LIB})",
+    )
+    parser.add_argument("--check", action="store_true")
+    parser.add_argument("--unpatch", action="store_true")
+    args = parser.parse_args()
+
+    if not args.hermes_lib.exists():
+        print(f"[patch] hermes-lib not found: {args.hermes_lib}", file=sys.stderr)
+        return 3
+
+    overall = 0
+    for p in PATCHES:
+        rc = process_patch(p, args.hermes_lib, check=args.check, unpatch=args.unpatch)
+        # In --check mode, 1 means "needs patch" — propagate as worst-case.
+        # 2/3/4 mean error — treat as failures.
+        if rc != 0:
+            if args.check and rc == 1:
+                overall = max(overall, 1)
+            else:
+                overall = max(overall, rc)
+
+    if not args.check and not args.unpatch and overall == 0:
+        print()
+        print("Next: restart services so the new code is loaded.")
+        print("  systemctl restart hermes-dashboard hermes-gateway hermes-cron")
+    return overall
 
 
 if __name__ == "__main__":
