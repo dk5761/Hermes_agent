@@ -364,10 +364,23 @@ else
 fi
 
 # ─── Step 10: hermes config patches ──────────────────────────────────────────
-step "Step 10/11: patch-hermes-config.py + patch-hermes-reload-mcp.py"
+step "Step 10/11: patch-hermes-config.py + patch-hermes-reload-mcp.py + skills"
 
 python3 "${REPO_ROOT}/scripts/patch-hermes-config.py" --config "${HERMES_HOME}/config.yaml"
 python3 "${REPO_ROOT}/scripts/patch-hermes-reload-mcp.py" || c_yellow "  reload-mcp source patch skipped (anchor may have moved — non-fatal)"
+
+# Deploy custom skills to ~/.hermes/skills/. Currently: manage-mcp (teaches
+# the agent to add/remove MCP servers end-to-end when the user asks).
+if [[ -d "${REPO_ROOT}/scripts/skills" ]]; then
+  for src in "${REPO_ROOT}"/scripts/skills/*/SKILL.md; do
+    [[ -f "$src" ]] || continue
+    name="$(basename "$(dirname "$src")")"
+    dest="${HERMES_HOME}/skills/${name}"
+    mkdir -p "$dest"
+    cp "$src" "$dest/SKILL.md"
+    ok "deployed skill: ${name}"
+  done
+fi
 
 # ─── Step 11: start + verify ─────────────────────────────────────────────────
 step "Step 11/11: start services + verify"

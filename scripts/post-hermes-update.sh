@@ -51,6 +51,18 @@ python3 "${REPO_ROOT}/scripts/patch-hermes-config.py" --config "${HERMES_HOME}/c
 step "Step 2b/4: patch-hermes-reload-mcp.py (Python source — clear caches on /reload-mcp)"
 python3 "${REPO_ROOT}/scripts/patch-hermes-reload-mcp.py" || c_yellow "  (non-fatal — anchor may have moved upstream; review the script)"
 
+step "Step 2c/4: deploy custom skills"
+if [[ -d "${REPO_ROOT}/scripts/skills" ]]; then
+  for src in "${REPO_ROOT}"/scripts/skills/*/SKILL.md; do
+    [[ -f "$src" ]] || continue
+    name="$(basename "$(dirname "$src")")"
+    dest="${HERMES_HOME}/skills/${name}"
+    mkdir -p "$dest"
+    cp "$src" "$dest/SKILL.md"
+    ok "deployed skill: ${name}"
+  done
+fi
+
 # ─── Step 3: restart dashboard + gateway + cron (in order) ───────────────────
 step "Step 3/4: restart hermes-dashboard, hermes-gateway, hermes-cron"
 # `hermes update` (Step 1) deactivates hermes-cron without triggering systemd's
