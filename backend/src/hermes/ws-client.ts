@@ -73,6 +73,45 @@ export class HermesWsClient {
   }
 
   private async connectInner(): Promise<void> {
+    try {
+      await this.attemptConnect();
+    } catch (err) {
+      // Hermes 0.12+ rotates its in-memory _SESSION_TOKEN on every dashboard
+      // restart. Our cached `state.token` then points at the previous session,
+      // and Hermes rejects the WS upgrade with a non-101 status — which the
+      // undici WebSocket surfaces as a generic onerror, not an HTTP 401. So
+      // the existing 401-only refresh path never triggers and the gateway
+      // stays stuck on the stale token until manually restarted. Re-scrape
+      // the token once and retry on any upstream_ws_open_failed; if it still
+      // fails, fall through to the existing reconnect/backoff path.
+      if (this.shouldRefreshOnError(err)) {
+        this.log.warn(
+          { err: String(err) },
+          "upstream WS open failed — re-scraping token and retrying once",
+        );
+        try {
+          await this.launcher.refresh();
+        } catch (refreshErr) {
+          this.log.warn(
+            { err: String(refreshErr) },
+            "launcher.refresh() failed; surfacing original WS error",
+          );
+          throw err;
+        }
+        await this.attemptConnect();
+        return;
+      }
+      throw err;
+    }
+  }
+
+  private shouldRefreshOnError(err: unknown): boolean {
+    if (this.launcher.getMode() !== "external") return false;
+    const msg = err instanceof Error ? err.message : String(err);
+    return msg.includes("upstream_ws_open_failed");
+  }
+
+  private async attemptConnect(): Promise<void> {
     const state = await this.launcher.getState();
     const url = new URL("/api/ws", state.baseUrl);
     url.searchParams.set("token", state.token);
