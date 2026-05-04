@@ -5,7 +5,7 @@ import "../global.css";
 
 import { useEffect } from "react";
 import { ActivityIndicator, AppState, StyleSheet, View } from "react-native";
-import { Slot } from "expo-router";
+import { Slot, useRouter } from "expo-router";
 import {
   MutationCache,
   QueryClient,
@@ -25,6 +25,7 @@ import { useAppLock } from "@/state/app-lock";
 import { AppLockOverlay } from "@/components/AppLockOverlay";
 import { reconcileOnLaunch } from "@/live-activity/bridge";
 import { registerPushTokenWithBackend } from "@/notifications/register";
+import { setupNotificationListeners } from "@/notifications/handler";
 import { BG, MUTED } from "@/config";
 import { ThemeProvider, useAppFonts } from "@/theme";
 import { ToastProvider, showToast } from "@/components/ui";
@@ -59,6 +60,7 @@ function AuthGate() {
   const hydrated = useAuthStore((s) => s.hydrated);
   const hydrate = useAuthStore((s) => s.hydrate);
   const isAuthed = useAuthStore((s) => Boolean(s.accessToken && s.user));
+  const router = useRouter();
 
   useEffect(() => {
     void hydrate();
@@ -84,6 +86,16 @@ function AuthGate() {
       // and the user can retry via the Notifications settings screen.
     });
   }, [hydrated, isAuthed]);
+
+  // Notification listeners — without these, tapping a push (cron output,
+  // chat_complete) does nothing. Mounted once after hydration so the cold-
+  // start replay (getLastNotificationResponseAsync) fires after the router
+  // is ready to accept a push().
+  useEffect(() => {
+    if (!hydrated) return;
+    const handle = setupNotificationListeners({ router, queryClient });
+    return () => handle.remove();
+  }, [hydrated, router]);
 
   // Re-arm the app lock whenever the app leaves foreground; on return the
   // overlay auto-prompts FaceID/TouchID.
