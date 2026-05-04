@@ -1,6 +1,6 @@
 # iOS Native Tools — Phase-by-Phase Plan
 
-**Status:** Design + plan. Not started. Captured 2026-05-04.
+**Status:** Design + plan. Not started. Captured 2026-05-04. Open questions resolved 2026-05-04 (see §5 — Locked decisions).
 
 This document plans Option 3 from `IOS_INTEGRATION_OPTIONS.md` (or rather: from the chat conversation on 2026-05-04 — see git log for context). Goal: let the Hermes agent on the VPS read/write iOS-native data (Calendar, Reminders, Notifications, arbitrary Shortcuts) by routing tool calls through the existing mobile-app WS connection to EventKit running on-device.
 
@@ -65,31 +65,37 @@ ios.shortcut.run(shortcut_name, input?: string)                     → {result_
 - **Gateway ↔ mobile**: existing JWT auth on the WS connection (already in place).
 - **Mobile → EventKit**: iOS permission prompts on first call per category (Calendar, Reminders, Notifications, Contacts).
 
-### Availability semantics
+### Availability + wake-and-queue semantics
 
-The mobile app is not always online. iOS aggressively suspends backgrounded apps. The tools must report their own availability:
+The mobile app is not always foreground. Behavior:
 
-- `online` — app is foregrounded, WS connected → tool call executes immediately
-- `degraded` — app is backgrounded but WS still alive → tool call queued, executed when foreground (next user-app interaction)
-- `offline` — no WS → tool returns `{error: "offline", suggestion: "use push notification with deep link"}`
+1. **WS active** → tool call goes through immediately (sub-second).
+2. **WS inactive** → gateway sends a **silent APNs push** (`content-available: 1`, `apns-priority: 10`) to wake the app. iOS gives the app a ~30-second background window to reconnect WS and process the call.
+3. **Wake succeeds within timeout (default 25s)** → tool call goes through. User never sees a notification.
+4. **Wake fails / phone offline / iOS throttled** → gateway server-side **queue** persists the call, replays to the app on next WS connect (whenever the user next opens the app or iOS lets it wake). Calls older than `MAX_QUEUE_AGE_S` (default 6h) are dropped silently.
+5. **The agent fails quietly** when all of the above fails — no push-deep-link fallback. Tool returns `error.code = "offline"`, agent moves on or notes it in chat.
 
-The agent should learn (via MEMORY.md) to fall back to a push notification deep-link when iOS tools are offline.
+**Why no push-deep-link fallback:** keeps the agent's UX simple. If the call was important enough to do, the user will trigger it again themselves. Less notification noise.
+
+**Silent push budget:** iOS rate-limits silent pushes (~3/hour sustained). Cron-driven tool calls within this budget; bursty (e.g., agent loop) may exceed and get queued instead of waking. Acceptable.
 
 ---
 
 ## 3. Phases
 
-### Phase 0 — Spike + risk vetting (1 day)
+### Phase 0 — Spike + risk vetting (0.5 day — reduced)
 
-**Goal:** confirm the unknowns before committing to the full plan.
+**Goal:** confirm the remaining unknowns before committing to the full plan.
 
-Tasks:
-- Verify EAS dev build supports custom native modules (it does, but confirm with our exact Expo SDK 55 setup)
-- Verify EventKit framework can be linked from an Expo module (it can; `expo-calendar` exists as a precedent — we'll fork its approach)
-- Verify Reminders API access works on iOS 17+ (Apple changed authorization in iOS 17; need `EKEventStore.requestFullAccessToReminders(...)`)
-- Decide: pure native module vs. fork `expo-calendar` and add Reminders + Shortcuts. The latter saves ~2 days.
+Already settled (per locked decisions in §5):
+- ✅ EAS dev builds — already the dev workflow.
+- ✅ Custom native modules supported in our Expo SDK 55 setup (we already ship `HermesLiveActivity` widget, proves it works).
 
-Acceptance: a 50-line test app on dev build that prompts Calendar permission and reads back today's events. Proves the path works on user's device.
+Still to verify:
+- Reminders API access on iOS 17+ (Apple changed authorization; need `EKEventStore.requestFullAccessToReminders(...)`)
+- Decide: pure native module vs. fork `expo-calendar`. Forking saves ~2 days for Calendar but Reminders is custom either way. **Recommend: pure native module** — keeps everything in one place, and the `expo-calendar` API is opinionated in ways that don't fit our agent-driven flow.
+
+Acceptance: a 50-line test app on the existing dev client build that prompts Calendar permission and reads back today's events. Proves the path works on user's device.
 
 Files: throwaway `frontend/spike-ios-tools/` — don't commit.
 
@@ -162,15 +168,43 @@ Acceptance: unit tests + a manual playground page that exercises every tool thro
 
 ---
 
-### Phase 4 — Backend WS routing (2 days)
+### Phase 4 — Backend WS routing + wake-and-queue (3 days)
 
 Files:
 ```
 backend/src/ws/gateway-ws.ts                       # extend existing
 backend/src/ws/ios-tools-router.ts                 # new — request/response correlator
 backend/src/routes/internal-ios-tools.ts           # new — POST /internal/ios-tool
+backend/src/ios-tools/queue.ts                     # new — server-side persisted queue
+backend/src/ios-tools/silent-push.ts               # new — APNs silent-wake helper
 backend/src/types/ios-tools.ts                     # shared types with frontend
 ```
+
+Wake-and-queue flow added on top of plain WS routing. When the router gets a tool call:
+
+```ts
+async call(userId, tool, args, timeoutMs = 30_000) {
+  const ws = this.activeWs.get(userId);
+  if (ws?.readyState === ws.OPEN) {
+    return this.sendOverWs(ws, tool, args, timeoutMs);
+  }
+
+  // No live WS — try silent push to wake the app.
+  await silentPush(userId, { reason: "ios_tool_wake", call_id });
+
+  // Wait up to 25s for the WS to reconnect (leaving ~5s buffer
+  // before iOS' ~30s background window expires).
+  const ws2 = await this.waitForWs(userId, 25_000);
+  if (ws2) return this.sendOverWs(ws2, tool, args, timeoutMs);
+
+  // Couldn't wake — enqueue. Replays on next WS connect, drops
+  // after MAX_QUEUE_AGE_S.
+  await this.queue.enqueue(userId, { tool, args, queued_at: Date.now() });
+  throw new IosToolError("queued", "phone unreachable; queued for next foreground");
+}
+```
+
+Note `queued` is a distinct error code from `offline` — the call did persist, just hasn't fired yet. The agent's MEMORY.md will say: treat `queued` as success-eventually, treat `offline` as definitively failed.
 
 New WS frame types (gateway ↔ mobile):
 
@@ -292,9 +326,14 @@ Add to `/root/.hermes/memories/MEMORY.md`:
 
 ```
 §
-iOS native tools (Calendar / Reminders / Notifications / Shortcuts) are exposed via the `mcp-ios-tools` toolset. The phone may be offline — if a call returns error code "offline", DO NOT retry. Send a push notification with deep-link instead so the user can perform the action when convenient. Default calendar: "Work" (set in user's iCloud). Default reminder list: "Inbox". For things due today specifically, use list "Today".
+iOS native tools (Calendar / Reminders / Notifications / Shortcuts) are exposed via the `mcp-ios-tools` toolset. The phone may be offline.
+- Error code "offline": DO NOT retry. Note in chat that the action couldn't complete; user can re-ask later. Do not fall back to push notifications.
+- Error code "queued": treat as success-eventually — the call persisted server-side and will fire when the phone reconnects.
+- Default calendar: "Work" (in user's iCloud). Default reminder list: "Inbox". For things due today specifically, use list "Today".
 §
 When asked to schedule, prefer ios.calendar.add_event for time-bound items, ios.reminders.add for tasks. If the user says "remind me at 4pm", that's a reminder with a due_date, not a calendar block. Calendar events are for "block 2-3pm for X" / "schedule meeting with Y on Z".
+§
+ios.shortcut.run can invoke ANY shortcut on the user's phone. The user has explicitly opted into this — no whitelist. Be conservative: only invoke a shortcut if the name clearly matches the user's intent. If unsure, list shortcut names back and ask which one. Never invent shortcut names.
 ```
 
 Re-run `patch-hermes-config.py` on local + VPS. Restart `hermes-dashboard` + `hermes-gateway` (token rotation handled by `post-hermes-update.sh`).
@@ -348,18 +387,18 @@ Doc covers:
 
 | Phase | Days |
 |---|---|
-| 0 — Spike | 1 |
+| 0 — Spike | 0.5 |
 | 1 — Native module read | 2 |
 | 2 — Native module write | 1 |
 | 3 — JS bridge | 1 |
-| 4 — Backend WS routing | 2 |
+| 4 — Backend WS routing + wake-and-queue | 3 |
 | 5 — MCP stdio server | 2 |
 | 6 — Hermes config + memory | 0.5 |
 | 7 — Integration tests + docs | 1 |
 | 8 — Deploy | 0.5 |
-| **Total** | **~11 days** |
+| **Total** | **~11.5 days** |
 
-Realistic with focus, single-developer. Add 50% buffer for surprises (iOS permission API changes, Expo SDK quirks, EAS build issues) → **~16 calendar days** end-to-end.
+Realistic with focus, single-developer. Add 50% buffer for surprises (iOS permission API changes, Expo SDK quirks, silent-push throttling tuning) → **~17 calendar days** end-to-end.
 
 ---
 
@@ -384,12 +423,14 @@ Realistic with focus, single-developer. Add 50% buffer for surprises (iOS permis
 9. **Calendar sync delay.** EventKit writes are local; iCloud Calendar may take 0–30s to propagate to Watch/Mac. Tools return immediately; let cloud sync settle on its own.
 10. **Tools that need both EventKit + UI** (e.g., editing an event in the Calendar UI). Out of scope for v1 — we don't open native UIs from agent calls.
 
-### Open questions for the user (revisit before starting)
+### Locked decisions (resolved 2026-05-04)
 
-- **Q1**: Are you comfortable with EAS dev builds becoming the dev workflow (vs. Expo Go)? Native modules can't run in Expo Go.
-- **Q2**: How aggressive should the offline fallback be? Always send push notification when offline, or fail quietly if the agent can retry later via cron?
-- **Q3**: Cron jobs on VPS hitting iOS tools while phone is asleep — how should that work? Skip silently? Queue for next foreground? Use APNs voip-style wakeup?
-- **Q4**: For `ios.shortcut.run`, do you want to predefine a whitelist of shortcuts (safer) or allow agent to invoke any (more flexible)?
+- **D1 — EAS dev builds:** already the workflow. No Expo Go regression risk.
+- **D2 — Offline fallback:** **fail quietly**. Tool returns `offline` error; agent notes it in chat and moves on. No push-deep-link fallback path to build.
+- **D3 — Cron + asleep phone:** **wake if possible, else queue**. Gateway sends silent APNs (`content-available: 1`) before the call, waits up to 25s for WS, falls back to server-side persisted queue with `MAX_QUEUE_AGE_S = 6h` (configurable).
+- **D4 — `ios.shortcut.run`:** **no whitelist**. Agent may invoke any shortcut by name. MEMORY.md entry instructs the agent to ask if the shortcut name is ambiguous and never invent names.
+
+These collapse Phase 0 risks #1 (EAS) and dramatically simplify the offline UX. Phase 4 grows from 2 → 3 days to absorb the wake-and-queue mechanism.
 
 ---
 
