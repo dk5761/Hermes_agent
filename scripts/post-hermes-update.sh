@@ -48,12 +48,21 @@ if [[ ! -f "${HERMES_HOME}/config.yaml" ]]; then
 fi
 python3 "${REPO_ROOT}/scripts/patch-hermes-config.py" --config "${HERMES_HOME}/config.yaml"
 
-# ─── Step 3: restart dashboard + gateway (in order) ──────────────────────────
-step "Step 3/4: restart hermes-dashboard then hermes-gateway"
+# ─── Step 3: restart dashboard + gateway + cron (in order) ───────────────────
+step "Step 3/4: restart hermes-dashboard, hermes-gateway, hermes-cron"
+# `hermes update` (Step 1) deactivates hermes-cron without triggering systemd's
+# Restart=on-failure (clean exit). MCP servers live under hermes-cron, so
+# without this restart the agent has zero MCP tools after every update.
 systemctl restart hermes-dashboard
 sleep 3
 systemctl restart hermes-gateway
-ok "both restarted"
+sleep 2
+if systemctl list-unit-files hermes-cron.service >/dev/null 2>&1; then
+  systemctl restart hermes-cron
+  ok "all three restarted"
+else
+  ok "dashboard + gateway restarted (hermes-cron not installed)"
+fi
 
 # ─── Step 4: verify ──────────────────────────────────────────────────────────
 step "Step 4/4: verify"
@@ -72,6 +81,15 @@ if ! systemctl is-active --quiet hermes-gateway; then
   exit 1
 fi
 ok "hermes-gateway active"
+
+if systemctl list-unit-files hermes-cron.service >/dev/null 2>&1; then
+  if ! systemctl is-active --quiet hermes-cron; then
+    c_red "  hermes-cron not active (MCP servers + cron jobs won't fire):"
+    systemctl --no-pager --lines=10 status hermes-cron | head -15
+    exit 1
+  fi
+  ok "hermes-cron active"
+fi
 
 # Local health check via gateway
 local_health="$(curl -sS -o /dev/null -m 5 -w '%{http_code}' http://127.0.0.1:8080/health || echo 000)"
