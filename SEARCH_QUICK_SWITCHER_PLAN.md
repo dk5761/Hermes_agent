@@ -185,13 +185,18 @@ Add `searchText: text("search_text")` to `chatHistory`.
 export async function backfillSearchIndex(db: Db, log: AppLogger): Promise<void> {
   // 1. Read all chat_history rows where search_text IS NULL.
   // 2. For each: parse payload_json, extract human-readable text per kind.
-  // 3. UPDATE chat_history SET search_text = ... WHERE id = ?.
-  //    Triggers populate FTS automatically.
-  // 4. Log progress per 1k rows.
+  // 3. Drop the AFTER UPDATE trigger temporarily, then either:
+  //    a) UPDATE chat_history SET search_text = ? AND directly INSERT INTO
+  //       chat_history_fts(rowid, app_session_id, search_text), OR
+  //    b) Use INSERT INTO chat_history_fts directly (skips trigger entirely).
+  //    Without this, every UPDATE fires delete-then-insert against FTS —
+  //    O(2N) FTS operations on first deploy with 100k+ rows.
+  // 4. Recreate the AFTER UPDATE trigger after backfill completes.
+  // 5. Batch in transactions of 1k rows. Log progress every 5k.
 }
 ```
 
-Run on every server boot (idempotent — only touches rows with `search_text IS NULL`).
+Run on every server boot (idempotent — only touches rows with `search_text IS NULL`). On first deploy with a populated DB, the trigger-bypass path is critical for perf.
 
 #### Helper: extract text from payload
 
@@ -216,7 +221,45 @@ function extractSearchableText(kind: string, payload: unknown): string | null { 
 
 All extracted text capped at **16KB** per row (4KB for `reasoning`).
 
-Acceptance: deploy, indexer runs at boot, log shows "indexed N rows" once. Verify with `SELECT count(*) FROM chat_history_fts`.
+**`tool.call` arg extraction:** depth-1 value walk over the `rest` object (after stripping `tool_id`, `duration_s`, `name`), not `JSON.stringify`. Stringify produces `{"todos":[{"id":"1",...}]}` which leaks structural noise (quotes, brackets) into the FTS tokenizer and balloons the index. A depth-1 walk extracts just string values, joined with spaces — see Phase 0 spike's `extractSearchableText` for the surface, then improve in Phase 1.
+
+```ts
+// Phase 1 improvement on top of spike's prototype:
+function flattenToolArgs(rest: Record<string, unknown>): string {
+  const out: string[] = [];
+  for (const v of Object.values(rest)) {
+    if (typeof v === "string") out.push(v);
+    else if (typeof v === "number" || typeof v === "boolean") out.push(String(v));
+    else if (Array.isArray(v)) {
+      for (const item of v) {
+        if (typeof item === "string") out.push(item);
+        else if (item && typeof item === "object") {
+          // Walk one level into objects within arrays (e.g. todos: [{content, ...}])
+          for (const iv of Object.values(item as Record<string, unknown>)) {
+            if (typeof iv === "string") out.push(iv);
+          }
+        }
+      }
+    }
+    // Skip nested objects deeper than 2 levels (rare; not worth indexing)
+  }
+  return out.join(" ");
+}
+```
+
+#### Phase 1 acceptance criteria
+
+The spike validated 1k rows. Phase 1 must additionally verify:
+
+| # | Criterion | How to check |
+|---|---|---|
+| 1 | Migration applies cleanly via Drizzle's runner | `pnpm db:migrate` on a fresh DB exits 0 |
+| 2 | Backfill bypasses trigger overhead on first deploy | Drop+recreate trigger pattern OR direct FTS inserts during backfill |
+| 3 | 100k-row synthetic benchmark p99 < 50ms | Extend the spike's bench harness to 100k synthetic rows; report numbers |
+| 4 | FTS index disk size measured + documented | `du -sh` against the test DB after 100k bench; log in Phase 1 commit message |
+| 5 | Snippet markers are distinctive (not collidable with markdown) | Use `⟨MARK⟩` + `⟨/MARK⟩` (or similar non-HTML strings) in `snippet()` calls. Frontend regex-replaces these exact markers. **NOT `<b>...</b>`** — would collide with assistant markdown bold. |
+| 6 | Boot-time log shows "indexed N rows in Mms" once per cold start | Logger output |
+| 7 | Verify count via `chat_history_fts_docsize` (NOT `chat_history_fts`) | Acceptance grep |
 
 ---
 
@@ -263,8 +306,10 @@ SELECT
   ch.created_at    AS created_at,
   bm25(chat_history_fts) AS rank,
   -- snippet(table, col_idx, ...) — col_idx is 1 (search_text is the 2nd
-  -- col, 0=app_session_id, 1=search_text in our schema)
-  snippet(chat_history_fts, 1, '<b>', '</b>', '…', 12) AS snippet
+  -- col, 0=app_session_id, 1=search_text in our schema).
+  -- Markers are non-HTML so they can't collide with assistant markdown bold.
+  -- Frontend regex-replaces ⟨MARK⟩ + ⟨/MARK⟩ to render highlight spans.
+  snippet(chat_history_fts, 1, '⟨MARK⟩', '⟨/MARK⟩', '…', 12) AS snippet
 FROM chat_history_fts
 JOIN chat_history ch ON ch.id = chat_history_fts.rowid
 JOIN app_sessions s ON s.id = ch.app_session_id
