@@ -22,6 +22,7 @@ import { usePinnedSessions } from "@/state/pinned-sessions";
 import { useNotificationsInbox } from "@/state/notifications-inbox";
 import { useSessionTags } from "@/state/session-tags";
 import { useAppLock } from "@/state/app-lock";
+import { useVoiceSettings } from "@/state/voice-settings";
 import { AppLockOverlay } from "@/components/AppLockOverlay";
 import { reconcileOnLaunch } from "@/live-activity/bridge";
 import { registerPushTokenWithBackend } from "@/notifications/register";
@@ -71,6 +72,7 @@ function AuthGate() {
     void useNotificationsInbox.getState().hydrate();
     void useSessionTags.getState().hydrate();
     void useAppLock.getState().hydrate();
+    void useVoiceSettings.getState().hydrate();
     // Kill any orphan Live Activities from a previous launch — we can't
     // reliably resync their elapsed-time state across an app restart.
     void reconcileOnLaunch();

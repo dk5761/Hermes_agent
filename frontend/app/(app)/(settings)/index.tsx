@@ -34,6 +34,7 @@ import {
   getStorageUsage,
 } from "@/api/settings";
 import { useNotificationsInbox } from "@/state/notifications-inbox";
+import { useVoiceSettings } from "@/state/voice-settings";
 
 function formatBytes(n: number): string {
   if (!n) return "—";
@@ -99,6 +100,15 @@ export default function SettingsIndexScreen() {
   const inboxUnread = useNotificationsInbox(
     (s) => s.items.filter((it) => !it.archived && !it.read).length,
   );
+
+  const voiceEnabled = useVoiceSettings((s) => s.enabled);
+  const voiceMode = useVoiceSettings((s) => s.mode);
+
+  const voiceDetail = voiceEnabled
+    ? voiceMode === "ptt"
+      ? "Hold to talk"
+      : "Tap to toggle"
+    : "Off";
 
   const onLogout = useCallback(async () => {
     if (refreshToken) await apiLogout(refreshToken);
@@ -246,6 +256,13 @@ export default function SettingsIndexScreen() {
               detail={storageDetail}
               chevron
               onPress={goto("/(settings)/storage")}
+            />
+            <ListRow
+              icon="mic"
+              title="Voice input"
+              detail={voiceDetail}
+              chevron
+              onPress={goto("/(settings)/voice")}
             />
             {/* SPIKE — Phase 0 of voice input. Delete this row when Phase 1 lands. */}
             <ListRow
