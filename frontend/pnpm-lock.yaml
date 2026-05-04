@@ -100,6 +100,9 @@ importers:
       expo-sharing:
         specifier: ^55.0.18
         version: 55.0.18(expo@55.0.18)(react-native@0.83.6(patch_hash=4884b5e375a331cf1d6bc06c606472ec4a958852cabe451a423ec392fd7bea3f)(@babel/core@7.29.0)(@react-native/metro-config@0.85.2(@babel/core@7.29.0))(@types/react@19.2.14)(react@19.2.0))(react@19.2.0)
+      expo-speech-recognition:
+        specifier: ^3.1.3
+        version: 3.1.3(expo@55.0.18)(react-native@0.83.6(patch_hash=4884b5e375a331cf1d6bc06c606472ec4a958852cabe451a423ec392fd7bea3f)(@babel/core@7.29.0)(@react-native/metro-config@0.85.2(@babel/core@7.29.0))(@types/react@19.2.14)(react@19.2.0))(react@19.2.0)
       expo-status-bar:
         specifier: ~55.0.5
         version: 55.0.5(react-native@0.83.6(patch_hash=4884b5e375a331cf1d6bc06c606472ec4a958852cabe451a423ec392fd7bea3f)(@babel/core@7.29.0)(@react-native/metro-config@0.85.2(@babel/core@7.29.0))(@types/react@19.2.14)(react@19.2.0))(react@19.2.0)
@@ -2220,6 +2223,13 @@ packages:
 
   expo-sharing@55.0.18:
     resolution: {integrity: sha512-Tqy4LXRLw/UEg5mT7BKhx8y4ReNz8fVldvhHJV5cesH3kRgEerHkYxVwid2vd7v34KnNp0RH1OqUyDlzZTQ9AQ==}
+    peerDependencies:
+      expo: '*'
+      react: '*'
+      react-native: '*'
+
+  expo-speech-recognition@3.1.3:
+    resolution: {integrity: sha512-vluXqggfY2AJcazYITvnV6YSE2rVe5SId5TpdjMC/m6JPUgHCOODrcHJtAQF6OUYl4f2T7oZSceGw6fJCC86Xw==}
     peerDependencies:
       expo: '*'
       react: '*'
@@ -6381,6 +6391,12 @@ snapshots:
       react-native: 0.83.6(patch_hash=4884b5e375a331cf1d6bc06c606472ec4a958852cabe451a423ec392fd7bea3f)(@babel/core@7.29.0)(@react-native/metro-config@0.85.2(@babel/core@7.29.0))(@types/react@19.2.14)(react@19.2.0)
     transitivePeerDependencies:
       - supports-color
+
+  expo-speech-recognition@3.1.3(expo@55.0.18)(react-native@0.83.6(patch_hash=4884b5e375a331cf1d6bc06c606472ec4a958852cabe451a423ec392fd7bea3f)(@babel/core@7.29.0)(@react-native/metro-config@0.85.2(@babel/core@7.29.0))(@types/react@19.2.14)(react@19.2.0))(react@19.2.0):
+    dependencies:
+      expo: 55.0.18(@babel/core@7.29.0)(@expo/dom-webview@55.0.5)(@expo/metro-runtime@55.0.10)(expo-router@55.0.13)(react-dom@19.2.5(react@19.2.0))(react-native-worklets@0.7.4(patch_hash=45c6e4cc97e4bc7d1ebbd4bc8f7a83f0be8821e1dbcf818d82faa0d2f450a94d)(@babel/core@7.29.0)(react-native@0.83.6(patch_hash=4884b5e375a331cf1d6bc06c606472ec4a958852cabe451a423ec392fd7bea3f)(@babel/core@7.29.0)(@react-native/metro-config@0.85.2(@babel/core@7.29.0))(@types/react@19.2.14)(react@19.2.0))(react@19.2.0))(react-native@0.83.6(patch_hash=4884b5e375a331cf1d6bc06c606472ec4a958852cabe451a423ec392fd7bea3f)(@babel/core@7.29.0)(@react-native/metro-config@0.85.2(@babel/core@7.29.0))(@types/react@19.2.14)(react@19.2.0))(react@19.2.0)(typescript@5.9.3)
+      react: 19.2.0
+      react-native: 0.83.6(patch_hash=4884b5e375a331cf1d6bc06c606472ec4a958852cabe451a423ec392fd7bea3f)(@babel/core@7.29.0)(@react-native/metro-config@0.85.2(@babel/core@7.29.0))(@types/react@19.2.14)(react@19.2.0)
 
   expo-status-bar@55.0.5(react-native@0.83.6(patch_hash=4884b5e375a331cf1d6bc06c606472ec4a958852cabe451a423ec392fd7bea3f)(@babel/core@7.29.0)(@react-native/metro-config@0.85.2(@babel/core@7.29.0))(@types/react@19.2.14)(react@19.2.0))(react@19.2.0):
     dependencies:
