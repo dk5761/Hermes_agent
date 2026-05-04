@@ -42,21 +42,19 @@ DESIRED_MCP_SERVERS: dict[str, dict] = {
         "connect_timeout": 30,
     },
     # iOS native tools (Calendar / Reminders / Notifications / Shortcuts).
-    # Routes via the Fastify gateway → user's mobile app WS → EventKit.
+    # Routes via Fastify gateway → user's mobile app WS → EventKit.
     #
-    # Required env (set in `/root/.hermes/.env` so Hermes parent process loads
-    # them and spawned child inherits — Hermes does NOT do ${VAR} substitution
-    # in this `env:` block, so listing them here would pass literal strings):
+    # Spawned via a bash wrapper because Hermes neither inherits parent env
+    # nor expands ${VAR} placeholders in the `env:` block. The wrapper
+    # sources $HERMES_HOME/.env at spawn time and execs the Node MCP server.
+    #
+    # Required env in `/root/.hermes/.env` (rotation: edit .env, restart):
     #   IOS_MCP_TOKEN=<32-byte hex, must match backend/.env>
     #   IOS_MCP_USER_ID=<gateway DB user.id>
+    #   GATEWAY_URL=http://127.0.0.1:8080
     "ios-tools": {
-        "command": "node",
-        "args": ["/root/repos/Hermes_agent/backend/dist/src/mcp/ios-tools-stdio.js"],
-        # Only static values here. IOS_MCP_TOKEN + IOS_MCP_USER_ID inherit
-        # from Hermes' parent process env. See Hermes `~/.hermes/.env`.
-        "env": {
-            "GATEWAY_URL": "http://127.0.0.1:8080",
-        },
+        "command": "/root/repos/Hermes_agent/scripts/spawn-ios-tools-mcp.sh",
+        "args": [],
         "timeout": 30,
         "connect_timeout": 10,
     },
