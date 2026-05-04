@@ -77,9 +77,14 @@ ssh root@<vps>
 cd /root/repos/Hermes_agent && git pull
 
 # 2. Add to /root/.hermes/.env:
+#    Hermes does NOT substitute ${VAR} in mcp_servers.env config blocks —
+#    so these MUST live in /root/.hermes/.env and be inherited by the
+#    spawned child process. (GATEWAY_URL is also there as a redundant safety;
+#    the patch-hermes-config.py also writes it into the env: block.)
 cat >> /root/.hermes/.env <<EOF
 IOS_MCP_TOKEN=$(openssl rand -hex 32)
 IOS_MCP_USER_ID=<your-user-id-from-gateway-DB>
+GATEWAY_URL=http://127.0.0.1:8080
 EOF
 
 # 3. Add same IOS_MCP_TOKEN to backend/.env

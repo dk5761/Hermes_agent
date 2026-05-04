@@ -43,17 +43,19 @@ DESIRED_MCP_SERVERS: dict[str, dict] = {
     },
     # iOS native tools (Calendar / Reminders / Notifications / Shortcuts).
     # Routes via the Fastify gateway → user's mobile app WS → EventKit.
-    # Requires IOS_MCP_TOKEN and IOS_MCP_USER_ID in `~/.hermes/.env` (Hermes
-    # loads it before spawning child processes, so env propagates).
+    #
+    # Required env (set in `/root/.hermes/.env` so Hermes parent process loads
+    # them and spawned child inherits — Hermes does NOT do ${VAR} substitution
+    # in this `env:` block, so listing them here would pass literal strings):
+    #   IOS_MCP_TOKEN=<32-byte hex, must match backend/.env>
+    #   IOS_MCP_USER_ID=<gateway DB user.id>
     "ios-tools": {
         "command": "node",
         "args": ["/root/repos/Hermes_agent/backend/dist/src/mcp/ios-tools-stdio.js"],
+        # Only static values here. IOS_MCP_TOKEN + IOS_MCP_USER_ID inherit
+        # from Hermes' parent process env. See Hermes `~/.hermes/.env`.
         "env": {
             "GATEWAY_URL": "http://127.0.0.1:8080",
-            # IOS_MCP_TOKEN and IOS_MCP_USER_ID inherited from Hermes' env;
-            # listed here so an explicit override path exists.
-            "IOS_MCP_TOKEN": "${IOS_MCP_TOKEN}",
-            "IOS_MCP_USER_ID": "${IOS_MCP_USER_ID}",
         },
         "timeout": 30,
         "connect_timeout": 10,
