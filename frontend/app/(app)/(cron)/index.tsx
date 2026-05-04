@@ -15,7 +15,6 @@ import {
   ScrollView,
   View,
 } from "react-native";
-import { FlashList, type ListRenderItem } from "@shopify/flash-list";
 import { useFocusEffect, useRouter } from "expo-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as Haptics from "expo-haptics";
@@ -186,20 +185,6 @@ export default function CronListScreen() {
     return `${counts.total} job${counts.total === 1 ? "" : "s"} · ${counts.running} running`;
   }, [counts.total, counts.running]);
 
-  const renderItem = useCallback<ListRenderItem<CronJob>>(
-    ({ item, index }) => (
-      <CronRow
-        job={item}
-        isLast={index === filtered.length - 1}
-        onPress={() => onOpen(item)}
-        onLongPress={() => onLongPress(item)}
-      />
-    ),
-    [filtered.length, onLongPress, onOpen],
-  );
-
-  const keyExtractor = useCallback((j: CronJob) => j.id, []);
-
   return (
     <PhoneSafeArea>
       <NavBar
@@ -209,36 +194,42 @@ export default function CronListScreen() {
         trailing={<NavIcon name="plus" onPress={onNew} />}
       />
 
-      {/* Filter chip row. Horizontal scroll for narrow widths. */}
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={{
-          gap: 6,
-          paddingHorizontal: 16,
-          paddingTop: 4,
-          paddingBottom: 12,
-        }}
-      >
-        <Chip
-          active={filter === "all"}
-          onPress={() => setFilter("all")}
-        >{`All`}</Chip>
-        <Chip
-          active={filter === "enabled"}
-          onPress={() => setFilter("enabled")}
-        >{`Enabled · ${counts.enabled}`}</Chip>
-        <Chip
-          active={filter === "paused"}
-          onPress={() => setFilter("paused")}
-        >{`Paused · ${counts.paused}`}</Chip>
-        <Chip
-          active={filter === "notify"}
-          onPress={() => setFilter("notify")}
-        >{`Notify on`}</Chip>
-        {/* Sort placeholder per spec — visible but inert. */}
-        <Chip>Sort: name</Chip>
-      </ScrollView>
+      {/* Filter chip row. Horizontal scroll for narrow widths.
+          Wrapped in a fixed-height View — a bare horizontal ScrollView in a
+          flex-column parent claims extra vertical space (RN quirk), which
+          pushed the list ~200px down. Constraining height = 48 fixes it. */}
+      <View style={{ height: 48 }}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={{
+            gap: 6,
+            paddingHorizontal: 16,
+            paddingTop: 4,
+            paddingBottom: 12,
+            alignItems: "center",
+          }}
+        >
+          <Chip
+            active={filter === "all"}
+            onPress={() => setFilter("all")}
+          >{`All`}</Chip>
+          <Chip
+            active={filter === "enabled"}
+            onPress={() => setFilter("enabled")}
+          >{`Enabled · ${counts.enabled}`}</Chip>
+          <Chip
+            active={filter === "paused"}
+            onPress={() => setFilter("paused")}
+          >{`Paused · ${counts.paused}`}</Chip>
+          <Chip
+            active={filter === "notify"}
+            onPress={() => setFilter("notify")}
+          >{`Notify on`}</Chip>
+          {/* Sort placeholder per spec — visible but inert. */}
+          <Chip>Sort: name</Chip>
+        </ScrollView>
+      </View>
 
       {jobsQuery.isLoading ? (
         <View style={{ paddingHorizontal: 16, paddingTop: 8 }}>
@@ -268,11 +259,14 @@ export default function CronListScreen() {
           />
         </View>
       ) : (
-        <FlashList
-          data={filtered}
-          keyExtractor={keyExtractor}
-          renderItem={renderItem}
+        // Cron lists are tiny (typically < 20 entries). FlashList v2
+        // vertically-centered a lone row here — likely a `centerContent`
+        // default we couldn't override. Plain ScrollView is fine for this
+        // size and lays out items strictly top-down.
+        <ScrollView
+          style={{ flex: 1 }}
           contentContainerStyle={{
+            paddingTop: 4,
             paddingBottom: TAB_BOTTOM_PAD,
           }}
           refreshControl={
@@ -290,7 +284,17 @@ export default function CronListScreen() {
               colors={[tokens.accent]}
             />
           }
-        />
+        >
+          {filtered.map((item, index) => (
+            <CronRow
+              key={item.id}
+              job={item}
+              isLast={index === filtered.length - 1}
+              onPress={() => onOpen(item)}
+              onLongPress={() => onLongPress(item)}
+            />
+          ))}
+        </ScrollView>
       )}
       <ActionSheet ref={actionSheetRef} />
     </PhoneSafeArea>
