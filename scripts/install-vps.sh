@@ -364,9 +364,10 @@ else
 fi
 
 # ─── Step 10: hermes config patches ──────────────────────────────────────────
-step "Step 10/11: patch-hermes-config.py"
+step "Step 10/11: patch-hermes-config.py + patch-hermes-reload-mcp.py"
 
 python3 "${REPO_ROOT}/scripts/patch-hermes-config.py" --config "${HERMES_HOME}/config.yaml"
+python3 "${REPO_ROOT}/scripts/patch-hermes-reload-mcp.py" || c_yellow "  reload-mcp source patch skipped (anchor may have moved — non-fatal)"
 
 # ─── Step 11: start + verify ─────────────────────────────────────────────────
 step "Step 11/11: start services + verify"

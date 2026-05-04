@@ -40,13 +40,16 @@ else
   ok "agent up to date"
 fi
 
-# ─── Step 2: re-apply config patches ─────────────────────────────────────────
+# ─── Step 2: re-apply config + source patches ───────────────────────────────
 step "Step 2/4: patch-hermes-config.py (re-apply mcp_servers + platform_toolsets)"
 if [[ ! -f "${HERMES_HOME}/config.yaml" ]]; then
   c_red "  ${HERMES_HOME}/config.yaml not found"
   exit 1
 fi
 python3 "${REPO_ROOT}/scripts/patch-hermes-config.py" --config "${HERMES_HOME}/config.yaml"
+
+step "Step 2b/4: patch-hermes-reload-mcp.py (Python source — clear caches on /reload-mcp)"
+python3 "${REPO_ROOT}/scripts/patch-hermes-reload-mcp.py" || c_yellow "  (non-fatal — anchor may have moved upstream; review the script)"
 
 # ─── Step 3: restart dashboard + gateway + cron (in order) ───────────────────
 step "Step 3/4: restart hermes-dashboard, hermes-gateway, hermes-cron"
