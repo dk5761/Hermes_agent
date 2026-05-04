@@ -53,6 +53,7 @@ Rebuild the iOS bundle (`npx expo run:ios --device`) after editing — env vars 
 | Re-apply config patches only | `python3 scripts/patch-hermes-config.py --config /root/.hermes/config.yaml` |
 | Restore from latest snapshot | `sudo bash scripts/restore-from-snapshot.sh` |
 | Take an ad-hoc snapshot | `sudo bash /root/hermes-snapshot.sh` |
+| Deploy iOS tools (Phase 8) | see `IOS_TOOLS.md` §Setup |
 
 All idempotent and safe to re-run. `install-vps.sh` chains `install-obsidian-sync.sh` automatically at the end (skip with `SKIP_OBSIDIAN=1`).
 
