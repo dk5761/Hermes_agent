@@ -1,7 +1,8 @@
 // iOS native tools request/response correlator.
 //
 // Lifecycle:
-//   1. gateway-ws calls registerWs(userId, ws) on each authenticated WS open.
+//   1. gateway-ws or the root iOS tools WS calls registerWs(userId, ws) on
+//      each authenticated WS open.
 //   2. POST /internal/ios-tool calls call(userId, tool, args, timeoutMs).
 //      • If WS is open: send ios_tool_call frame, await ios_tool_result.
 //      • If WS is closed: fire silent push, wait up to WAKE_TIMEOUT_MS for
@@ -61,6 +62,13 @@ interface WakeWaiter {
   timer: NodeJS.Timeout;
 }
 
+type SocketRole = "root" | "chat";
+
+interface RegisteredSocket {
+  ws: WebSocket;
+  role: SocketRole;
+}
+
 export interface IosToolsRouterDeps {
   db: Db;
   logger: AppLogger;
@@ -72,14 +80,17 @@ export class IosToolsRouter {
   private readonly queue: IosToolQueue;
   private readonly silentPusher: SilentPusher;
 
-  /** userId → currently active WS (at most one per user in v1). */
-  private readonly activeWs = new Map<string, WebSocket>();
+  /** userId → currently active WS connections. Root app WS and chat WS can coexist. */
+  private readonly activeWs = new Map<string, Set<RegisteredSocket>>();
 
   /** call_id → pending result waiter. */
   private readonly pending = new Map<string, Pending>();
 
   /** userId → list of callers waiting for a WS to come up post-push. */
   private readonly wakeWaiters = new Map<string, WakeWaiter[]>();
+
+  /** userIds with an in-flight queue drain. Prevents duplicate side effects. */
+  private readonly drainingUsers = new Set<string>();
 
   private sweepHandle: NodeJS.Timeout | null = null;
 
@@ -102,21 +113,28 @@ export class IosToolsRouter {
    *
    * Returns a cleanup function — gateway-ws must call it when the WS closes.
    */
-  registerWs(userId: string, ws: WebSocket): () => void {
-    this.activeWs.set(userId, ws);
-    this.log.info({ userId }, "ios-tools-router: ws registered");
+  registerWs(userId: string, ws: WebSocket, role: SocketRole = "chat"): () => void {
+    const set = this.activeWs.get(userId) ?? new Set<RegisteredSocket>();
+    const registered: RegisteredSocket = { ws, role };
+    set.add(registered);
+    this.activeWs.set(userId, set);
+    this.log.info({ userId, role }, "ios-tools-router: ws registered");
 
     // Resolve any callers that were waiting for this user to come online.
     this.resolveWakeWaiters(userId, ws);
 
     // Drain the server-side queue and replay calls over the now-live WS.
-    void this.drainAndReplay(userId, ws);
+    void this.drainAndReplay(userId);
 
     return () => {
-      if (this.activeWs.get(userId) === ws) {
-        this.activeWs.delete(userId);
-        this.log.info({ userId }, "ios-tools-router: ws unregistered");
+      const existing = this.activeWs.get(userId);
+      if (existing) {
+        existing.delete(registered);
       }
+      if (existing && existing.size === 0) {
+        this.activeWs.delete(userId);
+      }
+      this.log.info({ userId, role }, "ios-tools-router: ws unregistered");
     };
   }
 
@@ -221,13 +239,26 @@ export class IosToolsRouter {
   // ─── Private helpers ───────────────────────────────────────────────────────
 
   private getOpenWs(userId: string): WebSocket | null {
-    const ws = this.activeWs.get(userId);
-    if (!ws) return null;
-    if (ws.readyState !== ws.OPEN) {
+    const sockets = this.activeWs.get(userId);
+    if (!sockets) return null;
+    const ordered = Array.from(sockets);
+    for (const registered of ordered) {
+      if (registered.ws.readyState !== registered.ws.OPEN) {
+        sockets.delete(registered);
+      }
+    }
+    if (sockets.size === 0) {
       this.activeWs.delete(userId);
       return null;
     }
-    return ws;
+    // Prefer the app-level root socket because it stays mounted while chat
+    // screens come and go. Chat sockets are kept as a compatibility fallback.
+    const open = Array.from(sockets);
+    return (
+      open.find((registered) => registered.role === "root")?.ws ??
+      open[open.length - 1]?.ws ??
+      null
+    );
   }
 
   private sendOverWs(
@@ -299,31 +330,39 @@ export class IosToolsRouter {
     }
   }
 
-  private async drainAndReplay(userId: string, ws: WebSocket): Promise<void> {
+  private async drainAndReplay(userId: string): Promise<void> {
+    if (this.drainingUsers.has(userId)) return;
+    this.drainingUsers.add(userId);
     let queued: Awaited<ReturnType<IosToolQueue["drainForUser"]>>;
     try {
       queued = await this.queue.drainForUser(userId);
     } catch (err) {
       this.log.warn({ err, userId }, "ios-tools-router: queue drain failed");
+      this.drainingUsers.delete(userId);
       return;
     }
 
-    if (queued.length === 0) return;
-    this.log.info({ userId, count: queued.length }, "ios-tools-router: replaying queued calls");
+    try {
+      if (queued.length === 0) return;
+      this.log.info({ userId, count: queued.length }, "ios-tools-router: replaying queued calls");
 
-    for (const item of queued) {
-      if (ws.readyState !== ws.OPEN) {
-        this.log.warn({ userId }, "ios-tools-router: ws closed mid-drain, stopping replay");
-        break;
+      for (const item of queued) {
+        const ws = this.getOpenWs(userId);
+        if (!ws) {
+          this.log.warn({ userId }, "ios-tools-router: no open ws mid-drain, stopping replay");
+          break;
+        }
+        try {
+          const result = await this.sendOverWs(ws, item.tool, item.args, 30_000);
+          this.log.info({ userId, tool: item.tool, callId: item.id }, "ios-tools-router: queued call replayed", result);
+        } catch (err) {
+          // Best-effort replay — log and continue. The call is already dequeued
+          // so we don't re-queue to avoid infinite loops.
+          this.log.warn({ err, userId, tool: item.tool }, "ios-tools-router: queued call replay failed");
+        }
       }
-      try {
-        const result = await this.sendOverWs(ws, item.tool, item.args, 30_000);
-        this.log.info({ userId, tool: item.tool, callId: item.id }, "ios-tools-router: queued call replayed", result);
-      } catch (err) {
-        // Best-effort replay — log and continue. The call is already dequeued
-        // so we don't re-queue to avoid infinite loops.
-        this.log.warn({ err, userId, tool: item.tool }, "ios-tools-router: queued call replay failed");
-      }
+    } finally {
+      this.drainingUsers.delete(userId);
     }
   }
 }

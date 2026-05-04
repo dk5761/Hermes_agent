@@ -22,6 +22,7 @@ import { registerUploadsRoutes } from "./routes/uploads.js";
 import { registerBlobsRoutes } from "./routes/blobs.js";
 import { registerGatewayWsRoute } from "./ws/gateway-ws.js";
 import { IosToolsRouter } from "./ws/ios-tools-router.js";
+import { registerIosToolsWsRoute } from "./ws/ios-tools-ws.js";
 import { registerInternalIosToolsRoutes } from "./routes/internal-ios-tools.js";
 import { registerLiveActivityRoutes } from "./routes/live-activity.js";
 import { registerPrefsRoutes } from "./routes/prefs.js";
@@ -280,6 +281,16 @@ export async function buildServer(deps: BuildServerDeps): Promise<FastifyInstanc
       iosToolsRouter,
       iosMcpToken: deps.config.IOS_MCP_TOKEN!,
       logger: deps.logger,
+    });
+    await registerIosToolsWsRoute(app, {
+      db: deps.dbHandle.db,
+      jwt: jwtConfig,
+      logger: deps.logger,
+      iosToolsRouter,
+    });
+  } else {
+    app.get("/ws/ios-tools", { websocket: true }, (socket) => {
+      socket.close(4404, "ios_tools_disabled");
     });
   }
 

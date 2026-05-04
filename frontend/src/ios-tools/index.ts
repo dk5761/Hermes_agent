@@ -13,6 +13,7 @@
 
 export { IosToolsHandler } from "./handler";
 export type { IosToolsHandlerDeps } from "./handler";
+export { IosToolsRootSocket } from "./root-socket";
 
 export { callTool } from "./client";
 

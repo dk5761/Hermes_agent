@@ -66,13 +66,10 @@ export function useChatStream(appSessionId: string | null): ChatStreamApi {
     });
     clientRef.current = client;
 
-    // TODO(integration): The ios_tool_call frame routing is currently coupled
-    // to the chat session WS lifecycle. If the app has no active chat session
-    // open, ios_tool_call frames from the gateway will never reach a live WS
-    // connection. Phase 4 should introduce a persistent, session-independent
-    // WS connection at the app root level, and move the IosToolsHandler
-    // registration there. For now, it is attached per chat session WS so the
-    // plumbing is correct and can be exercised end-to-end while a chat is open.
+    // The app-level IosToolsRootSocket is the primary route for native tool
+    // calls. Keeping this handler on chat sockets gives us a compatible
+    // fallback while a thread is open; the backend can track multiple sockets
+    // per user and will send a given call to one live connection.
     const iosToolsHandler = new IosToolsHandler({
       sendFrame: (serialized) => client.sendRaw(serialized),
     });

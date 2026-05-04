@@ -26,6 +26,7 @@ import { AppLockOverlay } from "@/components/AppLockOverlay";
 import { reconcileOnLaunch } from "@/live-activity/bridge";
 import { registerPushTokenWithBackend } from "@/notifications/register";
 import { setupNotificationListeners } from "@/notifications/handler";
+import { IosToolsRootSocket } from "@/ios-tools";
 import { BG, MUTED } from "@/config";
 import { ThemeProvider, useAppFonts } from "@/theme";
 import { ToastProvider, showToast } from "@/components/ui";
@@ -117,7 +118,12 @@ function AuthGate() {
       </View>
     );
   }
-  return <Slot />;
+  return (
+    <>
+      <IosToolsRootSocket />
+      <Slot />
+    </>
+  );
 }
 
 function FontGate({ children }: { children: React.ReactNode }) {

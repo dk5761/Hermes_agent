@@ -50,6 +50,7 @@ Rebuild the iOS bundle (`npx expo run:ios --device`) after editing — env vars 
 | Fresh VPS bootstrap | `sudo DOMAIN=hermes.drshnk.dev bash scripts/install-vps.sh` |
 | After `hermes update` | `sudo bash scripts/post-hermes-update.sh` |
 | Add/refresh Obsidian sync | `sudo bash scripts/install-obsidian-sync.sh` |
+| Diagnose stack health | `sudo bash scripts/doctor.sh` |
 | Re-apply config patches only | `python3 scripts/patch-hermes-config.py --config /root/.hermes/config.yaml` |
 | Restore from latest snapshot | `sudo bash scripts/restore-from-snapshot.sh` |
 | Take an ad-hoc snapshot | `sudo bash /root/hermes-snapshot.sh` |
@@ -98,15 +99,15 @@ ssh root@<vps> "journalctl -u hermes-dashboard -f"
 ### Restart
 
 ```bash
-ssh root@<vps> "systemctl restart hermes-dashboard hermes-gateway"
+ssh root@<vps> "systemctl restart hermes-dashboard && sleep 3 && systemctl restart hermes-gateway hermes-cron"
 ```
 
-**Always restart both together.** Hermes 0.12+ regenerates an in-memory `_SESSION_TOKEN` on every dashboard startup. The gateway scrapes that token from `/index.html` once at start time and reuses it for every upstream WS open. The auto-refresh path only triggers on HTTP 401, but a stale-token WS upgrade gets rejected with a "non-101 status" error that the gateway doesn't recognize as auth-related — so it never re-scrapes. Result: every chat hangs with `upstream_ws_open_failed`. Bare `systemctl restart hermes-dashboard` (without restarting the gateway) is what causes this; the one-liner above is correct.
+**Prefer restarting the service set together.** Hermes 0.12+ regenerates an in-memory `_SESSION_TOKEN` on every dashboard startup. The gateway now retries upstream WS opens by re-scraping the token when Hermes rejects a stale-token upgrade, so a dashboard-only restart should self-heal. Still, the clean operator habit is dashboard first, then gateway, then cron: gateway starts with the fresh token, and `hermes-cron` comes back if `hermes update` stopped it cleanly.
 
 ### Restart and verify (one command, run after any deploy or VPS reboot)
 
 ```bash
-ssh root@<vps> "systemctl restart hermes-dashboard hermes-gateway && sleep 8 && \
+ssh root@<vps> "systemctl restart hermes-dashboard && sleep 3 && systemctl restart hermes-gateway hermes-cron && sleep 8 && \
   echo '=== service status ===' && systemctl is-active hermes-dashboard hermes-gateway nginx && \
   echo && echo '=== ports ===' && ss -tlnp | grep -E ':(80|443|8080|9119)\s' && \
   echo && echo '=== gateway → hermes link ===' && \
@@ -115,11 +116,17 @@ ssh root@<vps> "systemctl restart hermes-dashboard hermes-gateway && sleep 8 && 
   curl -s -m 10 https://hermes.drshnk.dev/health -w 'HTTP %{http_code}\n'"
 ```
 
+For the fuller health check, run:
+
+```bash
+ssh root@<vps> "cd /root/repos/Hermes_agent && sudo bash scripts/doctor.sh"
+```
+
 A healthy run reports:
 
 | Section | Healthy output |
 |---|---|
-| service status | three `active` lines (dashboard / gateway / nginx) |
+| service status | active lines for dashboard / gateway / nginx, plus cron when installed |
 | ports | `127.0.0.1:8080` (gateway), `127.0.0.1:9119` (hermes), `0.0.0.0:80` + `0.0.0.0:443` (nginx) |
 | gateway → hermes link | `db migrations up to date` + `using external Hermes` + `Server listening at http://127.0.0.1:8080` + `gateway.ready` event |
 | external HTTPS | `{"status":"ok","uptimeS":N}` followed by `HTTP 200` |
@@ -167,10 +174,10 @@ The `cp migrations` step is required because `tsc` only compiles TypeScript — 
 When upgrading Hermes (the Python agent at `/usr/local/lib/hermes-agent/`), follow Hermes' own upgrade docs, then:
 
 ```bash
-ssh root@<vps> "systemctl restart hermes-dashboard hermes-gateway"
+ssh root@<vps> "cd /root/repos/Hermes_agent && sudo bash scripts/post-hermes-update.sh"
 ```
 
-After a Hermes upgrade you may also need to re-apply the project's MCP-server / toolset config — see the next section.
+`post-hermes-update.sh` is the preferred path because it re-applies config/source patches, deploys project skills, restarts `hermes-dashboard`, `hermes-gateway`, and `hermes-cron` in the right order, then runs health checks. Avoid bare `hermes update` followed by only `systemctl restart hermes-dashboard`; it leaves too much sequencing to memory.
 
 ### Patch Hermes config (MCP servers + platform_toolsets)
 
