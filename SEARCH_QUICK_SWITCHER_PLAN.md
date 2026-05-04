@@ -1,6 +1,6 @@
 # Search Across All Chats + Quick Switcher
 
-**Status:** Design + plan. Not started. Captured 2026-05-05.
+**Status:** Phase 0 in progress. Captured 2026-05-05. Open questions resolved 2026-05-05 (see §6 — Locked decisions).
 
 Spotlight-style fuzzy + full-text search across every chat session. Trigger from anywhere in the app. Tap a result → open that chat scrolled to the matched message.
 
@@ -482,36 +482,14 @@ About **3-4 focused days**. With 50% buffer for FTS surprises + scroll-to-messag
 
 ---
 
-## 6. Open questions for the user (resolve before Phase 0)
+## 6. Locked decisions (resolved 2026-05-05)
 
-- **Q1**: Trigger for the switcher. Pick one or all:
-  - **Long-press the active tab** (subtle, no extra UI)
-  - **Swipe-down on the chat list** (discoverable from the chats tab)
-  - **Dedicated icon in the chats tab navbar** (most discoverable, takes a slot)
-  - **All three** (more work, more flexible)
-  - Plus optional: **Cmd+K on iPad** (defer if RN 0.83 makes it painful)
+- **D1 — Trigger:** **long-press the active tab + dedicated icon in the chats tab navbar.** Two complementary entry points: long-press is muscle-memory friendly once learned; the icon is discoverable. Swipe-down + Cmd+K on iPad both deferred to v2 (extra surface area, marginal value for v1).
+- **D2 — v1 scope:** **Sessions only.** Search inside chat content; results are messages within sessions. Skills + cron + inbox in v2 — each is a ~1-hour add-on once the framework exists.
+- **D3 — Recent queries:** **persist last 10 to AsyncStorage** (on-device, no backend storage). User can clear from a long-press menu on the recent-queries list. No cross-device sync.
+- **D4 — Highlight matches:** **yes — render `<b>...</b>` markers from FTS5's `snippet()` call as `tokens.accent`-colored bold spans.** The snippet is already escaped/safe by FTS5; we just style the markup.
 
-  *My recommendation: long-press tab + dedicated icon, defer swipe-down to v2*
-
-- **Q2**: Scope v1.
-  - **Sessions only** (search inside chat content, results are messages)
-  - **Sessions + skills** (also fuzzy-match skill names — useful for "run weekly review skill")
-  - **Sessions + skills + cron** (also cron job names)
-  - **Sessions + skills + cron + inbox notifications**
-
-  *My recommendation: Sessions only for v1. Sessions + skills/cron in v2 — they're each 1-hour add-ons.*
-
-- **Q3**: Search history.
-  - **Persist last 10 queries** (recall + tap to re-run)
-  - **Don't persist** (privacy — searches don't leak across app launches)
-
-  *My recommendation: persist 10. AsyncStorage on device, no backend storage. User can clear from settings.*
-
-- **Q4**: Highlight match in results.
-  - **Yes** — render `<b>match</b>` from snippet as bold (with `tokens.accent` color)
-  - **No** — plain snippet, position-aware ranking is enough
-
-  *My recommendation: yes. The snippet is already from FTS5's `snippet()` call which is safe; just style the bolds.*
+These collapse the v1 scope and unblock Phase 0.
 
 ---
 
