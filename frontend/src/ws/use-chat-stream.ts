@@ -13,6 +13,7 @@ import {
   chatRunStarted,
   chatRunUpdated,
 } from "../live-activity/bridge";
+import { IosToolsHandler } from "../ios-tools";
 
 // Hook glue between GatewayWsClient and Zustand chat-store, scoped to one
 // app_session_id. Owns the socket lifecycle for the chat screen mount.
@@ -64,6 +65,20 @@ export function useChatStream(appSessionId: string | null): ChatStreamApi {
       initialLastEventId,
     });
     clientRef.current = client;
+
+    // TODO(integration): The ios_tool_call frame routing is currently coupled
+    // to the chat session WS lifecycle. If the app has no active chat session
+    // open, ios_tool_call frames from the gateway will never reach a live WS
+    // connection. Phase 4 should introduce a persistent, session-independent
+    // WS connection at the app root level, and move the IosToolsHandler
+    // registration there. For now, it is attached per chat session WS so the
+    // plumbing is correct and can be exercised end-to-end while a chat is open.
+    const iosToolsHandler = new IosToolsHandler({
+      sendFrame: (serialized) => client.sendRaw(serialized),
+    });
+    const offRawFrame = client.onRawFrame((frame) =>
+      iosToolsHandler.onIncomingFrame(frame),
+    );
 
     const offEvent = client.onEvent((env) => {
       applyEnvelope(appSessionId, env);
@@ -130,6 +145,7 @@ export function useChatStream(appSessionId: string | null): ChatStreamApi {
 
     client.connect();
     return () => {
+      offRawFrame();
       offEvent();
       offStatus();
       client.close();

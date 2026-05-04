@@ -9,6 +9,9 @@
       ],
       "hermes-live-activity": [
         "modules/hermes-live-activity/index.ts"
+      ],
+      "ios-tools": [
+        "modules/ios-tools/src/index.ts"
       ]
     }
   },

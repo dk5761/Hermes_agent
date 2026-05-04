@@ -41,6 +41,23 @@ DESIRED_MCP_SERVERS: dict[str, dict] = {
         "timeout": 60,
         "connect_timeout": 30,
     },
+    # iOS native tools (Calendar / Reminders / Notifications / Shortcuts).
+    # Routes via the Fastify gateway → user's mobile app WS → EventKit.
+    # Requires IOS_MCP_TOKEN and IOS_MCP_USER_ID in `~/.hermes/.env` (Hermes
+    # loads it before spawning child processes, so env propagates).
+    "ios-tools": {
+        "command": "node",
+        "args": ["/root/repos/Hermes_agent/backend/dist/src/mcp/ios-tools-stdio.js"],
+        "env": {
+            "GATEWAY_URL": "http://127.0.0.1:8080",
+            # IOS_MCP_TOKEN and IOS_MCP_USER_ID inherited from Hermes' env;
+            # listed here so an explicit override path exists.
+            "IOS_MCP_TOKEN": "${IOS_MCP_TOKEN}",
+            "IOS_MCP_USER_ID": "${IOS_MCP_USER_ID}",
+        },
+        "timeout": 30,
+        "connect_timeout": 10,
+    },
     # Add more here. Each entry needs a matching `mcp-<name>` in
     # DESIRED_PLATFORM_TOOLSETS["cli"] below or the agent won't see its tools.
     #
@@ -66,6 +83,9 @@ DESIRED_PLATFORM_TOOLSETS: dict[str, list[str]] = {
         # Convention: agent must write only inside ${VAULT}/Hermes/ (set via
         # system prompt). Read access is unrestricted across the vault.
         "obsidian",
+        # iOS native tools — phone-side bridge for Calendar/Reminders/etc.
+        # Phone may be offline; tools report own availability (see MEMORY.md).
+        "mcp-ios-tools",
     ],
 }
 

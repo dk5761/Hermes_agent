@@ -36,6 +36,13 @@ export interface GatewayWsConfig {
 export type EventHandler = (env: GatewayEventEnvelope) => void;
 export type ControlHandler = (frame: ControlFrame) => void;
 export type StatusHandler = (status: ConnectionStatus, info?: { retryInMs?: number }) => void;
+/**
+ * Called for every successfully-parsed incoming frame that is neither a
+ * GatewayEventEnvelope nor a ControlFrame. Return true to signal that the
+ * frame was handled (short-circuits subsequent raw-frame handlers). Return
+ * false to pass it along.
+ */
+export type RawFrameHandler = (frame: unknown) => boolean;
 
 export class GatewayWsClient {
   private readonly cfg: GatewayWsConfig;
@@ -50,6 +57,7 @@ export class GatewayWsClient {
   private readonly eventHandlers = new Set<EventHandler>();
   private readonly controlHandlers = new Set<ControlHandler>();
   private readonly statusHandlers = new Set<StatusHandler>();
+  private readonly rawFrameHandlers = new Set<RawFrameHandler>();
 
   constructor(cfg: GatewayWsConfig) {
     this.cfg = cfg;
@@ -69,6 +77,31 @@ export class GatewayWsClient {
   onStatus(fn: StatusHandler): () => void {
     this.statusHandlers.add(fn);
     return () => this.statusHandlers.delete(fn);
+  }
+
+  /**
+   * Register a handler for incoming frames that are neither event envelopes
+   * nor control frames (e.g. ios_tool_call). Handlers are tried in insertion
+   * order; the first one that returns true stops the chain.
+   * Returns an unsubscribe function.
+   */
+  onRawFrame(fn: RawFrameHandler): () => void {
+    this.rawFrameHandlers.add(fn);
+    return () => this.rawFrameHandlers.delete(fn);
+  }
+
+  /**
+   * Send a pre-serialized JSON string directly over the open WebSocket.
+   * Unlike `send()`, this bypasses the ClientFrame type constraint and is
+   * intended for system frames (e.g. ios_tool_result) that the server
+   * expects from the mobile app but are not part of the client→server
+   * event API.
+   * No-ops when the socket is not open.
+   */
+  sendRaw(serialized: string): void {
+    const s = this.socket;
+    if (!s || s.readyState !== WebSocket.OPEN) return;
+    s.send(serialized);
   }
 
   getLastEventId(): number {
@@ -190,6 +223,11 @@ export class GatewayWsClient {
     if (isControlFrame(parsed)) {
       this.handleControl(parsed);
       return;
+    }
+    // Dispatch to raw-frame handlers (e.g. ios_tool_call). Stop at the first
+    // handler that returns true.
+    for (const fn of this.rawFrameHandlers) {
+      if (fn(parsed)) return;
     }
   }
 
