@@ -29,6 +29,9 @@ import shutil
 import sys
 from pathlib import Path
 
+# Distinct from None for "missing key" detection in scalar walks.
+_SENTINEL = object()
+
 # ─── DESIRED STATE ───────────────────────────────────────────────────────────
 # Edit these dicts to add/remove MCP servers + their toolset gates.
 # Re-run the script after editing.
@@ -69,6 +72,17 @@ DESIRED_MCP_SERVERS: dict[str, dict] = {
     #     "timeout": 120,
     #     "connect_timeout": 60,
     # },
+}
+
+# Scalar config keys to enforce. Each key is a dotted path. Existing values
+# are OVERWRITTEN when they don't match — these are workflow defaults the
+# project depends on, not user preferences. Add sparingly.
+DESIRED_CONFIG_VALUES: dict[str, object] = {
+    # /reload-mcp shows a "Confirm reload" prompt by default. Our mobile UI
+    # doesn't render the slash-confirm flow, so the dashboard waits forever
+    # for a tap that never comes and the gateway times out at 30-90s. Disable
+    # the gate so reload-mcp runs immediately.
+    "approvals.mcp_reload_confirm": False,
 }
 
 # Per-platform list of toolsets the agent should enable. We merge — anything
@@ -149,7 +163,26 @@ def patch(config_path: Path, *, dry_run: bool = False) -> int:
                     mcp[name][k] = v
                     changes.append(f"added mcp_servers.{name}.{k}")
 
-    # 2) platform_toolsets — additive merge by platform name.
+    # 2) scalar config values at dotted paths — overwrite if mismatched.
+    for dotted_path, desired_value in DESIRED_CONFIG_VALUES.items():
+        keys = dotted_path.split(".")
+        node = cfg
+        # Walk to the parent, creating intermediate dicts as needed.
+        for k in keys[:-1]:
+            if not isinstance(node.get(k), dict):
+                node[k] = {}
+                changes.append(f"created {dotted_path[: dotted_path.rfind(k) + len(k)]}")
+            node = node[k]
+        leaf = keys[-1]
+        current = node.get(leaf, _SENTINEL)
+        if current is _SENTINEL:
+            node[leaf] = desired_value
+            changes.append(f"set {dotted_path} = {desired_value!r}")
+        elif current != desired_value:
+            node[leaf] = desired_value
+            changes.append(f"updated {dotted_path}: {current!r} → {desired_value!r}")
+
+    # 3) platform_toolsets — additive merge by platform name.
     pt = cfg.get("platform_toolsets")
     if pt is None:
         cfg["platform_toolsets"] = {}
