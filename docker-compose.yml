@@ -39,6 +39,29 @@ services:
       retries: 6
       start_period: 30s
 
+  # Sidecar that runs Hermes' cron scheduler / messaging gateway. The
+  # `hermes dashboard` process serves the API + slash workers, but cron
+  # jobs ONLY fire when this `hermes gateway` daemon is running. Without
+  # it, jobs sit at their next_run_at timestamp forever and "Run now"
+  # taps from the app are no-ops. Shares Hermes' filesystem namespace
+  # (same volume) so it sees the same `/opt/data/cron/jobs.json`.
+  hermes-cron:
+    image: hermes-agent:local
+    container_name: hermes-cron
+    restart: unless-stopped
+    depends_on:
+      hermes:
+        condition: service_healthy
+    volumes:
+      - ./data/hermes-home:/opt/data
+      - ./backend/data/blobs:/app/data/blobs:ro
+    environment:
+      HERMES_UID: ${HERMES_UID:-10000}
+      HERMES_GID: ${HERMES_GID:-10000}
+    command:
+      - gateway
+      - run
+
   gateway:
     build:
       context: ./backend
