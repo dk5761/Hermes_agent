@@ -1,6 +1,6 @@
 # Voice Input — Phase-by-Phase Plan
 
-**Status:** Design + plan. Not started. Captured 2026-05-04.
+**Status:** Design + plan. Not started. Captured 2026-05-04. Open questions resolved 2026-05-04 (see §5 — Locked decisions).
 
 Add hold-to-talk voice input to the chat composer. Transcribes on-device via Apple's `SFSpeechRecognizer` (wrapped by `expo-speech-recognition`). $0 ongoing cost, audio never leaves the phone, ~half-day to ship the MVP.
 
@@ -337,12 +337,12 @@ About **2-3 focused days** of solo work. Add 50% buffer for surprises (permissio
 7. **VoiceOver / accessibility.** PTT gesture is harder for users with motor impairments. The "tap-to-toggle" mode covers them.
 8. **Keyboard shortcut for voice on iPad with hardware keyboard.** Nice-to-have, not v1.
 
-### Open questions for the user (resolve before Phase 0)
+### Locked decisions (resolved 2026-05-04)
 
-- **Q1**: PTT default with toggle as alt mode in settings — confirm? (My recommendation: yes)
-- **Q2**: Live partial transcript preview while speaking — confirm? Some users prefer "wait until I finish, then show all at once" because the live updates feel jittery. (My recommendation: live preview, with reduced-motion fallback)
-- **Q3**: Auto-send after final transcript? Or always require manual review/send? (My recommendation: always require manual review — voice STT errors are real, and editing before sending is safer)
-- **Q4**: Language — default to `en-US`, expose locale picker in settings, or detect from device locale? (My recommendation: default to device locale, override-able in settings)
+- **D1 — Interaction mode:** PTT (press-and-hold) is the default. Tap-to-toggle ships as an alt mode in settings. Slide-finger-off cancels (PTT only).
+- **D2 — Live partial transcript:** show partial transcripts in real-time as the user speaks. Render greyed/italic appended to the input. Respect `prefers-reduced-motion` for the pulse animation around the mic button — but the partial-text update itself is unconditional (it's text, not motion).
+- **D3 — Send flow:** **always require manual review.** Final transcript is inserted into the TextInput; user taps Send. No auto-send mode. STT errors are too common to skip the review step.
+- **D4 — Default language:** detect from device locale via `Intl.getCanonicalLocales()` / `expo-localization`. Settings screen exposes an override picker (uses `ExpoSpeechRecognition.getSupportedLocales()` to populate). Persists across app restarts.
 
 ---
 
