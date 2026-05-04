@@ -43,6 +43,19 @@ Rebuild the iOS bundle (`npx expo run:ios --device`) after editing — env vars 
 
 ## Daily ops
 
+### One-shot scripts (TL;DR)
+
+| Goal | Command |
+|---|---|
+| Fresh VPS bootstrap | `sudo DOMAIN=hermes.drshnk.dev bash scripts/install-vps.sh` |
+| After `hermes update` | `sudo bash scripts/post-hermes-update.sh` |
+| Add/refresh Obsidian sync | `sudo bash scripts/install-obsidian-sync.sh` |
+| Re-apply config patches only | `python3 scripts/patch-hermes-config.py --config /root/.hermes/config.yaml` |
+
+All four are idempotent and safe to re-run. `install-vps.sh` chains `install-obsidian-sync.sh` automatically at the end (skip with `SKIP_OBSIDIAN=1`).
+
+The hand-written walk-through below still lives here for reference / debugging — but in 95% of cases the scripts above are the answer.
+
 ### Live logs
 
 ```bash
