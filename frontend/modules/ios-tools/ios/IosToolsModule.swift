@@ -76,5 +76,96 @@ public class IosToolsModule: Module {
       let listIds = args["listIds"] as? [String]
       return try await listReminders(filter: filter, listIds: listIds)
     }
+
+    // -------------------------------------------------------------------------
+    // Calendar writes
+    // -------------------------------------------------------------------------
+
+    /// addEvent({ title, startMs, endMs, calendarId?, notes?, allDay? })
+    AsyncFunction("addEvent") {
+      (args: [String: Any]) throws -> [String: Any] in
+      guard let title = args["title"] as? String, !title.isEmpty else {
+        throw IosToolsError.unknown("addEvent: title is required")
+      }
+      guard let startMs = (args["startMs"] as? NSNumber)?.doubleValue else {
+        throw IosToolsError.unknown("addEvent: startMs is required")
+      }
+      guard let endMs = (args["endMs"] as? NSNumber)?.doubleValue else {
+        throw IosToolsError.unknown("addEvent: endMs is required")
+      }
+      let calendarId = args["calendarId"] as? String
+      let notes = args["notes"] as? String
+      let allDay = (args["allDay"] as? Bool) ?? false
+      return try addEvent(
+        title: title, startMs: startMs, endMs: endMs,
+        calendarId: calendarId, notes: notes, allDay: allDay)
+    }
+
+    /// deleteEvent({ id })
+    AsyncFunction("deleteEvent") {
+      (args: [String: Any]) throws -> [String: Any] in
+      guard let id = args["id"] as? String, !id.isEmpty else {
+        throw IosToolsError.unknown("deleteEvent: id is required")
+      }
+      return try deleteEvent(id: id)
+    }
+
+    // -------------------------------------------------------------------------
+    // Reminders writes
+    // -------------------------------------------------------------------------
+
+    /// addReminder({ title, dueDateMs?, listId?, notes? })
+    AsyncFunction("addReminder") {
+      (args: [String: Any]) throws -> [String: Any] in
+      guard let title = args["title"] as? String, !title.isEmpty else {
+        throw IosToolsError.unknown("addReminder: title is required")
+      }
+      let dueDateMs = (args["dueDateMs"] as? NSNumber)?.doubleValue
+      let listId = args["listId"] as? String
+      let notes = args["notes"] as? String
+      return try addReminder(
+        title: title, dueDateMs: dueDateMs, listId: listId, notes: notes)
+    }
+
+    /// completeReminder({ id })
+    AsyncFunction("completeReminder") {
+      (args: [String: Any]) throws -> [String: Any] in
+      guard let id = args["id"] as? String, !id.isEmpty else {
+        throw IosToolsError.unknown("completeReminder: id is required")
+      }
+      return try completeReminder(id: id)
+    }
+
+    // -------------------------------------------------------------------------
+    // Notifications write
+    // -------------------------------------------------------------------------
+
+    /// sendLocalNotification({ title, body, fireAtMs? })
+    AsyncFunction("sendLocalNotification") {
+      (args: [String: Any]) async throws -> [String: Any] in
+      guard let title = args["title"] as? String, !title.isEmpty else {
+        throw IosToolsError.unknown("sendLocalNotification: title is required")
+      }
+      guard let body = args["body"] as? String else {
+        throw IosToolsError.unknown("sendLocalNotification: body is required")
+      }
+      let fireAtMs = (args["fireAtMs"] as? NSNumber)?.doubleValue
+      return try await sendLocalNotification(
+        title: title, body: body, fireAtMs: fireAtMs)
+    }
+
+    // -------------------------------------------------------------------------
+    // Shortcuts launcher
+    // -------------------------------------------------------------------------
+
+    /// runShortcut({ name, input? })
+    AsyncFunction("runShortcut") {
+      (args: [String: Any]) async throws -> [String: Any] in
+      guard let name = args["name"] as? String, !name.isEmpty else {
+        throw IosToolsError.unknown("runShortcut: name is required")
+      }
+      let input = args["input"] as? String
+      return try await runShortcut(name: name, input: input)
+    }
   }
 }

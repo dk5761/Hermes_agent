@@ -94,3 +94,100 @@ export interface ListRemindersArgs {
   /** If omitted, reminders from all lists are returned. */
   listIds?: string[];
 }
+
+// ---------------------------------------------------------------------------
+// Calendar writes
+// ---------------------------------------------------------------------------
+
+export interface AddEventArgs {
+  title: string;
+  /** Epoch ms of event start. */
+  startMs: number;
+  /** Epoch ms of event end. Must be > startMs and within 4 years of startMs. */
+  endMs: number;
+  /** Calendar identifier from listCalendars(). Uses default if omitted. */
+  calendarId?: string;
+  notes?: string;
+  /** Defaults to false. */
+  allDay?: boolean;
+}
+
+export interface AddEventResult {
+  /** The newly created event's EKEvent identifier. */
+  id: string;
+}
+
+export interface DeleteEventArgs {
+  /** Event identifier from listEvents() or addEvent(). */
+  id: string;
+}
+
+export interface DeleteEventResult {
+  ok: true;
+}
+
+// ---------------------------------------------------------------------------
+// Reminders writes
+// ---------------------------------------------------------------------------
+
+export interface AddReminderArgs {
+  title: string;
+  /** Epoch ms of the due date. No due date if omitted. */
+  dueDateMs?: number;
+  /** Reminder-list identifier from listReminderLists(). Uses default if omitted. */
+  listId?: string;
+  notes?: string;
+}
+
+export interface AddReminderResult {
+  /** The newly created reminder's EKCalendarItem identifier. */
+  id: string;
+}
+
+export interface CompleteReminderArgs {
+  /** Reminder identifier from listReminders() or addReminder(). */
+  id: string;
+}
+
+export interface CompleteReminderResult {
+  ok: true;
+}
+
+// ---------------------------------------------------------------------------
+// Notifications write
+// ---------------------------------------------------------------------------
+
+export interface SendLocalNotificationArgs {
+  title: string;
+  body: string;
+  /**
+   * Optional epoch ms at which to fire the notification.
+   * If omitted or in the past, the notification is delivered immediately.
+   */
+  fireAtMs?: number;
+}
+
+export interface SendLocalNotificationResult {
+  /** The UNNotificationRequest identifier (UUID). */
+  id: string;
+}
+
+// ---------------------------------------------------------------------------
+// Shortcuts launcher
+// ---------------------------------------------------------------------------
+
+export interface RunShortcutArgs {
+  /** Exact name of the shortcut as it appears in the Shortcuts app. */
+  name: string;
+  /** Optional string input forwarded to the shortcut. */
+  input?: string;
+}
+
+/**
+ * `ok: true` means the `shortcuts://` URL was successfully opened.
+ * It does NOT guarantee the shortcut ran to completion (the app is
+ * backgrounded once Shortcuts.app opens).
+ */
+export interface RunShortcutResult {
+  ok: true;
+}

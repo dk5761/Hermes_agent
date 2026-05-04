@@ -70,6 +70,103 @@ func listEvents(
   return events.map(eventToDict)
 }
 
+// MARK: - Calendar write methods
+
+/// Creates a new calendar event and saves it to the event store.
+///
+/// - Parameters:
+///   - title: The event title (required).
+///   - startMs: Start time as epoch milliseconds.
+///   - endMs: End time as epoch milliseconds.
+///   - calendarId: Optional calendar identifier. Uses the default calendar if omitted.
+///   - notes: Optional notes string.
+///   - allDay: Whether the event is all-day (defaults to false).
+/// - Returns: A dict with `{ "id": String }` holding the new event's identifier.
+func addEvent(
+  title: String,
+  startMs: Double,
+  endMs: Double,
+  calendarId: String?,
+  notes: String?,
+  allDay: Bool
+) throws -> [String: Any] {
+  guard
+    EventStoreManager.shared.calendarStatus().permissionStatus == .granted
+  else {
+    throw IosToolsError.permissionDenied(
+      "Calendar permission not granted. Call requestCalendarPermission first."
+    )
+  }
+
+  // Sanity-check the time range.
+  guard endMs > startMs else {
+    throw IosToolsError.unknown("addEvent: endMs must be greater than startMs.")
+  }
+  let fourYearsMs: Double = 4.0 * 365.25 * 24.0 * 3600.0 * 1000.0
+  guard (endMs - startMs) <= fourYearsMs else {
+    throw IosToolsError.unknown(
+      "addEvent: event duration exceeds 4 years (Apple predicate limit).")
+  }
+
+  let store = EventStoreManager.shared.store
+
+  // Resolve calendar.
+  let targetCalendar: EKCalendar
+  if let calId = calendarId, !calId.isEmpty {
+    guard let cal = store.calendar(withIdentifier: calId) else {
+      throw IosToolsError.notFound(
+        "addEvent: no calendar found with id '\(calId)'.")
+    }
+    targetCalendar = cal
+  } else {
+    guard let defaultCal = store.defaultCalendarForNewEvents else {
+      throw IosToolsError.unknown(
+        "addEvent: could not determine default calendar for new events.")
+    }
+    targetCalendar = defaultCal
+  }
+
+  let event = EKEvent(eventStore: store)
+  event.title = title
+  event.startDate = Date(timeIntervalSince1970: startMs / 1000.0)
+  event.endDate = Date(timeIntervalSince1970: endMs / 1000.0)
+  event.isAllDay = allDay
+  event.calendar = targetCalendar
+  if let notes = notes, !notes.isEmpty {
+    event.notes = notes
+  }
+
+  try store.save(event, span: .thisEvent)
+
+  return ["id": event.eventIdentifier ?? ""]
+}
+
+/// Deletes a calendar event by its identifier.
+///
+/// - Parameters:
+///   - id: The event identifier (from `listEvents` or `addEvent`).
+/// - Returns: A dict `{ "ok": true }`.
+func deleteEvent(id: String) throws -> [String: Any] {
+  guard
+    EventStoreManager.shared.calendarStatus().permissionStatus == .granted
+  else {
+    throw IosToolsError.permissionDenied(
+      "Calendar permission not granted. Call requestCalendarPermission first."
+    )
+  }
+
+  let store = EventStoreManager.shared.store
+
+  guard let event = store.event(withIdentifier: id) else {
+    throw IosToolsError.notFound(
+      "deleteEvent: no event found with id '\(id)'.")
+  }
+
+  try store.remove(event, span: .thisEvent)
+
+  return ["ok": true]
+}
+
 // MARK: - Helpers
 
 private func calendarTypeName(_ type: EKCalendarType) -> String {

@@ -90,6 +90,105 @@ func listReminders(
   return filtered.map(reminderToDict)
 }
 
+// MARK: - Reminders write methods
+
+/// Creates a new reminder and saves it to the event store.
+///
+/// - Parameters:
+///   - title: The reminder title (required).
+///   - dueDateMs: Optional due date as epoch milliseconds.
+///   - listId: Optional reminder-list identifier. Uses the default list if omitted.
+///   - notes: Optional notes string.
+/// - Returns: A dict `{ "id": String }` with the new reminder's identifier.
+func addReminder(
+  title: String,
+  dueDateMs: Double?,
+  listId: String?,
+  notes: String?
+) throws -> [String: Any] {
+  guard
+    EventStoreManager.shared.remindersStatus().permissionStatus == .granted
+  else {
+    throw IosToolsError.permissionDenied(
+      "Reminders permission not granted. Call requestRemindersPermission first."
+    )
+  }
+
+  let store = EventStoreManager.shared.store
+
+  // Resolve list.
+  let targetList: EKCalendar
+  if let lId = listId, !lId.isEmpty {
+    guard let list = store.calendar(withIdentifier: lId) else {
+      throw IosToolsError.notFound(
+        "addReminder: no reminder list found with id '\(lId)'.")
+    }
+    targetList = list
+  } else {
+    guard let defaultList = store.defaultCalendarForNewReminders() else {
+      throw IosToolsError.unknown(
+        "addReminder: could not determine default reminder list.")
+    }
+    targetList = defaultList
+  }
+
+  let reminder = EKReminder(eventStore: store)
+  reminder.title = title
+  reminder.calendar = targetList
+
+  if let ms = dueDateMs {
+    let dueDate = Date(timeIntervalSince1970: ms / 1000.0)
+    var comps = Foundation.Calendar.current.dateComponents(
+      [.year, .month, .day, .hour, .minute, .second],
+      from: dueDate
+    )
+    // EKReminder expects a calendar on the DateComponents.
+    comps.calendar = Foundation.Calendar.current
+    reminder.dueDateComponents = comps
+  }
+
+  if let notes = notes, !notes.isEmpty {
+    reminder.notes = notes
+  }
+
+  try store.save(reminder, commit: true)
+
+  return ["id": reminder.calendarItemIdentifier]
+}
+
+/// Marks an existing reminder as completed.
+///
+/// - Parameters:
+///   - id: The reminder identifier (from `listReminders` or `addReminder`).
+/// - Returns: A dict `{ "ok": true }`.
+func completeReminder(id: String) throws -> [String: Any] {
+  guard
+    EventStoreManager.shared.remindersStatus().permissionStatus == .granted
+  else {
+    throw IosToolsError.permissionDenied(
+      "Reminders permission not granted. Call requestRemindersPermission first."
+    )
+  }
+
+  let store = EventStoreManager.shared.store
+
+  guard let item = store.calendarItem(withIdentifier: id) else {
+    throw IosToolsError.notFound(
+      "completeReminder: no calendar item found with id '\(id)'.")
+  }
+  guard let reminder = item as? EKReminder else {
+    throw IosToolsError.notFound(
+      "completeReminder: item with id '\(id)' is not a reminder.")
+  }
+
+  reminder.isCompleted = true
+  reminder.completionDate = Date()
+
+  try store.save(reminder, commit: true)
+
+  return ["ok": true]
+}
+
 // MARK: - Helpers
 
 private func reminderToDict(_ r: EKReminder) -> [String: Any] {
