@@ -51,8 +51,33 @@ Rebuild the iOS bundle (`npx expo run:ios --device`) after editing — env vars 
 | After `hermes update` | `sudo bash scripts/post-hermes-update.sh` |
 | Add/refresh Obsidian sync | `sudo bash scripts/install-obsidian-sync.sh` |
 | Re-apply config patches only | `python3 scripts/patch-hermes-config.py --config /root/.hermes/config.yaml` |
+| Restore from latest snapshot | `sudo bash scripts/restore-from-snapshot.sh` |
+| Take an ad-hoc snapshot | `sudo bash /root/hermes-snapshot.sh` |
 
-All four are idempotent and safe to re-run. `install-vps.sh` chains `install-obsidian-sync.sh` automatically at the end (skip with `SKIP_OBSIDIAN=1`).
+All idempotent and safe to re-run. `install-vps.sh` chains `install-obsidian-sync.sh` automatically at the end (skip with `SKIP_OBSIDIAN=1`).
+
+### Disaster recovery (full VPS rebuild)
+
+After a wipe, the data isn't lost as long as the snapshot job has been pushing to `hermes-snapshots` GitHub repo (cron at 4am UTC). Recovery flow:
+
+```bash
+# 1. Bootstrap infrastructure (Node, Hermes binary, repo, build, units, nginx).
+#    Bails at `.env` step — provide secrets from your password manager OR
+#    skip ahead to step 2 first; restore covers .env then re-run install-vps.sh.
+sudo DOMAIN=hermes.drshnk.dev bash scripts/install-vps.sh
+
+# 2. Restore Hermes state, gateway secrets (.env), gateway DB, and obsidian
+#    auth token from latest snapshot.
+echo 'YOUR-SNAPSHOT-PASSPHRASE' > /root/.hermes-snapshot.pass && chmod 600 /root/.hermes-snapshot.pass
+sudo REPO_URL=git@github.com:dk5761/hermes-snapshots.git \
+  bash /root/repos/Hermes_agent/scripts/restore-from-snapshot.sh
+
+# 3. Bring everything back up
+sudo bash /root/repos/Hermes_agent/scripts/install-vps.sh   # finishes (env now exists)
+systemctl restart hermes-dashboard hermes-gateway hermes-cron
+```
+
+What the snapshot covers vs doesn't — see `scripts/hermes-snapshot.sh` header. Manual interactive steps that remain after restore: `certbot` re-issuance (or copy `/etc/letsencrypt/`), and `ob sync` to refill the vault from Obsidian's cloud (vault content is *not* in the snapshot — Obsidian holds it).
 
 The hand-written walk-through below still lives here for reference / debugging — but in 95% of cases the scripts above are the answer.
 
