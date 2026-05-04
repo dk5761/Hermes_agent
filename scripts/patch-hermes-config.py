@@ -87,20 +87,22 @@ DESIRED_CONFIG_VALUES: dict[str, object] = {
 
 # Per-platform list of toolsets the agent should enable. We merge — anything
 # already present is preserved; entries listed here are added if missing.
+_CORE_TOOLSETS = [
+    "hermes-cli",
+    "mcp-fs",
+    "obsidian",
+    "mcp-ios-tools",
+]
 DESIRED_PLATFORM_TOOLSETS: dict[str, list[str]] = {
-    "cli": [
-        # Built-in: bundles web/browser/terminal/file/code_execution/...
-        "hermes-cli",
-        # MCP-derived toolsets: one entry per server in DESIRED_MCP_SERVERS.
-        "mcp-fs",
-        # Bundled Hermes skill — reads/writes the vault at OBSIDIAN_VAULT_PATH.
-        # Convention: agent must write only inside ${VAULT}/Hermes/ (set via
-        # system prompt). Read access is unrestricted across the vault.
-        "obsidian",
-        # iOS native tools — phone-side bridge for Calendar/Reminders/etc.
-        # Phone may be offline; tools report own availability (see MEMORY.md).
-        "mcp-ios-tools",
-    ],
+    # Mobile gateway sessions arrive with platform "cli" via _platform_config_key
+    # (LOCAL→cli mapping in gateway/run.py).
+    "cli": list(_CORE_TOOLSETS),
+    # Defensive: tui and api_server are alternate paths some Hermes builds use
+    # for /api/ws-style sessions. Mirroring the cli list here ensures the
+    # agent always sees the same tool surface no matter which platform key
+    # the Hermes session ends up with.
+    "tui": list(_CORE_TOOLSETS),
+    "api_server": list(_CORE_TOOLSETS),
 }
 
 # ─── implementation ──────────────────────────────────────────────────────────
