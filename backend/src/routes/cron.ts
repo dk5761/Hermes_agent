@@ -92,11 +92,27 @@ export async function registerCronRoutes(app: FastifyInstance, deps: CronRoutesD
 
 // Phase 6: enrich upstream cron payloads with the requesting user's
 // notifyOnComplete flag. Defaults to false when there's no row.
+//
+// Hermes' upstream sometimes returns a bare array `[...]` and sometimes
+// `{jobs: [...]}` depending on version. We always emit `{jobs: [...]}` to
+// match the frontend's typed contract — without this normalization the
+// list view shows "no jobs yet" even when jobs exist.
 async function augmentJobsList(db: Db, userId: string, upstream: unknown): Promise<unknown> {
-  if (!upstream || typeof upstream !== "object") return upstream;
-  const obj = upstream as Record<string, unknown>;
-  const jobs = obj["jobs"];
-  if (!Array.isArray(jobs)) return upstream;
+  let jobs: unknown[] | null = null;
+  let extras: Record<string, unknown> = {};
+  if (Array.isArray(upstream)) {
+    jobs = upstream;
+  } else if (upstream && typeof upstream === "object") {
+    const obj = upstream as Record<string, unknown>;
+    if (Array.isArray(obj["jobs"])) {
+      jobs = obj["jobs"] as unknown[];
+      extras = obj;
+    }
+  }
+  if (jobs === null) {
+    // Unknown shape — wrap in {jobs: []} so frontend never crashes.
+    return { jobs: [] };
+  }
   const ids: string[] = [];
   for (const j of jobs) {
     if (j && typeof j === "object") {
@@ -111,7 +127,7 @@ async function augmentJobsList(db: Db, userId: string, upstream: unknown): Promi
     const notify = typeof id === "string" ? flagsByJob.get(id) === true : false;
     return { ...(j as Record<string, unknown>), notifyOnComplete: notify };
   });
-  return { ...obj, jobs: augmented };
+  return { ...extras, jobs: augmented };
 }
 
 async function augmentSingleJob(

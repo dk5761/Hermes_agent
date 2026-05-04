@@ -240,45 +240,58 @@ export default function CronListScreen() {
         <Chip>Sort: name</Chip>
       </ScrollView>
 
-      <FlashList
-        data={filtered}
-        keyExtractor={keyExtractor}
-        renderItem={renderItem}
-        contentContainerStyle={{
-          paddingBottom: TAB_BOTTOM_PAD,
-        }}
-        ListEmptyComponent={
-          jobsQuery.isLoading ? (
-            <SkeletonGroup count={5} />
-          ) : (
-            <EmptyState
-              icon="clock"
-              title="No cron jobs yet"
-              body="Schedule a recurring task."
-              action={
-                <Button kind="accent" onPress={onNew}>
-                  New job
-                </Button>
-              }
-            />
-          )
-        }
-        refreshControl={
-          <RefreshControl
-            refreshing={pullRefreshing}
-            onRefresh={async () => {
-              setPullRefreshing(true);
-              try {
-                await jobsQuery.refetch();
-              } finally {
-                setPullRefreshing(false);
-              }
-            }}
-            tintColor={tokens.accent}
-            colors={[tokens.accent]}
+      {jobsQuery.isLoading ? (
+        <View style={{ paddingHorizontal: 16, paddingTop: 8 }}>
+          <SkeletonGroup count={5} />
+        </View>
+      ) : filtered.length === 0 ? (
+        // Centered empty state — rendering this outside FlashList avoids the
+        // v2 quirk where ListEmptyComponent gets pushed to the bottom of the
+        // available list space.
+        <View
+          style={{
+            flex: 1,
+            justifyContent: "center",
+            alignItems: "center",
+            paddingBottom: TAB_BOTTOM_PAD,
+          }}
+        >
+          <EmptyState
+            icon="clock"
+            title="No cron jobs yet"
+            body="Schedule a recurring task."
+            action={
+              <Button kind="accent" onPress={onNew}>
+                New job
+              </Button>
+            }
           />
-        }
-      />
+        </View>
+      ) : (
+        <FlashList
+          data={filtered}
+          keyExtractor={keyExtractor}
+          renderItem={renderItem}
+          contentContainerStyle={{
+            paddingBottom: TAB_BOTTOM_PAD,
+          }}
+          refreshControl={
+            <RefreshControl
+              refreshing={pullRefreshing}
+              onRefresh={async () => {
+                setPullRefreshing(true);
+                try {
+                  await jobsQuery.refetch();
+                } finally {
+                  setPullRefreshing(false);
+                }
+              }}
+              tintColor={tokens.accent}
+              colors={[tokens.accent]}
+            />
+          }
+        />
+      )}
       <ActionSheet ref={actionSheetRef} />
     </PhoneSafeArea>
   );
