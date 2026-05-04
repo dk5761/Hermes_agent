@@ -177,6 +177,109 @@ In a Hermes mobile chat, ask:
 
 Confirms agent has the obsidian skill and can read the vault.
 
+## Maxing out the integration
+
+After basic sync works, three high-leverage additions:
+
+### 1. Seed Hermes' memory with vault conventions
+
+Hermes loads `~/.hermes/memories/MEMORY.md` (entries separated by `§`) into every session. Seed it once with what the agent should know about you and the vault — so it never has to be told twice:
+
+```bash
+ssh root@<vps>
+cat >> /root/.hermes/memories/MEMORY.md <<'EOF'
+§
+User: <your name>. <role>. Time zone: <Area/City>. <comm preferences — terse, no emoji, etc.>
+§
+Obsidian vault at $OBSIDIAN_VAULT_PATH (vault: <vault name>). READ anywhere for context. WRITE only inside <vault>/Hermes/ and <vault>/Daily Notes/. Never modify or delete files outside those two paths. Use [[wikilinks]] when referring to other notes. Generated notes need YAML frontmatter with `created`, `tags`, `source` fields.
+§
+Cron jobs run with no conversation memory. Read what is needed from $OBSIDIAN_VAULT_PATH at run time. Use exactly the literal string [SILENT] when nothing changed/relevant — the delivery layer suppresses the notification.
+EOF
+```
+
+These are tokens injected on every turn — keep them tight. Hermes' built-in memory review (every 10 user turns) will refine them over time.
+
+### 2. Daily dashboard cron
+
+Auto-generates a daily note every morning. Adjust the schedule to your timezone (VPS is UTC).
+
+```bash
+ssh root@<vps>
+hermes cron create '30 1 * * *' \
+  --name 'daily-dashboard' \
+  --skill obsidian \
+  --workdir /opt/obsidian-vault \
+  --deliver local \
+  "$(cat <<'PROMPT'
+Build today's daily note in the Obsidian vault.
+
+Path: $OBSIDIAN_VAULT_PATH/Daily Notes/$(date -u -d "+5 hours 30 minutes" +%Y-%m-%d).md
+(IST date — VPS is UTC, user is Asia/Kolkata.)
+
+Steps:
+1. If yesterday's note exists, read it and identify any unfinished tasks (lines starting with "- [ ]").
+2. Compose today's note with this template:
+
+---
+created: <ISO timestamp>
+tags: [daily, generated]
+source: hermes-cron
+---
+
+# <Day, Month D, Year>
+
+## Carryover from [[YYYY-MM-DD]]
+<unfinished items from yesterday, or omit section>
+
+## Top 3 for today
+- [ ] (placeholder)
+
+## Notes
+<one-line journal prompt — pick from your context>
+
+## Open threads
+<glance at Hermes/Drafts/ + Hermes/Summaries/ — list files modified in last 7 days as wikilinks. Omit section if none.>
+
+3. Write via the obsidian skill. If file exists, append "## Refresh" instead of overwriting.
+4. Reply with one line.
+
+If the vault is unreachable, reply [SILENT].
+PROMPT
+)"
+```
+
+`30 1 * * *` = 01:30 UTC = 07:00 IST. Adjust both the cron expression and the `+5 hours 30 minutes` offset for your timezone. Trigger immediately for testing:
+
+```bash
+hermes cron run <job-id-from-list>
+```
+
+Output lands at `/root/.hermes/cron/output/<job-id>/<timestamp>.md` and (because of bidirectional sync) in your vault under `Daily Notes/`.
+
+### 3. Memory Keep-Alive plugin (optional)
+
+Mirrors Hermes' internal memory into your vault as browseable Markdown notes, plus auto-creates `RESUME / CHECKLIST / DOCS` notes for every long-running task.
+
+**Install — must be done in your Obsidian app on Mac/iPhone, can't be automated:**
+
+1. In Obsidian → **Community plugins** → **Browse** → search "BRAT" → install **Obsidian42 - BRAT** → enable
+2. Open command palette (`Cmd+P`) → **BRAT: Add a beta plugin for testing**
+3. Paste: `https://github.com/TechieTer/hermes-memory-keep-alive-for-obsidian`
+4. Click **Add Plugin** → wait for install
+5. Settings → Community plugins → enable **Hermes Memory Keep-Alive**
+6. Open the plugin's settings → point it at:
+   - Hermes home: `/root/.hermes` (if running on a VPS, expose via SFTP mount or rsync mirror; or skip if you only want vault-side validation)
+   - Vault Memory folder: `Drshnk/Hermes/Memory`
+
+7. Run command: **Hermes Keep-Alive: Run validator now** to seed the initial state.
+
+Plugin features once enabled:
+- Validator runs every 60 min: repairs missing notes, keeps a workflow index current
+- Smoke test every 6 hours
+- Slash commands `/loop-start` and `/loop-stop` arm/disarm a keep-alive loop for long tasks
+
+Skip this plugin if you're chat-and-go and don't run multi-day projects through Hermes.
+
 ## Troubleshooting
 
 | Symptom | Likely cause | Fix |

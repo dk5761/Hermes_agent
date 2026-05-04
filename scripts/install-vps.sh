@@ -203,6 +203,7 @@ step "Step 8/11: systemd units"
 
 DASHBOARD_UNIT="/etc/systemd/system/hermes-dashboard.service"
 GATEWAY_UNIT="/etc/systemd/system/hermes-gateway.service"
+CRON_UNIT="/etc/systemd/system/hermes-cron.service"
 
 read -r -d '' DESIRED_DASHBOARD <<EOF || true
 [Unit]
@@ -248,6 +249,31 @@ SyslogIdentifier=hermes-gateway
 WantedBy=multi-user.target
 EOF
 
+# hermes-cron — Python `hermes gateway run` daemon. Only this process
+# actually FIRES scheduled jobs. Without it, jobs sit at next_run forever.
+# (This is the systemd equivalent of the local docker-compose hermes-cron
+# sidecar that runs the same command.)
+read -r -d '' DESIRED_CRON <<EOF || true
+[Unit]
+Description=Hermes cron + messaging gateway daemon (runs scheduled jobs)
+After=network.target hermes-dashboard.service
+Wants=hermes-dashboard.service
+
+[Service]
+Type=simple
+User=root
+Environment=HOME=/root
+ExecStart=/usr/local/bin/hermes gateway run
+Restart=on-failure
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hermes-cron
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
 write_unit_if_changed() {
   local path="$1" desired="$2"
   if [[ -f "$path" ]] && diff -q <(printf '%s\n' "$desired") "$path" >/dev/null 2>&1; then
@@ -261,11 +287,12 @@ write_unit_if_changed() {
 
 write_unit_if_changed "${DASHBOARD_UNIT}" "${DESIRED_DASHBOARD}"
 write_unit_if_changed "${GATEWAY_UNIT}"   "${DESIRED_GATEWAY}"
+write_unit_if_changed "${CRON_UNIT}"      "${DESIRED_CRON}"
 
 if [[ "${SERVICES_DIRTY}" -eq 1 ]]; then
   systemctl daemon-reload
 fi
-systemctl enable hermes-dashboard hermes-gateway >/dev/null 2>&1
+systemctl enable hermes-dashboard hermes-gateway hermes-cron >/dev/null 2>&1
 
 # ─── Step 9: nginx + TLS ─────────────────────────────────────────────────────
 step "Step 9/11: nginx + TLS for ${DOMAIN}"
@@ -349,13 +376,13 @@ step "Step 11/11: start services + verify"
 # require a restart, so do it unconditionally on first install.
 systemctl restart hermes-dashboard
 sleep 3
-systemctl restart hermes-gateway
+systemctl restart hermes-gateway hermes-cron
 sleep 2
 ok "services restarted"
 
-if ! systemctl is-active --quiet hermes-dashboard hermes-gateway nginx; then
+if ! systemctl is-active --quiet hermes-dashboard hermes-gateway hermes-cron nginx; then
   c_red "  one or more services not active:"
-  systemctl --no-pager --lines=5 status hermes-dashboard hermes-gateway nginx | head -30
+  systemctl --no-pager --lines=5 status hermes-dashboard hermes-gateway hermes-cron nginx | head -40
   exit 11
 fi
 ok "all services active"
