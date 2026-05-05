@@ -1,75 +1,81 @@
 /**
  * PrivacyVeil — blocks the iOS App Switcher / multitasking preview from
- * leaking chat content. Mounts a full-screen blur over the app whenever
- * AppState reports anything other than "active". Independent of app-lock:
- * runs even when biometric lock is disabled, because the threat model
- * (preventing a casual onlooker from screenshotting the App Switcher row)
- * is universal for a private-conversations app.
+ * leaking chat content.
  *
- * The blur paints synchronously on the JS thread when AppState transitions
- * to "inactive" — iOS fires that event on the press of the home indicator
- * before "background", so the system snapshot captures the blurred frame.
+ * Critical timing detail: iOS captures the App Switcher snapshot during the
+ * `applicationWillResignActive` → `applicationDidEnterBackground` window.
+ * React Native bridges those to AppState as "active" → "inactive" →
+ * "background". To beat the snapshot we MUST have the blur view already
+ * mounted — mounting on the inactive event introduces a layout/paint race
+ * that iOS often wins. So this component is permanently mounted at the
+ * root, just hidden behind an opacity flip while the app is foregrounded.
  *
- * Lives at the very top of the root tree (above AppLockOverlay) so it
- * blankets login screens, modals, and the lock overlay alike.
+ * The opacity flip is layout-stable (no remount, no measure pass) and
+ * tends to land in time. For a fully-bulletproof iOS-side blur we'd need
+ * a native module that hooks `applicationWillResignActive` directly and
+ * inserts a UIVisualEffectView into the key window before the snapshot —
+ * a follow-up if this proves leaky in practice.
+ *
+ * Independent of app-lock: runs even when biometric lock is disabled.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AppState, type AppStateStatus, StyleSheet, View } from "react-native";
-import { BlurView } from "expo-blur";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { HermesMark } from "./ui/HermesMark";
 import { Stack } from "./ui/Stack";
 import { Text } from "./ui/Text";
-import { useTheme } from "@/theme";
 
 export function PrivacyVeil() {
   const [appState, setAppState] = useState<AppStateStatus>(AppState.currentState);
   const insets = useSafeAreaInsets();
-  // resolvedMode lands at "light" | "dark" — needed because BlurView's `tint`
-  // prop accepts those discrete values, not the "system" pass-through.
-  const { resolvedMode } = useTheme();
+  const stateRef = useRef(appState);
+  stateRef.current = appState;
 
   useEffect(() => {
-    const sub = AppState.addEventListener("change", setAppState);
+    const sub = AppState.addEventListener("change", (next) => {
+      // Only re-render when the bucket flips between "active" and not-active —
+      // we don't care about the inactive↔background distinction here.
+      const wasActive = stateRef.current === "active";
+      const isActive = next === "active";
+      if (wasActive !== isActive) setAppState(next);
+    });
     return () => sub.remove();
   }, []);
 
-  // Render only when the app isn't in the foreground. Mounting/unmounting
-  // (rather than always-mounted with display:none) avoids the BlurView's
-  // GPU work entirely while the user is actively using the app.
-  if (appState === "active") return null;
+  const visible = appState !== "active";
 
   return (
     <View
       pointerEvents="none"
-      style={StyleSheet.absoluteFill}
-      // Highest z-index in the tree; sits above AppLockOverlay (mounted
-      // last under PrivacyVeil's parent in _layout.tsx).
+      style={[
+        StyleSheet.absoluteFill,
+        {
+          // Solid black, opacity-flipped rather than mount/unmount so the
+          // view is already in the native tree when iOS snapshots the App
+          // Switcher preview — beats the React render race.
+          backgroundColor: "#000",
+          opacity: visible ? 1 : 0,
+        },
+      ]}
       accessibilityElementsHidden
       importantForAccessibility="no-hide-descendants"
     >
-      <BlurView
-        intensity={60}
-        tint={resolvedMode}
-        style={StyleSheet.absoluteFill}
+      <Stack
+        align="center"
+        justify="center"
+        gap={12}
+        style={{
+          flex: 1,
+          paddingTop: insets.top,
+          paddingBottom: insets.bottom,
+        }}
       >
-        <Stack
-          align="center"
-          justify="center"
-          gap={12}
-          style={{
-            flex: 1,
-            paddingTop: insets.top,
-            paddingBottom: insets.bottom,
-          }}
-        >
-          <HermesMark size={48} />
-          <Text kind="caption" className="text-ink-3">
-            Hermes
-          </Text>
-        </Stack>
-      </BlurView>
+        <HermesMark size={56} />
+        <Text kind="caption" style={{ color: "rgba(255,255,255,0.5)" }}>
+          Hermes
+        </Text>
+      </Stack>
     </View>
   );
 }
