@@ -73,6 +73,7 @@ import {
   pendingRenameSession,
   pendingSetSessionModel,
 } from "@/state/pending-mutations";
+import { useNetworkStatus } from "@/state/network-status";
 import { getMainModel } from "@/api/settings";
 import type { AttachmentDTO, HistoryRow, MessagesPage, SessionDto } from "@/api/types";
 import type {
@@ -483,6 +484,11 @@ export default function ChatScreen() {
   type MessagesPageParam = { before?: number; around?: number } | undefined;
 
   // Phase 4: when opened with `?messageId=N`, the first fetched page is the
+  // Network-state subscription powers the offline empty state below the
+  // FlashList — when there's no cached history AND we're offline, paint
+  // an explanatory card instead of an unexplained blank screen.
+  const online = useNetworkStatus((s) => s.online);
+
   // around-window centered on N. Including `targetMessageId` in the queryKey
   // means a different deep-link target cleanly invalidates the cache and
   // triggers a fresh around-fetch instead of re-using a stale latest-page.
@@ -1704,6 +1710,20 @@ export default function ChatScreen() {
         {messagesQuery.isPending && reversed.length === 0 ? (
           <View style={{ flex: 1 }}>
             <SkeletonChat count={5} />
+          </View>
+        ) : reversed.length === 0 && !online ? (
+          // Offline + no cached history for this session = nothing to paint.
+          // Surface why explicitly so the user doesn't think the chat is
+          // empty/broken.
+          <View style={{ flex: 1, justifyContent: "center", alignItems: "center", paddingHorizontal: 32 }}>
+            <Icon name="globe" size={28} color={tokens.ink3} />
+            <Text kind="body-lg" color={tokens.ink2} style={{ marginTop: 12, textAlign: "center", fontWeight: "600" }}>
+              Offline
+            </Text>
+            <Text kind="caption" color={tokens.ink3} style={{ marginTop: 6, textAlign: "center", lineHeight: 18 }}>
+              This chat hasn't been opened on this device before, so its
+              messages aren't cached. Connect to the internet to load them.
+            </Text>
           </View>
         ) : (
           <FlashList

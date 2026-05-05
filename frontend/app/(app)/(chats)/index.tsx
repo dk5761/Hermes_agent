@@ -57,6 +57,8 @@ import { usePinnedSessions } from "@/state/pinned-sessions";
 import { useSessionTags } from "@/state/session-tags";
 import { QuickSwitcher, type QuickSwitcherHandle } from "@/search";
 import { OfflineBanner } from "@/components/OfflineBanner";
+import { useNetworkStatus } from "@/state/network-status";
+import { showToast } from "@/components/ui";
 import { formatRelative } from "@/util/time";
 
 const QUERY_KEY = ["sessions"] as const;
@@ -327,9 +329,15 @@ export default function SessionsScreen() {
     quickSwitcherRef.current?.present();
   }, []);
 
+  const online = useNetworkStatus((s) => s.online);
+
   const onCreate = useCallback(() => {
+    if (!online) {
+      showToast("Connect to the internet to start a new chat", "info");
+      return;
+    }
     create.mutate();
-  }, [create]);
+  }, [create, online]);
 
   // Subtitle on the large NavBar: total sessions + active count.
   const headerSubtitle = useMemo(() => {
@@ -447,7 +455,10 @@ export default function SessionsScreen() {
       <Pressable
         onPress={onCreate}
         accessibilityRole="button"
-        accessibilityLabel="New chat"
+        accessibilityLabel={
+          online ? "New chat" : "New chat (offline — connect to use)"
+        }
+        accessibilityState={{ disabled: !online }}
         disabled={create.isPending}
         style={{
           position: "absolute",
@@ -464,7 +475,9 @@ export default function SessionsScreen() {
           shadowRadius: 14,
           shadowOffset: { width: 0, height: 6 },
           elevation: 6,
-          opacity: create.isPending ? 0.6 : 1,
+          // Visual gating: 0.4 when offline (still tappable so the tap
+          // surfaces a toast explaining why); 0.6 mid-mutation; 1 idle.
+          opacity: !online ? 0.4 : create.isPending ? 0.6 : 1,
         }}
       >
         <Icon name="plus" size={22} color={tokens.surface} />

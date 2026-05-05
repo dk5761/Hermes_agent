@@ -46,6 +46,8 @@ import {
 import type { CronJob } from "@/api/types";
 import { formatRelative, toDate } from "@/util/time";
 import { OfflineBanner } from "@/components/OfflineBanner";
+import { useNetworkStatus } from "@/state/network-status";
+import { showToast } from "@/components/ui";
 
 type FilterKey = "all" | "enabled" | "paused" | "notify";
 
@@ -143,9 +145,15 @@ export default function CronListScreen() {
     [router],
   );
 
+  const online = useNetworkStatus((s) => s.online);
+
   const onNew = useCallback(() => {
+    if (!online) {
+      showToast("Connect to the internet to create a new cron job", "info");
+      return;
+    }
     router.push("/(cron)/new" as const);
-  }, [router]);
+  }, [router, online]);
 
   const onLongPress = useCallback(
     (job: CronJob) => {
