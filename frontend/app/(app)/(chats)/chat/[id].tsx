@@ -427,7 +427,10 @@ export default function ChatScreen() {
   // Cold-load history.
   const messagesQuery = useQuery({
     queryKey: ["session-messages", sessionId],
-    queryFn: () => (sessionId ? getMessages(sessionId) : Promise.resolve({ rows: [] })),
+    queryFn: () =>
+      sessionId
+        ? getMessages(sessionId)
+        : Promise.resolve({ rows: [], hasBefore: false, hasAfter: false }),
     enabled: !!sessionId,
   });
 

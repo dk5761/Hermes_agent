@@ -1,9 +1,19 @@
 import { apiFetch } from "./client";
 import type {
   CreateSessionResponse,
-  HistoryResponse,
+  MessagesPage,
   SessionsListResponse,
 } from "./types";
+
+/** Pagination opts for {@link getMessages}. */
+export interface GetMessagesOpts {
+  /** Page size. Server caps at 100, defaults to 50. */
+  limit?: number;
+  /** Returns rows where chat_history.id < before. Mutually exclusive with `around`. */
+  before?: number;
+  /** Centered window: ~limit/2 before + ~limit/2 after the target id. */
+  around?: number;
+}
 
 export async function listSessions(): Promise<SessionsListResponse> {
   return apiFetch<SessionsListResponse>("/sessions");
@@ -50,8 +60,15 @@ export async function setSessionModel(
   });
 }
 
-export async function getMessages(id: string): Promise<HistoryResponse> {
-  return apiFetch<HistoryResponse>(`/sessions/${id}/messages`);
+export async function getMessages(
+  id: string,
+  opts: GetMessagesOpts = {},
+): Promise<MessagesPage> {
+  const query: Record<string, number | undefined> = {};
+  if (opts.limit !== undefined) query.limit = opts.limit;
+  if (opts.before !== undefined) query.before = opts.before;
+  if (opts.around !== undefined) query.around = opts.around;
+  return apiFetch<MessagesPage>(`/sessions/${id}/messages`, { query });
 }
 
 export interface ReloadMcpResponse {

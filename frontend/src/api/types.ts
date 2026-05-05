@@ -64,9 +64,20 @@ export interface HistoryRow {
   payload: Record<string, unknown>;
 }
 
-export interface HistoryResponse {
+/**
+ * Paginated history page returned by GET /sessions/:id/messages.
+ * `rows` is always sorted ascending by id (oldest first).
+ * `hasBefore` drives infinite-scroll-up; `hasAfter` is informational
+ * (the WS stream is the source of newer content, not a fetch).
+ */
+export interface MessagesPage {
   rows: HistoryRow[];
+  hasBefore: boolean;
+  hasAfter: boolean;
 }
+
+/** @deprecated Use {@link MessagesPage}. Kept as a one-version alias. */
+export type HistoryResponse = MessagesPage;
 
 // Attachment kinds the gateway recognizes; "file" is reserved for future
 // generic types (Phase 4 only persists image and pdf).
