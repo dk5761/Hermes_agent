@@ -24,6 +24,7 @@ import { useSessionTags } from "@/state/session-tags";
 import { useAppLock } from "@/state/app-lock";
 import { useVoiceSettings } from "@/state/voice-settings";
 import { AppLockOverlay } from "@/components/AppLockOverlay";
+import { PrivacyVeil } from "@/components/PrivacyVeil";
 import { reconcileOnLaunch } from "@/live-activity/bridge";
 import { registerPushTokenWithBackend } from "@/notifications/register";
 import { setupNotificationListeners } from "@/notifications/handler";
@@ -154,6 +155,10 @@ export default function RootLayout() {
                   {/* Mounted last so the lock overlay paints on top of every
                       screen including pushed routes and modals. */}
                   <AppLockOverlay />
+                  {/* PrivacyVeil mounts above AppLockOverlay so the App
+                      Switcher snapshot is blurred even while the lock
+                      screen is showing. */}
+                  <PrivacyVeil />
                 </ToastProvider>
               </BottomSheetModalProvider>
             </QueryClientProvider>
