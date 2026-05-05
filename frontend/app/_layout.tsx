@@ -28,6 +28,7 @@ import { useAppLock } from "@/state/app-lock";
 import { useVoiceSettings } from "@/state/voice-settings";
 import { useReasoningCollapse } from "@/state/reasoning-collapse";
 import { usePendingSends } from "@/state/pending-sends";
+import { useDevSettings } from "@/state/dev-settings";
 import { usePendingMutations } from "@/state/pending-mutations";
 import { useNetworkStatus } from "@/state/network-status";
 import { attachMutationDrainer } from "@/ws/mutation-drainer";
@@ -99,6 +100,7 @@ function AuthGate() {
     void useAppLock.getState().hydrate();
     void useVoiceSettings.getState().hydrate();
     void useReasoningCollapse.getState().hydrate();
+    if (__DEV__) void useDevSettings.getState().hydrate();
     // Hydrate the offline send queue so any frames persisted across an app
     // kill / OS reboot are visible the moment the chat screen mounts. The
     // queue-drainer (attached per-chat in useChatStream) flushes them once

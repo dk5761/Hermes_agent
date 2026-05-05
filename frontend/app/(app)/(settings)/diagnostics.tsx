@@ -47,6 +47,7 @@ import {
 import { getLogs, type LogFile } from "@/api/logs";
 import { usePendingSends } from "@/state/pending-sends";
 import { usePendingMutations } from "@/state/pending-mutations";
+import { useDevSettings } from "@/state/dev-settings";
 
 type Tab = "hermes" | "server" | "network";
 
@@ -523,8 +524,36 @@ function SyncDiagnostics() {
           onPress={onResetQueues}
         />
       </ListGroup>
+      {__DEV__ ? <DevToolsSection /> : null}
     </Stack>
   );
 }
 
-
+function DevToolsSection() {
+  const mockOffline = useDevSettings((s) => s.mockOffline);
+  const setMockOffline = useDevSettings((s) => s.setMockOffline);
+  return (
+    <Stack gap={6} style={{ paddingTop: 16 }}>
+      <Text kind="micro" className="text-ink-3 uppercase" style={{ paddingLeft: 4 }}>
+        Developer
+      </Text>
+      <ListGroup>
+        <ListRow
+          title="Mock offline"
+          subtitle={
+            mockOffline
+              ? "All requests fail; banner + queues active. Metro keeps working."
+              : "Toggle to simulate a no-network device for offline-path testing."
+          }
+          icon="globe"
+          right={
+            <Toggle
+              on={mockOffline}
+              onChange={(next) => setMockOffline(next)}
+            />
+          }
+        />
+      </ListGroup>
+    </Stack>
+  );
+}

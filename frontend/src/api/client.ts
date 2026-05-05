@@ -1,6 +1,7 @@
 import { API_URL } from "../config";
 import { getAuthSnapshot, useAuthStore } from "../auth/store";
 import { ApiError, type ApiErrorBody } from "./types";
+import { mockOfflineActive } from "../state/dev-settings";
 
 // Shared fetch wrapper:
 // - injects Authorization automatically when an access token is present.
@@ -72,6 +73,12 @@ export async function apiFetch<T = unknown>(
   init: RequestInit_ = {},
 ): Promise<T> {
   const { method = "GET", body, query, signal, skipAuth = false } = init;
+  // Dev-only mock-offline trap. Throw before touching fetch so the device
+  // appears completely disconnected (no Metro disruption — Metro uses its
+  // own debugger socket, not our app fetch).
+  if (mockOfflineActive()) {
+    throw new TypeError("Network request failed (mock offline)");
+  }
   const url = buildUrl(path, query);
 
   const send = async (token: string | null): Promise<Response> => {

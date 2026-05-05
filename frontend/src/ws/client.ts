@@ -1,4 +1,5 @@
 import { Backoff } from "../util/backoff";
+import { mockOfflineActive } from "../state/dev-settings";
 import {
   type ClientFrame,
   type ControlFrame,
@@ -127,6 +128,9 @@ export class GatewayWsClient {
   }
 
   send(frame: ClientFrame): void {
+    // Dev-only mock-offline trap. Behaves identically to a real "socket
+    // not OPEN" — frame is dropped, queue-drainer takes over on toggle-off.
+    if (mockOfflineActive()) return;
     const s = this.socket;
     if (!s || s.readyState !== WebSocket.OPEN) return;
     s.send(JSON.stringify(frame));
@@ -152,6 +156,15 @@ export class GatewayWsClient {
 
   private openSocket(): void {
     if (this.paused || this.explicitlyClosed) return;
+    // Dev-only mock-offline: refuse to connect; surface as "reconnecting"
+    // so the rest of the UI (status banner, etc.) treats it like a real
+    // outage. A subsequent reconnect attempt is scheduled so the socket
+    // wakes up the moment the user flips the toggle off.
+    if (mockOfflineActive()) {
+      this.setStatus("reconnecting", { retryInMs: 2000 });
+      this.scheduleReconnect(2000);
+      return;
+    }
     const token = this.cfg.getToken();
     if (!token) {
       this.setStatus("auth_required");

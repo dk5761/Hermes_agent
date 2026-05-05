@@ -1,6 +1,8 @@
 import NetInfo, { type NetInfoState } from "@react-native-community/netinfo";
 import { create } from "zustand";
 
+import { useDevSettings } from "./dev-settings";
+
 /**
  * network-status — single source of truth for "are we online".
  *
@@ -31,20 +33,40 @@ export const useNetworkStatus = create<NetworkState>((set, get) => ({
   type: null,
   changedAt: Date.now(),
   init: () => {
-    const apply = (s: NetInfoState) => {
-      const next = !!s.isConnected && s.isInternetReachable !== false;
+    let lastNetInfo: NetInfoState | null = null;
+    const compute = () => {
+      const s = lastNetInfo;
+      const realOnline = s
+        ? !!s.isConnected && s.isInternetReachable !== false
+        : true;
+      // Dev-only mock-offline override (gated by __DEV__ inside the helper).
+      // When toggled the store reports offline regardless of the real link.
+      const next =
+        __DEV__ && useDevSettings.getState().mockOffline ? false : realOnline;
       const now = Date.now();
       const prev = get();
-      if (next === prev.online && (prev.type ?? null) === (s.type ?? null)) {
+      if (next === prev.online && (prev.type ?? null) === (s?.type ?? null)) {
         return;
       }
       set({
         online: next,
-        type: s.type ?? null,
+        type: s?.type ?? null,
         changedAt: now,
       });
     };
+    const apply = (s: NetInfoState) => {
+      lastNetInfo = s;
+      compute();
+    };
     void NetInfo.fetch().then(apply);
-    return NetInfo.addEventListener(apply);
+    const unsubNet = NetInfo.addEventListener(apply);
+    // Re-derive `online` whenever the dev toggle flips.
+    const unsubDev = __DEV__
+      ? useDevSettings.subscribe(() => compute())
+      : () => undefined;
+    return () => {
+      unsubNet();
+      unsubDev();
+    };
   },
 }));
