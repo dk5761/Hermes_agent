@@ -1441,93 +1441,10 @@ export default function ChatScreen() {
       <NavBar
         title={headerTitle}
         onBack={() => safeBack("/(chats)")}
-        leading={
-          // Tappable model pill: shows the per-chat override (accent) when
-          // set, falls back to the global default (muted). One-tap into the
-          // model picker preserves the existing more-sheet entry as a
-          // secondary path. Hidden until at least one of override/default
-          // resolves so we don't paint an empty placeholder.
-          (() => {
-            const override = session?.modelOverride ?? null;
-            const defaultModel = mainModelQuery.data?.model ?? null;
-            const label = override ?? defaultModel;
-            if (!label || !sessionId) return null;
-            const isOverride = !!override;
-            const goToPicker = () =>
-              router.push({
-                pathname: "/(settings)/model" as never,
-                params: { sessionId },
-              } as never);
-            const onLongPressPill = () => {
-              const actions: Array<{
-                id: string;
-                label: string;
-                icon?: IconName;
-                onPress: () => void;
-              }> = [
-                {
-                  id: "switch",
-                  label: "Switch model",
-                  icon: "spark",
-                  onPress: goToPicker,
-                },
-              ];
-              if (isOverride) {
-                actions.unshift({
-                  id: "clear",
-                  label: "Use default model",
-                  icon: "refresh",
-                  onPress: () => {
-                    void setSessionModel(sessionId, { clear: true })
-                      .then(() =>
-                        queryClient.invalidateQueries({ queryKey: ["sessions"] }),
-                      )
-                      .catch(() => undefined);
-                  },
-                });
-              }
-              actionSheetRef.current?.present({
-                title: label,
-                subtitle: isOverride
-                  ? "Override active for this chat"
-                  : "Default model",
-                actions,
-              });
-            };
-            return (
-              <Pressable
-                onPress={goToPicker}
-                onLongPress={onLongPressPill}
-                delayLongPress={350}
-                accessibilityRole="button"
-                accessibilityLabel={
-                  isOverride
-                    ? `Model override: ${label}. Tap to change, hold for options.`
-                    : `Model: ${label}. Tap to override for this chat.`
-                }
-                hitSlop={6}
-                style={({ pressed }) => ({
-                  marginLeft: 4,
-                  paddingHorizontal: 8,
-                  paddingVertical: 3,
-                  borderRadius: 6,
-                  backgroundColor: isOverride ? tokens.accentBg : tokens.chip,
-                  opacity: pressed ? 0.6 : 1,
-                })}
-              >
-                <Text
-                  kind="micro"
-                  mono
-                  color={isOverride ? tokens.accent : tokens.ink2}
-                  numberOfLines={1}
-                  style={{ maxWidth: 110 }}
-                >
-                  {label}
-                </Text>
-              </Pressable>
-            );
-          })()
-        }
+        // Model pill moved out of the leading slot — see the composer-anchored
+        // strip below. Headers were clipping long model names and crowding
+        // the title.
+        leading={null}
         trailing={
           <>
             <NavIcon name="search" onPress={onSearchOpen} />
@@ -1801,6 +1718,111 @@ export default function ChatScreen() {
             </Text>
           </View>
         ) : null}
+
+        {/* Model strip — sits directly above the composer so the active
+            model is visible at the most attention-heavy moment (typing
+            a message). Tap → picker. Long-press → quick actions. */}
+        {(() => {
+          const override = session?.modelOverride ?? null;
+          const defaultModel = mainModelQuery.data?.model ?? null;
+          const label = override ?? defaultModel;
+          if (!label || !sessionId) return null;
+          const isOverride = !!override;
+          const goToPicker = () =>
+            router.push({
+              pathname: "/(settings)/model" as never,
+              params: { sessionId },
+            } as never);
+          const onLongPressPill = () => {
+            const actions: Array<{
+              id: string;
+              label: string;
+              icon?: IconName;
+              onPress: () => void;
+            }> = [
+              {
+                id: "switch",
+                label: "Switch model",
+                icon: "spark",
+                onPress: goToPicker,
+              },
+            ];
+            if (isOverride) {
+              actions.unshift({
+                id: "clear",
+                label: "Use default model",
+                icon: "refresh",
+                onPress: () => {
+                  void setSessionModel(sessionId, { clear: true })
+                    .then(() =>
+                      queryClient.invalidateQueries({ queryKey: ["sessions"] }),
+                    )
+                    .catch(() => undefined);
+                },
+              });
+            }
+            actionSheetRef.current?.present({
+              title: label,
+              subtitle: isOverride
+                ? "Override active for this chat"
+                : "Default model",
+              actions,
+            });
+          };
+          return (
+            <View
+              style={{
+                paddingHorizontal: 12,
+                paddingTop: 4,
+                paddingBottom: 0,
+                backgroundColor: tokens.bg,
+              }}
+            >
+              <Pressable
+                onPress={goToPicker}
+                onLongPress={onLongPressPill}
+                delayLongPress={350}
+                accessibilityRole="button"
+                accessibilityLabel={
+                  isOverride
+                    ? `Model override: ${label}. Tap to change, hold for options.`
+                    : `Model: ${label}. Tap to override for this chat.`
+                }
+                style={({ pressed }) => ({
+                  alignSelf: "flex-start",
+                  flexDirection: "row",
+                  alignItems: "center",
+                  gap: 6,
+                  paddingHorizontal: 10,
+                  paddingVertical: 5,
+                  borderRadius: 999,
+                  backgroundColor: isOverride ? tokens.accentBg : tokens.chip,
+                  opacity: pressed ? 0.6 : 1,
+                })}
+              >
+                <Icon
+                  name="spark"
+                  size={11}
+                  color={isOverride ? tokens.accent : tokens.ink2}
+                />
+                <Text
+                  kind="micro"
+                  mono
+                  color={isOverride ? tokens.accent : tokens.ink2}
+                  numberOfLines={1}
+                  style={{ maxWidth: 220, fontWeight: "500" }}
+                >
+                  {label}
+                </Text>
+                <Icon
+                  name="chevD"
+                  size={10}
+                  color={isOverride ? tokens.accent : tokens.ink3}
+                />
+              </Pressable>
+            </View>
+          );
+        })()}
 
         {/* Pill composer */}
         <View
