@@ -34,12 +34,21 @@ importers:
       '@react-native-async-storage/async-storage':
         specifier: 2.2.0
         version: 2.2.0(react-native@0.83.6(patch_hash=4884b5e375a331cf1d6bc06c606472ec4a958852cabe451a423ec392fd7bea3f)(@babel/core@7.29.0)(@react-native/metro-config@0.85.2(@babel/core@7.29.0))(@types/react@19.2.14)(react@19.2.0))
+      '@react-native-community/netinfo':
+        specifier: ^12.0.1
+        version: 12.0.1(react-native@0.83.6(patch_hash=4884b5e375a331cf1d6bc06c606472ec4a958852cabe451a423ec392fd7bea3f)(@babel/core@7.29.0)(@react-native/metro-config@0.85.2(@babel/core@7.29.0))(@types/react@19.2.14)(react@19.2.0))(react@19.2.0)
       '@shopify/flash-list':
         specifier: ^2.3.1
         version: 2.3.1(@babel/runtime@7.29.2)(react-native@0.83.6(patch_hash=4884b5e375a331cf1d6bc06c606472ec4a958852cabe451a423ec392fd7bea3f)(@babel/core@7.29.0)(@react-native/metro-config@0.85.2(@babel/core@7.29.0))(@types/react@19.2.14)(react@19.2.0))(react@19.2.0)
+      '@tanstack/query-async-storage-persister':
+        specifier: 5.100.6
+        version: 5.100.6
       '@tanstack/react-query':
         specifier: ^5.100.6
         version: 5.100.6(react@19.2.0)
+      '@tanstack/react-query-persist-client':
+        specifier: 5.100.6
+        version: 5.100.6(@tanstack/react-query@5.100.6(react@19.2.0))(react@19.2.0)
       cron-parser:
         specifier: ^5.5.0
         version: 5.5.0
@@ -1199,6 +1208,12 @@ packages:
     peerDependencies:
       react-native: ^0.0.0-0 || >=0.65 <1.0
 
+  '@react-native-community/netinfo@12.0.1':
+    resolution: {integrity: sha512-P/3caXIvfYSJG8AWJVefukg+ZGRPs+M4Lp3pNJtgcTYoJxCjWrKQGNnCkj/Cz//zWa/avGed0i/wzm0T8vV2IQ==}
+    peerDependencies:
+      react: '*'
+      react-native: '>=0.59'
+
   '@react-native/assets-registry@0.83.6':
     resolution: {integrity: sha512-iljb4ue1yWJ3EhySz7EjV6CzSVrI2uNtR8BI2jzP5+QS5E4Cl3fdIJRmVwDEx1pu8uE97PGEusGRHnoaZ9Q3jg==}
     engines: {node: '>= 20.19.4'}
@@ -1443,8 +1458,20 @@ packages:
     resolution: {integrity: sha512-yv9jeEFWnjKCI6/T3Oq50yQEOqmpmpfzG1hcZsAOaXFQPfzWprWrlHSdGPEF3WQTi8zu8ohC9Mh9J470nT5pUw==}
     engines: {node: '>= 20'}
 
+  '@tanstack/query-async-storage-persister@5.100.6':
+    resolution: {integrity: sha512-DrAqV6IeYbHWr0MuFo5FcK3ewPPMDZPX1hn7Qllm+cL4khSpB4CWm1xbClXfTmwUVLoRD7i7FxQRZKWn93NgJw==}
+
   '@tanstack/query-core@5.100.6':
     resolution: {integrity: sha512-Os2CPUr98to98RYm+D4qGqGkiffn7MGSyl2547a4MljVkHE30AMJRqTiyCqBfMwzAx/I91vCkAxp5tHSla6Twg==}
+
+  '@tanstack/query-persist-client-core@5.100.6':
+    resolution: {integrity: sha512-SLJXsn5x2XAwKgOVulBFh0KXop7zeDoRmmB7ImKODLflyBnvLBmPQPadmwTgBiZQUa/Kx/y1MxzAXC/4Nfg8kQ==}
+
+  '@tanstack/react-query-persist-client@5.100.6':
+    resolution: {integrity: sha512-WHklDX+U1C/dofiEBNxhk3eWKVEcOWmREPgim3PMqTlXJLewQ5NTqoyQjrnCKuXQIwjDrFd8ZpTbAtt7GRldhw==}
+    peerDependencies:
+      '@tanstack/react-query': ^5.100.6
+      react: ^18 || ^19
 
   '@tanstack/react-query@5.100.6':
     resolution: {integrity: sha512-uVSrps0PV16Cxmcn2rvL+dUhwTpTUtiRW347AEeYxMZXO2pZe9ja7E24PAMGoQ5u2g89DD8u4QhOviBk+RN8RA==}
@@ -5216,6 +5243,11 @@ snapshots:
       merge-options: 3.0.4
       react-native: 0.83.6(patch_hash=4884b5e375a331cf1d6bc06c606472ec4a958852cabe451a423ec392fd7bea3f)(@babel/core@7.29.0)(@react-native/metro-config@0.85.2(@babel/core@7.29.0))(@types/react@19.2.14)(react@19.2.0)
 
+  '@react-native-community/netinfo@12.0.1(react-native@0.83.6(patch_hash=4884b5e375a331cf1d6bc06c606472ec4a958852cabe451a423ec392fd7bea3f)(@babel/core@7.29.0)(@react-native/metro-config@0.85.2(@babel/core@7.29.0))(@types/react@19.2.14)(react@19.2.0))(react@19.2.0)':
+    dependencies:
+      react: 19.2.0
+      react-native: 0.83.6(patch_hash=4884b5e375a331cf1d6bc06c606472ec4a958852cabe451a423ec392fd7bea3f)(@babel/core@7.29.0)(@react-native/metro-config@0.85.2(@babel/core@7.29.0))(@types/react@19.2.14)(react@19.2.0)
+
   '@react-native/assets-registry@0.83.6': {}
 
   '@react-native/babel-plugin-codegen@0.83.6(@babel/core@7.29.0)':
@@ -5570,7 +5602,22 @@ snapshots:
       '@tailwindcss/oxide-win32-arm64-msvc': 4.2.1
       '@tailwindcss/oxide-win32-x64-msvc': 4.2.1
 
+  '@tanstack/query-async-storage-persister@5.100.6':
+    dependencies:
+      '@tanstack/query-core': 5.100.6
+      '@tanstack/query-persist-client-core': 5.100.6
+
   '@tanstack/query-core@5.100.6': {}
+
+  '@tanstack/query-persist-client-core@5.100.6':
+    dependencies:
+      '@tanstack/query-core': 5.100.6
+
+  '@tanstack/react-query-persist-client@5.100.6(@tanstack/react-query@5.100.6(react@19.2.0))(react@19.2.0)':
+    dependencies:
+      '@tanstack/query-persist-client-core': 5.100.6
+      '@tanstack/react-query': 5.100.6(react@19.2.0)
+      react: 19.2.0
 
   '@tanstack/react-query@5.100.6(react@19.2.0)':
     dependencies:

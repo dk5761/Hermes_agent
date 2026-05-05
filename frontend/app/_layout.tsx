@@ -6,11 +6,14 @@ import "../global.css";
 import { useEffect } from "react";
 import { ActivityIndicator, AppState, StyleSheet, View } from "react-native";
 import { Slot, useRouter } from "expo-router";
+import { MutationCache, QueryClient } from "@tanstack/react-query";
+import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client";
 import {
-  MutationCache,
-  QueryClient,
-  QueryClientProvider,
-} from "@tanstack/react-query";
+  persister,
+  PERSIST_MAX_AGE,
+  PERSIST_BUSTER,
+  dehydrateOptions,
+} from "@/cache/query-persister";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
@@ -36,8 +39,9 @@ import { ThemeProvider, useAppFonts } from "@/theme";
 import { ToastProvider, showToast } from "@/components/ui";
 import { humanizeError } from "@/util/errors";
 
-// One client per app instance; React Query cache is in-memory only this phase
-// (TODO Phase 3.5: AsyncStorage persister for warm-start).
+// One client per app instance. The cache is persisted to AsyncStorage by the
+// PersistQueryClientProvider below — see `src/cache/query-persister.ts` for
+// the dehydration filter and key versioning.
 //
 // Global mutation error handler: every mutation that doesn't suppress its
 // onError fires a toast. Mutations that handle errors locally (auth flows,
@@ -54,9 +58,20 @@ const queryClient = new QueryClient({
   }),
   defaultOptions: {
     queries: {
-      retry: 1,
+      retry: 2,
       staleTime: 30_000,
+      // Match persist age — keeps in-memory cache alive long enough to be
+      // persisted; persister hydrate then trims on its own maxAge.
+      gcTime: 1000 * 60 * 60 * 24 * 7,
       refetchOnWindowFocus: false,
+      refetchOnReconnect: true,
+      // Serve cache when offline; queries flagged paused while offline retry
+      // automatically once NetInfo flips back to online.
+      networkMode: "offlineFirst",
+    },
+    mutations: {
+      networkMode: "offlineFirst",
+      retry: 0,
     },
   },
 });
@@ -155,7 +170,21 @@ export default function RootLayout() {
       <SafeAreaProvider>
         <ThemeProvider>
           <FontGate>
-            <QueryClientProvider client={queryClient}>
+            <PersistQueryClientProvider
+              client={queryClient}
+              persistOptions={{
+                persister,
+                maxAge: PERSIST_MAX_AGE,
+                dehydrateOptions,
+                buster: PERSIST_BUSTER,
+              }}
+              onSuccess={() => {
+                // Resume any mutations that were paused while we were
+                // rehydrating. Pending writes carried across an app restart
+                // get a chance to fire before the user notices.
+                void queryClient.resumePausedMutations();
+              }}
+            >
               <BottomSheetModalProvider>
                 <ToastProvider>
                   <StatusBar style="auto" />
@@ -169,7 +198,7 @@ export default function RootLayout() {
                   <PrivacyVeil />
                 </ToastProvider>
               </BottomSheetModalProvider>
-            </QueryClientProvider>
+            </PersistQueryClientProvider>
           </FontGate>
         </ThemeProvider>
       </SafeAreaProvider>
