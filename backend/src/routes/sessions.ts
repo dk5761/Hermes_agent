@@ -7,7 +7,7 @@ import { appSessions, wsEvents } from "../db/schema.js";
 import type { HermesHttpClient } from "../hermes/http-client.js";
 import type { HermesWsPool } from "../hermes/ws-pool.js";
 import type { AppLogger } from "../logger.js";
-import { loadHistory } from "../ws/chat-history.js";
+import { loadHistoryWindow } from "../ws/chat-history.js";
 
 const PREVIEW_EVENT_TYPES = ["message.complete", "message.delta"] as const;
 const PREVIEW_MAX_CHARS = 120;
@@ -33,6 +33,17 @@ const patchBody = z
   });
 const idParams = z.object({ id: z.string().min(1) });
 const searchQuery = z.object({ q: z.string().min(1).max(200) });
+// Pagination params for GET /sessions/:id/messages. `z.coerce` handles the
+// fact that fastify hands us strings from the query string; we still want
+// integers downstream. `before` and `around` are mutually exclusive — we
+// enforce that in the handler so the 400 response stays explicit.
+const messagesQuery = z.object({
+  limit: z.coerce.number().int().positive().optional(),
+  before: z.coerce.number().int().positive().optional(),
+  around: z.coerce.number().int().positive().optional(),
+});
+const MESSAGES_DEFAULT_LIMIT = 50;
+const MESSAGES_MAX_LIMIT = 100;
 const modelOverrideBody = z.union([
   z.object({
     clear: z.literal(true),
@@ -239,6 +250,18 @@ export async function registerSessionsRoutes(
       if (!user) return reply.code(401).send({ error: "unauthenticated" });
       const params = idParams.safeParse(request.params);
       if (!params.success) return reply.code(400).send({ error: "invalid_params" });
+      const query = messagesQuery.safeParse(request.query ?? {});
+      if (!query.success) {
+        return reply
+          .code(400)
+          .send({ error: "invalid_query", details: query.error.flatten() });
+      }
+      if (query.data.before !== undefined && query.data.around !== undefined) {
+        return reply.code(400).send({
+          error: "invalid_params",
+          details: "before and around are mutually exclusive",
+        });
+      }
 
       const ownership = await db
         .select({ id: appSessions.id })
@@ -247,16 +270,30 @@ export async function registerSessionsRoutes(
         .limit(1);
       if (!ownership[0]) return reply.code(404).send({ error: "not_found" });
 
-      // Cold-load full narrative from chat_history (permanent, never swept).
-      // Returns rich rows (user, assistant, tool, reasoning, approval, etc.).
-      const rows = await loadHistory(db, params.data.id);
+      // Server-side cap; loadHistoryWindow also enforces this defensively.
+      const limit = Math.min(
+        MESSAGES_MAX_LIMIT,
+        query.data.limit ?? MESSAGES_DEFAULT_LIMIT,
+      );
+
+      // Cold-load a window of narrative from chat_history (permanent, never
+      // swept). Returns rich rows (user, assistant, tool, reasoning, etc.)
+      // sorted ascending by id; `hasBefore`/`hasAfter` tell the client whether
+      // older/newer pages exist beyond the returned set. Build opts without
+      // explicit `undefined` keys — exactOptionalPropertyTypes is enabled.
+      const opts: Parameters<typeof loadHistoryWindow>[2] = { limit };
+      if (query.data.before !== undefined) opts.before = query.data.before;
+      if (query.data.around !== undefined) opts.around = query.data.around;
+      const result = await loadHistoryWindow(db, params.data.id, opts);
       return reply.send({
-        rows: rows.map((r) => ({
+        rows: result.rows.map((r) => ({
           id: r.id,
           kind: r.kind,
           createdAt: r.createdAt,
           payload: r.payload,
         })),
+        hasBefore: result.hasBefore,
+        hasAfter: result.hasAfter,
       });
     },
   );
