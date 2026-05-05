@@ -23,6 +23,7 @@ import { useNotificationsInbox } from "@/state/notifications-inbox";
 import { useSessionTags } from "@/state/session-tags";
 import { useAppLock } from "@/state/app-lock";
 import { useVoiceSettings } from "@/state/voice-settings";
+import { useReasoningCollapse } from "@/state/reasoning-collapse";
 import { AppLockOverlay } from "@/components/AppLockOverlay";
 import { PrivacyVeil } from "@/components/PrivacyVeil";
 import { reconcileOnLaunch } from "@/live-activity/bridge";
@@ -74,6 +75,7 @@ function AuthGate() {
     void useSessionTags.getState().hydrate();
     void useAppLock.getState().hydrate();
     void useVoiceSettings.getState().hydrate();
+    void useReasoningCollapse.getState().hydrate();
     // Kill any orphan Live Activities from a previous launch — we can't
     // reliably resync their elapsed-time state across an app restart.
     void reconcileOnLaunch();

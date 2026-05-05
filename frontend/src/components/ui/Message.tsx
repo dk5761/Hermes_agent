@@ -15,7 +15,7 @@
  * (ported in a later stage); those rows are rendered by the chat screen
  * directly because they don't share the Message union shape.
  */
-import React, { memo, useEffect, useState } from "react";
+import React, { memo, useCallback, useEffect, useState } from "react";
 import { Pressable, StyleSheet, View } from "react-native";
 import Animated, {
   cancelAnimation,
@@ -40,6 +40,7 @@ import type {
 } from "@/state/chat-store";
 import type { AttachmentDTO } from "@/api/types";
 import { useAttachmentsByIds } from "@/hooks/useAttachments";
+import { useReasoningCollapse } from "@/state/reasoning-collapse";
 import { AttachmentThumbnail } from "@/components/AttachmentThumbnail";
 import { PdfAttachmentRow } from "@/components/PdfAttachmentRow";
 
@@ -242,16 +243,25 @@ function ReasoningInline({
   text,
   streaming,
   durationMs,
+  messageId,
 }: {
   text: string;
   // Live during the turn — auto-expand and label as "Thinking…".
   streaming?: boolean;
   // Time spent reasoning, available once the turn completes.
   durationMs?: number;
+  // The owning assistant message's UI id (e.g. `hist-a-42`). When provided,
+  // expansion state is persisted across mounts via the reasoning-collapse
+  // store so reopening a chat preserves what the user had open.
+  messageId?: string;
 }) {
-  // Default expansion: collapsed for completed turns, expanded for live ones.
-  // After completion the user can re-open via the chevron.
-  const [open, setOpen] = useState(!!streaming);
+  const persisted = useReasoningCollapse((s) =>
+    messageId ? !!s.expanded[messageId] : false,
+  );
+  const setPersisted = useReasoningCollapse((s) => s.setExpanded);
+  // Default expansion: collapsed for completed turns (unless the user has
+  // previously expanded this exact message), expanded for live ones.
+  const [open, setOpen] = useState(!!streaming || persisted);
   const tokens = useThemeTokens();
   // While streaming, keep auto-expanded as new chunks arrive. Once the turn
   // finishes (streaming flips false) we don't force-collapse; that respects
@@ -259,6 +269,19 @@ function ReasoningInline({
   React.useEffect(() => {
     if (streaming) setOpen(true);
   }, [streaming]);
+  // If the persisted value updates while mounted (e.g. another instance of
+  // the same row re-syncs), reflect it locally — but only when the message
+  // isn't actively streaming, so we don't yank the live "Thinking…" panel.
+  React.useEffect(() => {
+    if (!streaming && messageId) setOpen(persisted);
+  }, [persisted, streaming, messageId]);
+  const onToggle = useCallback(() => {
+    setOpen((v) => {
+      const next = !v;
+      if (messageId && !streaming) setPersisted(messageId, next);
+      return next;
+    });
+  }, [messageId, streaming, setPersisted]);
 
   const header = streaming
     ? "Thinking…"
@@ -280,7 +303,7 @@ function ReasoningInline({
         paddingVertical: 8,
       }}
     >
-      <Pressable onPress={() => setOpen((v) => !v)}>
+      <Pressable onPress={onToggle}>
         <Row gap={6} align="center">
           <Icon
             name="spark"
@@ -349,6 +372,7 @@ function AssistantRow({
           text={message.reasoning ?? ""}
           streaming={streaming}
           durationMs={message.reasoningDurationMs}
+          messageId={message.id}
         />
       ) : null}
       {hasText ? (
