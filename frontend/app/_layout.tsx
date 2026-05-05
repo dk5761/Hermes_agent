@@ -111,6 +111,24 @@ function AuthGate() {
     // Kill any orphan Live Activities from a previous launch — we can't
     // reliably resync their elapsed-time state across an app restart.
     void reconcileOnLaunch();
+    // Cold-start diagnostic: surface queue depths so we know what's
+    // pending to replay. Fires once hydrates resolve. Dev-only.
+    if (__DEV__) {
+      Promise.all([
+        usePendingSends.getState().hydrate(),
+        usePendingMutations.getState().hydrate(),
+      ])
+        .then(() => {
+          const sends = Object.keys(usePendingSends.getState().frames).length;
+          const muts = usePendingMutations.getState().queue.length;
+          if (sends > 0 || muts > 0) {
+            console.log(
+              `[offline] cold-start replay: ${sends} pending sends, ${muts} pending mutations`,
+            );
+          }
+        })
+        .catch(() => undefined);
+    }
   }, [hydrate]);
 
   // Mutation drainer: replays queued session-level writes whenever the
