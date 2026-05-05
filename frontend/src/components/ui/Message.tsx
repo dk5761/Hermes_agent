@@ -15,8 +15,17 @@
  * (ported in a later stage); those rows are rendered by the chat screen
  * directly because they don't share the Message union shape.
  */
-import React, { memo, useState } from "react";
-import { Pressable, View } from "react-native";
+import React, { memo, useEffect, useState } from "react";
+import { Pressable, StyleSheet, View } from "react-native";
+import Animated, {
+  cancelAnimation,
+  Easing,
+  interpolateColor,
+  useAnimatedStyle,
+  useSharedValue,
+  withRepeat,
+  withTiming,
+} from "react-native-reanimated";
 import { useRouter } from "expo-router";
 import * as Haptics from "expo-haptics";
 
@@ -173,7 +182,13 @@ function UserAttachments({
 
 // ─── user ───────────────────────────────────────────────────────────────────
 
-function UserRow({ message }: { message: UserMessage }) {
+function UserRow({
+  message,
+  isActiveMatch,
+}: {
+  message: UserMessage;
+  isActiveMatch?: boolean;
+}) {
   const tokens = useThemeTokens();
   const hasText = message.text.length > 0;
   const hasAttachments =
@@ -181,31 +196,33 @@ function UserRow({ message }: { message: UserMessage }) {
     (message.attachmentRefs && message.attachmentRefs.length > 0);
   return (
     <View style={{ paddingHorizontal: 12, paddingVertical: 4, alignItems: "flex-end" }}>
-      <View
-        style={{
-          maxWidth: "78%",
-          paddingHorizontal: 14,
-          paddingVertical: 10,
-          borderRadius: 18,
-          backgroundColor: tokens.ink,
-        }}
-      >
-        {hasAttachments ? (
-          <UserAttachments
-            attachments={message.attachments}
-            attachmentRefs={message.attachmentRefs}
-          />
-        ) : null}
-        {hasText ? (
-          <Text
-            kind="body"
-            color={tokens.surface}
-            style={{ fontSize: 15, lineHeight: 20 }}
-          >
-            {message.text}
-          </Text>
-        ) : null}
-      </View>
+      <BubbleHighlight active={!!isActiveMatch} borderRadius={18}>
+        <View
+          style={{
+            maxWidth: "78%",
+            paddingHorizontal: 14,
+            paddingVertical: 10,
+            borderRadius: 18,
+            backgroundColor: tokens.ink,
+          }}
+        >
+          {hasAttachments ? (
+            <UserAttachments
+              attachments={message.attachments}
+              attachmentRefs={message.attachmentRefs}
+            />
+          ) : null}
+          {hasText ? (
+            <Text
+              kind="body"
+              color={tokens.surface}
+              style={{ fontSize: 15, lineHeight: 20 }}
+            >
+              {message.text}
+            </Text>
+          ) : null}
+        </View>
+      </BubbleHighlight>
     </View>
   );
 }
@@ -305,11 +322,13 @@ function AssistantRow({
   streaming,
   onCopy,
   onRegenerate,
+  isActiveMatch,
 }: {
   message: AssistantMessage;
   streaming?: boolean;
   onCopy?: () => void;
   onRegenerate?: () => void;
+  isActiveMatch?: boolean;
 }) {
   const tokens = useThemeTokens();
   const hasText = message.text.length > 0;
@@ -319,7 +338,8 @@ function AssistantRow({
   // turn we're watching.
   const showActions = !streaming && (onCopy || onRegenerate) && hasText;
   return (
-    <View style={{ paddingHorizontal: 8, paddingVertical: 4, maxWidth: "92%" }}>
+    <BubbleHighlight active={!!isActiveMatch} borderRadius={12}>
+      <View style={{ paddingHorizontal: 8, paddingVertical: 4, maxWidth: "92%" }}>
       {/* Reasoning lives above the answer (matches Claude/ChatGPT pattern):
           users see the "thought" first, then the response below it. While
           streaming, the block auto-expands and shows "Thinking…"; on
@@ -378,7 +398,8 @@ function AssistantRow({
           ) : null}
         </Row>
       ) : null}
-    </View>
+      </View>
+    </BubbleHighlight>
   );
 }
 
@@ -414,28 +435,36 @@ function ActionIconButton({
 
 // ─── reasoning-only row (history) ───────────────────────────────────────────
 
-function ReasoningOnlyRow({ text }: { text: string }) {
+function ReasoningOnlyRow({
+  text,
+  isActiveMatch,
+}: {
+  text: string;
+  isActiveMatch?: boolean;
+}) {
   const tokens = useThemeTokens();
   return (
-    <View
-      className="bg-sunken border border-line-soft"
-      style={{
-        marginHorizontal: 12,
-        marginVertical: 4,
-        borderRadius: 12,
-        paddingHorizontal: 12,
-        paddingVertical: 8,
-      }}
-    >
-      <Row gap={6} align="center">
-        <Icon name="spark" size={12} color={tokens.ink3} />
-        <Text kind="caption" color={tokens.ink3} style={{ fontWeight: "500" }}>
-          Thinking
-        </Text>
-      </Row>
-      <Text kind="caption" mono color={tokens.ink2} style={{ marginTop: 4, lineHeight: 17 }}>
-        {text}
-      </Text>
+    <View style={{ marginHorizontal: 12, marginVertical: 4 }}>
+      <BubbleHighlight active={!!isActiveMatch} borderRadius={12}>
+        <View
+          className="bg-sunken border border-line-soft"
+          style={{
+            borderRadius: 12,
+            paddingHorizontal: 12,
+            paddingVertical: 8,
+          }}
+        >
+          <Row gap={6} align="center">
+            <Icon name="spark" size={12} color={tokens.ink3} />
+            <Text kind="caption" color={tokens.ink3} style={{ fontWeight: "500" }}>
+              Thinking
+            </Text>
+          </Row>
+          <Text kind="caption" mono color={tokens.ink2} style={{ marginTop: 4, lineHeight: 17 }}>
+            {text}
+          </Text>
+        </View>
+      </BubbleHighlight>
     </View>
   );
 }
@@ -842,10 +871,15 @@ function MessageInner({
   onCopy,
   onRegenerate,
 }: MessageProps) {
+  // Active-match flash is scoped to the bubble inside each row variant — so
+  // the rainbow overlay covers the visible bubble, not the entire row gutter.
+  // Variants that don't have a clear bubble (tool/error cards) currently
+  // ignore the flag.
+  const activeFlash = !!isActiveMatch;
   let inner: React.ReactNode = null;
   switch (message.kind) {
     case "user":
-      inner = <UserRow message={message} />;
+      inner = <UserRow message={message} isActiveMatch={activeFlash} />;
       break;
     case "assistant": {
       if (
@@ -854,7 +888,12 @@ function MessageInner({
         message.reasoning &&
         message.reasoning.length > 0
       ) {
-        inner = <ReasoningOnlyRow text={message.reasoning} />;
+        inner = (
+          <ReasoningOnlyRow
+            text={message.reasoning}
+            isActiveMatch={activeFlash}
+          />
+        );
       } else {
         inner = (
           <AssistantRow
@@ -862,6 +901,7 @@ function MessageInner({
             streaming={streaming}
             onCopy={onCopy}
             onRegenerate={onRegenerate}
+            isActiveMatch={activeFlash}
           />
         );
       }
@@ -932,46 +972,102 @@ function MessageInner({
       break;
   }
 
-  // searchActive drives the in-chat-search dim/highlight pair (matches stay
-  // bright, non-matches dim to 0.35). isActiveMatch alone fires the accent
-  // border — used by both the in-chat active match AND the deep-link flash
-  // (which has searchActive=false). Without the second guard, deep-link
-  // navigations from QuickSwitcher show no highlight at all.
-  if (!searchActive && !isActiveMatch) return <>{inner}</>;
+  // searchActive drives the in-chat-search dim behavior (non-matches fade to
+  // 0.35). The active-match flash is now applied per-row inside each variant
+  // via BubbleHighlight, so the wrap is only needed during in-chat search.
+  if (!searchActive) return <>{inner}</>;
   return (
-    <SearchHighlightWrap isMatch={!!isMatch} isActiveMatch={!!isActiveMatch}>
-      {inner}
-    </SearchHighlightWrap>
+    <SearchHighlightWrap isMatch={!!isMatch}>{inner}</SearchHighlightWrap>
   );
 }
 
+// Rainbow stops the active-match overlay cycles through.
+const RAINBOW_STOPS = [0, 0.16, 0.33, 0.5, 0.66, 0.83, 1] as const;
+const RAINBOW_COLORS = [
+  "#ff3b30",
+  "#ff9500",
+  "#ffcc00",
+  "#34c759",
+  "#0a84ff",
+  "#5e5ce6",
+  "#ff3b30",
+];
+
 function SearchHighlightWrap({
   isMatch,
-  isActiveMatch,
   children,
 }: {
+  // The active-match flash is now scoped per-row (BubbleHighlight inside
+  // each variant) so the rainbow tint covers only the bubble, not the row's
+  // gutters. SearchHighlightWrap retains only the in-chat-search dim
+  // behavior — non-match rows fade to 0.35 while a query is active.
   isMatch: boolean;
-  isActiveMatch: boolean;
   children: React.ReactNode;
 }) {
-  const tokens = useThemeTokens();
-  if (isActiveMatch) {
-    return (
-      <View
-        style={{
-          marginHorizontal: 4,
-          marginVertical: 2,
-          borderRadius: 14,
-          borderWidth: 2,
-          borderColor: tokens.accent,
-          backgroundColor: tokens.accent + "14",
-        }}
-      >
-        {children}
-      </View>
-    );
-  }
   return <View style={{ opacity: isMatch ? 1 : 0.35 }}>{children}</View>;
+}
+
+/**
+ * Layout-stable rainbow flash scoped to a single bubble. Wrap the row's
+ * inner bubble container with this — the absolute overlay sits on top of
+ * children matching the bubble's exact box, so neighbours don't shift and
+ * the highlight visually targets the bubble (not the row gutter).
+ *
+ * Pass `borderRadius` so the overlay clips to the bubble's rounded shape.
+ * `active=false` short-circuits to a passthrough wrapping View so the
+ * overlay isn't created (and the animation worklet isn't started) when
+ * not needed.
+ */
+function BubbleHighlight({
+  active,
+  borderRadius = 0,
+  children,
+}: {
+  active: boolean;
+  borderRadius?: number;
+  children: React.ReactNode;
+}) {
+  if (!active) return <>{children}</>;
+  return (
+    <View style={{ position: "relative", overflow: "hidden", borderRadius }}>
+      {children}
+      <RainbowOverlay borderRadius={borderRadius} />
+    </View>
+  );
+}
+
+function RainbowOverlay({ borderRadius }: { borderRadius: number }) {
+  const progress = useSharedValue(0);
+  useEffect(() => {
+    progress.value = 0;
+    progress.value = withRepeat(
+      withTiming(1, { duration: 900, easing: Easing.linear }),
+      -1,
+      false,
+    );
+    return () => {
+      cancelAnimation(progress);
+    };
+  }, [progress]);
+
+  const animatedStyle = useAnimatedStyle(() => ({
+    backgroundColor: interpolateColor(
+      progress.value,
+      [...RAINBOW_STOPS],
+      RAINBOW_COLORS,
+    ),
+  }));
+
+  return (
+    <Animated.View
+      pointerEvents="none"
+      style={[
+        StyleSheet.absoluteFill,
+        { opacity: 0.32, borderRadius },
+        animatedStyle,
+      ]}
+    />
+  );
 }
 
 export const Message = memo(MessageInner, (prev, next) => {
