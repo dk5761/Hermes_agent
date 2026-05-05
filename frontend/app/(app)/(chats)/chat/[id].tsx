@@ -476,6 +476,29 @@ export default function ChatScreen() {
     [messagesQuery.data],
   );
 
+  // Refresh per-session usage whenever a turn finishes streaming. Detect the
+  // streaming → idle edge: when state.streaming was non-null on the previous
+  // render and is null now, the message.complete event has just landed.
+  // Defer the invalidate by ~400ms because the gateway persists the new
+  // chat_history row in its own WS handler (after the event reaches the
+  // client) — invalidating immediately would refetch a stale window that
+  // doesn't yet include the just-finished turn.
+  const wasStreamingRef = useRef(false);
+  useEffect(() => {
+    const isStreaming = !!sessionState?.streaming;
+    if (wasStreamingRef.current && !isStreaming && sessionId) {
+      const id = setTimeout(() => {
+        void queryClient.invalidateQueries({
+          queryKey: ["session-usage", sessionId],
+        });
+      }, 400);
+      wasStreamingRef.current = isStreaming;
+      return () => clearTimeout(id);
+    }
+    wasStreamingRef.current = isStreaming;
+    return undefined;
+  }, [sessionState?.streaming, sessionId, queryClient]);
+
   // Scroll-up handler — wired to FlashList's onStartReached. Guards on both
   // hasNextPage and the in-flight flags so rapid scroll bounces don't fire
   // duplicate fetches (TanStack also dedupes, but the guard avoids the
