@@ -83,6 +83,7 @@ import type {
 } from "@/state/chat-store";
 import type { ConnectionStatus } from "@/ws/client";
 import type { StatusDotKind } from "@/components/ui";
+import { UsagePill } from "@/chat/UsagePill";
 
 // ─── row model (carried over from legacy) ───────────────────────────────────
 
@@ -1351,6 +1352,8 @@ export default function ChatScreen() {
           </>
         }
       />
+
+      <UsagePill sessionId={sessionId} />
 
       {searchOpen ? (
         <View
