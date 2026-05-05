@@ -431,16 +431,21 @@ export default function ChatScreen() {
   // getPreviousPageParam.
   type MessagesPageParam = { before?: number; around?: number } | undefined;
 
+  // Phase 4: when opened with `?messageId=N`, the first fetched page is the
+  // around-window centered on N. Including `targetMessageId` in the queryKey
+  // means a different deep-link target cleanly invalidates the cache and
+  // triggers a fresh around-fetch instead of re-using a stale latest-page.
   const messagesQuery = useInfiniteQuery<
     MessagesPage,
     Error,
     { pages: MessagesPage[]; pageParams: MessagesPageParam[] },
-    readonly ["session-messages", string | null],
+    readonly ["session-messages", string | null, number | null],
     MessagesPageParam
   >({
-    queryKey: ["session-messages", sessionId] as const,
+    queryKey: ["session-messages", sessionId, targetMessageId] as const,
     enabled: !!sessionId,
-    initialPageParam: undefined,
+    initialPageParam:
+      targetMessageId != null ? { around: targetMessageId } : undefined,
     queryFn: ({ pageParam }) => {
       if (!sessionId) {
         return Promise.resolve({ rows: [], hasBefore: false, hasAfter: false });
@@ -761,17 +766,16 @@ export default function ChatScreen() {
   // rather than the raw `messageId` number.
   //
   // Replay guard: a `consumedRef` records the last messageId we acted on.
-  // We can't rely solely on the deps array because the effect itself calls
-  // `router.setParams({ messageId: undefined })` to clean the URL — that
-  // flips `targetMessageId` to null and re-triggers the effect, which would
-  // otherwise tear down our own timers via the cleanup function. Timers are
-  // therefore held in refs and only cleared on unmount (separate effect
-  // below), not on this effect's deps-change cycle.
+  // The URL param is intentionally LEFT IN PLACE after consumption — clearing
+  // it via `router.setParams` flips `targetMessageId` to null which would
+  // change the messagesQuery's queryKey (Phase 4 binds it for around-cursor
+  // initial-page) and trigger a refetch loop. The consumedRef is the only
+  // replay guard; same-id re-tap is suppressed via that ref.
   //
-  // Limitation: if the target message lies outside the currently loaded
-  // history window (long chats, no around-cursor pagination yet) we no-op
-  // with an info log. The plan calls out a `?around=<rowId>` endpoint as a
-  // ~1h follow-up; deliberately deferred for v1.
+  // With Phase 4's around-cursor pagination, the target row is guaranteed
+  // to be in the initial loaded page — no more "not in loaded window"
+  // misses for old messages. The not-found branch only fires for genuinely
+  // missing rows (deleted, or session-mismatched).
   const consumedDeepLinkRef = useRef<number | null>(null);
   const deepLinkScrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const deepLinkFlashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -796,9 +800,6 @@ export default function ChatScreen() {
       console.info(
         `[chat] deep-link messageId=${targetMessageId} not found in loaded window (session=${sessionId ?? "?"})`,
       );
-      // Still consume the param so back-and-forth navigation doesn't keep
-      // re-firing this effect on an unresolvable target.
-      router.setParams({ messageId: undefined });
       return;
     }
     if (deepLinkScrollTimerRef.current) clearTimeout(deepLinkScrollTimerRef.current);
@@ -810,15 +811,7 @@ export default function ChatScreen() {
     }, 150);
     setFlashMessageId(targetMessageId);
     deepLinkFlashTimerRef.current = setTimeout(() => setFlashMessageId(null), 1500);
-    // Clear the URL param so a re-render / refocus doesn't replay the deep
-    // link. expo-router treats a fresh navigation with the same key as a new
-    // value (the consumedRef tracks the numeric id), so the next
-    // QuickSwitcher tap on the same target still fires the effect.
-    router.setParams({ messageId: undefined });
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- `router` and
-    // `sessionId` are stable per mount and intentionally excluded so we
-    // don't re-fire on unrelated navigation churn.
-  }, [targetMessageId, reversed.length]);
+  }, [targetMessageId, reversed.length, sessionId]);
   // Unmount-only cleanup: cancel any in-flight deep-link timers so a quick
   // back-out doesn't fire setState on an unmounted screen. Empty dep array
   // intentional — runs once at unmount.
