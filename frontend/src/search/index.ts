@@ -3,7 +3,5 @@
  */
 export { useSearch, type UseSearchResult } from "./useSearch";
 export { QuickSwitcher, renderSnippet } from "./QuickSwitcher";
-export type { QuickSwitcherProps } from "./QuickSwitcher";
-export { useQuickSwitcher } from "@/state/quick-switcher";
-export type { QuickSwitcherState } from "@/state/quick-switcher";
+export type { QuickSwitcherHandle } from "./QuickSwitcher";
 export type { SearchResult } from "@/api/search";

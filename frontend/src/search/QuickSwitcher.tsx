@@ -1,36 +1,18 @@
 /**
  * QuickSwitcher — Phase 4 of the Hermes search feature.
  *
- * Renders the cross-session search modal: sticky search bar, recent-queries
- * empty state, virtualized result list with ⟨MARK⟩-highlighted snippets, and
- * a "no matches" empty state. All data flow goes through `useSearch()` from
- * Phase 3.
- *
- * Modal surface: we reuse the project's `Sheet` (a thin wrapper over gorhom's
- * `BottomSheetModal`) instead of a raw RN `<Modal>`. The plan suggests RN
- * Modal but Sheet is the in-repo convention (`ActionSheet` builds on it),
- * `BottomSheetModalProvider` is already mounted in `app/_layout.tsx`, and we
- * pick up theming + backdrop scrim + pan-down-to-close for free.
- *
- * Imperative-vs-declarative bridge: the public API is `{ visible, onClose }`
- * (per the plan) but `Sheet`'s ref is imperative (`.present()`/`.dismiss()`).
- * We bridge via a `useEffect` watching `visible`, plus an `onChange` from
- * the sheet that fires `onClose` when the user pan-down-dismisses or taps
- * the backdrop (those bypass our `visible` prop).
- *
- * Routing: tapping a result calls `commitToRecent()` to MRU-promote the
- * current query, dismisses the sheet, then deep-links to the chat screen
- * with `messageId` as a query param. The actual scroll-to-message behavior
- * is wired up in Phase 6 — for now the param just rides along.
- *
- * Error retry note: `useSearch` doesn't currently expose a refetch handle,
- * so the in-banner "retry" pokes the query by re-setting it (which fires
- * the debounce + a fresh request). If that proves flaky in practice, we
- * should add a `refetch` to the hook rather than keep adding workarounds.
+ * Imperative ref-driven modal (mirrors ActionSheet / tagsSheet pattern in
+ * chats/index.tsx). Parent holds a `QuickSwitcherHandle` ref and calls
+ * `.present()` / `.dismiss()` directly. The earlier `{ visible, onClose }`
+ * prop API drove gorhom's BottomSheetModal through a useEffect bridge; for
+ * reasons we couldn't pin down (likely a React-commit/portal-mount race in
+ * gorhom v5), the modal would silently no-op even though present() was
+ * being called on a live ref. The ref-driven pattern works.
  */
 import React, {
+  forwardRef,
   useCallback,
-  useEffect,
+  useImperativeHandle,
   useMemo,
   useRef,
 } from "react";
@@ -40,7 +22,8 @@ import {
   TextInput,
   View,
 } from "react-native";
-import { FlashList } from "@shopify/flash-list";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { BottomSheetFlashList } from "@gorhom/bottom-sheet";
 import { router } from "expo-router";
 
 import {
@@ -58,9 +41,9 @@ import { formatRelative } from "@/util/time";
 import { useSearch } from "./useSearch";
 import type { SearchResult } from "@/api/search";
 
-export interface QuickSwitcherProps {
-  visible: boolean;
-  onClose: () => void;
+export interface QuickSwitcherHandle {
+  present: () => void;
+  dismiss: () => void;
 }
 
 // Backend wraps matched terms with U+27E8 / U+27E9 sentinels (see
@@ -193,10 +176,17 @@ function RecentList({ recent, onPick, onClear }: RecentListProps) {
   );
 }
 
-export function QuickSwitcher({ visible, onClose }: QuickSwitcherProps) {
+export const QuickSwitcher = forwardRef<QuickSwitcherHandle>(function QuickSwitcher(
+  _props,
+  ref,
+) {
   const tokens = useThemeTokens();
+  const insets = useSafeAreaInsets();
   const sheetRef = useRef<SheetHandle>(null);
   const inputRef = useRef<TextInput>(null);
+  // Floor padding so list/empty-state content clears the floating AppTabBar
+  // (~50pt pill + 4pt margin + safe-area). Mirrors the calc in ActionSheet.
+  const tabBarFloor = Math.max(insets.bottom, 12) + 60 + 12;
   const {
     query,
     setQuery,
@@ -210,37 +200,38 @@ export function QuickSwitcher({ visible, onClose }: QuickSwitcherProps) {
     commitToRecent,
   } = useSearch();
 
-  // Bridge: { visible } prop → imperative sheet API.
-  // We deliberately don't wire `dismiss()` on `visible=false` from inside an
-  // onChange-driven flow (would fight the sheet's own animation), but we DO
-  // dismiss when the parent flips `visible` to false externally.
-  useEffect(() => {
-    if (visible) {
-      sheetRef.current?.present();
-    } else {
-      sheetRef.current?.dismiss();
-    }
-  }, [visible]);
+  // Imperative handle. Parent calls present()/dismiss() directly via the ref.
+  // Defer the underlying sheet present() one frame so gorhom's modal sees a
+  // committed children tree (mirrors ActionSheet's setTimeout pattern).
+  useImperativeHandle(
+    ref,
+    () => ({
+      present: () => {
+        setTimeout(() => sheetRef.current?.present(), 16);
+      },
+      dismiss: () => sheetRef.current?.dismiss(),
+    }),
+    [],
+  );
 
-  // When the user pan-down-dismisses or taps the backdrop, gorhom fires
-  // onChange(-1). Surface that as `onClose` so the parent's `visible` state
-  // stays in sync with the actual sheet state.
+  // Reset the input when the sheet is dismissed (idx < 0). Without this,
+  // re-opening the sheet would show a stale query.
   const onSheetChange = useCallback(
     (idx: number) => {
-      if (idx < 0 && visible) onClose();
+      if (idx < 0) setQuery("");
     },
-    [visible, onClose],
+    [setQuery],
   );
 
   const handlePickResult = useCallback(
     (r: SearchResult) => {
       commitToRecent();
-      onClose();
+      sheetRef.current?.dismiss();
       // The `messageId` deep-link param is consumed by Phase 6's chat screen.
       // Today the chat screen ignores it, so the link still navigates safely.
       router.push(`/chat/${r.sessionId}?messageId=${r.messageId}`);
     },
-    [commitToRecent, onClose],
+    [commitToRecent],
   );
 
   const handlePickRecent = useCallback(
@@ -297,6 +288,7 @@ export function QuickSwitcher({ visible, onClose }: QuickSwitcherProps) {
       snapPoints={["85%"]}
       onChange={onSheetChange}
       enablePanDownToClose
+      enableDynamicSizing={false}
     >
       <Stack gap={0} style={{ flex: 1 }}>
         {/* Sticky search bar. Mirrors Input.tsx styling but uses a raw
@@ -391,9 +383,10 @@ export function QuickSwitcher({ visible, onClose }: QuickSwitcherProps) {
 
         {showResults ? (
           <View style={{ flex: 1 }}>
-            {/* FlashList v2 derives item heights at runtime — no
-                estimatedItemSize prop. */}
-            <FlashList
+            {/* BottomSheetFlashList — gorhom-aware list that cooperates with
+                the sheet's gesture handler so scrolling works inside the
+                modal. Plain FlashList swallows the scroll gesture. */}
+            <BottomSheetFlashList
               data={results}
               keyExtractor={keyExtractor}
               renderItem={renderItem}
@@ -402,11 +395,11 @@ export function QuickSwitcher({ visible, onClose }: QuickSwitcherProps) {
               ListFooterComponent={ListFooter}
               keyboardShouldPersistTaps="handled"
               keyboardDismissMode="on-drag"
-              contentContainerStyle={{ paddingTop: 4, paddingBottom: 32 }}
+              contentContainerStyle={{ paddingTop: 4, paddingBottom: tabBarFloor }}
             />
           </View>
         ) : null}
       </Stack>
     </Sheet>
   );
-}
+});

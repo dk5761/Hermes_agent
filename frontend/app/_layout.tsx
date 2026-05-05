@@ -3,7 +3,7 @@
 // file's resolved graph at bundle time.
 import "../global.css";
 
-import React, { useEffect } from "react";
+import { useEffect } from "react";
 import { ActivityIndicator, AppState, StyleSheet, View } from "react-native";
 import { Slot, useRouter } from "expo-router";
 import {
@@ -28,7 +28,6 @@ import { reconcileOnLaunch } from "@/live-activity/bridge";
 import { registerPushTokenWithBackend } from "@/notifications/register";
 import { setupNotificationListeners } from "@/notifications/handler";
 import { IosToolsRootSocket } from "@/ios-tools";
-import { QuickSwitcher, useQuickSwitcher } from "@/search";
 import { BG, MUTED } from "@/config";
 import { ThemeProvider, useAppFonts } from "@/theme";
 import { ToastProvider, showToast } from "@/components/ui";
@@ -125,20 +124,8 @@ function AuthGate() {
     <>
       <IosToolsRootSocket />
       <Slot />
-      {/* QuickSwitcher is gated to authed users — never paint on the
-          login screen. BottomSheetModalProvider is supplied by RootLayout
-          above, so the sheet always has a host. */}
-      {isAuthed ? <AuthedQuickSwitcher /> : null}
     </>
   );
-}
-
-// Narrow-selector subscriber so the rest of AuthGate doesn't re-render on
-// every QuickSwitcher visibility flip. Mounted only when authed.
-function AuthedQuickSwitcher(): React.ReactElement {
-  const visible = useQuickSwitcher((s) => s.visible);
-  const close = useQuickSwitcher((s) => s.close);
-  return <QuickSwitcher visible={visible} onClose={close} />;
 }
 
 function FontGate({ children }: { children: React.ReactNode }) {

@@ -19,6 +19,13 @@ export interface SheetProps {
   snapPoints?: ReadonlyArray<string | number>;
   onChange?: (index: number) => void;
   enablePanDownToClose?: boolean;
+  /**
+   * gorhom v5 defaults this to `true`, which makes the sheet size to its
+   * children's intrinsic height and silently ignore percentage snap points.
+   * For sheets with flex-based layouts (e.g. a search modal whose body has
+   * no natural height), pass `false` so `snapPoints` is honored.
+   */
+  enableDynamicSizing?: boolean;
   children?: React.ReactNode;
 }
 
@@ -29,7 +36,7 @@ export interface SheetHandle {
 }
 
 export const Sheet = forwardRef<SheetHandle, SheetProps>(function Sheet(
-  { snapPoints, onChange, enablePanDownToClose = true, children },
+  { snapPoints, onChange, enablePanDownToClose = true, enableDynamicSizing, children },
   ref,
 ) {
   const tokens = useThemeTokens();
@@ -68,6 +75,7 @@ export const Sheet = forwardRef<SheetHandle, SheetProps>(function Sheet(
       snapPoints={points}
       onChange={onChange}
       enablePanDownToClose={enablePanDownToClose}
+      enableDynamicSizing={enableDynamicSizing}
       backdropComponent={renderBackdrop}
       backgroundStyle={{ backgroundColor: tokens.surface }}
       handleStyle={{ paddingTop: 8, paddingBottom: 4 }}

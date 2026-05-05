@@ -21,6 +21,12 @@ export interface NavBarProps {
   subtitle?: string;
   leading?: React.ReactNode;
   trailing?: React.ReactNode;
+  /**
+   * Optional action rendered inline to the right of the large display title
+   * (only used when `large` is true). Useful for putting an icon button next
+   * to the title without crowding the top toolbar.
+   */
+  titleAction?: React.ReactNode;
   large?: boolean;
   onBack?: () => void;
 }
@@ -30,6 +36,7 @@ export function NavBar({
   subtitle,
   leading,
   trailing,
+  titleAction,
   large,
   onBack,
 }: NavBarProps) {
@@ -96,7 +103,16 @@ export function NavBar({
       ) : null}
       {large && title ? (
         <Stack gap={2} style={{ paddingHorizontal: 16, paddingTop: hasToolbar ? 8 : 0, paddingBottom: 4 }}>
-          <Text kind="display">{title}</Text>
+          {titleAction ? (
+            <Row align="center" justify="space-between" gap={8}>
+              <Text kind="display" style={{ flexShrink: 1 }}>
+                {title}
+              </Text>
+              {titleAction}
+            </Row>
+          ) : (
+            <Text kind="display">{title}</Text>
+          )}
           {subtitle ? (
             <Text kind="body" className="text-ink-3">
               {subtitle}

@@ -56,7 +56,7 @@ import type { SessionDto } from "@/api/types";
 import { useChatStore } from "@/state/chat-store";
 import { usePinnedSessions } from "@/state/pinned-sessions";
 import { useSessionTags } from "@/state/session-tags";
-import { useQuickSwitcher } from "@/search";
+import { QuickSwitcher, type QuickSwitcherHandle } from "@/search";
 import { formatRelative } from "@/util/time";
 
 const QUERY_KEY = ["sessions"] as const;
@@ -81,7 +81,6 @@ export default function SessionsScreen() {
   const queryClient = useQueryClient();
   const tokens = useThemeTokens();
   const insets = useSafeAreaInsets();
-  const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<FilterKey>("all");
   // RefreshControl spinner is bound to user-initiated pulls only — binding to
   // `isFetching` causes a stuck spinner whenever useFocusEffect or the WS
@@ -182,11 +181,10 @@ export default function SessionsScreen() {
     return { total, running, awaiting, archived };
   }, [decorated]);
 
-  // Apply filter + search query, then surface pinned sessions to the top.
-  // The underlying API list is already sorted by updatedAt desc; we preserve
-  // that order within each partition (pinned vs unpinned).
+  // Apply filter, then surface pinned sessions to the top. The underlying API
+  // list is already sorted by updatedAt desc; we preserve that order within
+  // each partition (pinned vs unpinned).
   const filtered: SessionRow[] = useMemo(() => {
-    const q = query.trim().toLowerCase();
     const tagFilter = filter.startsWith("tag:") ? filter.slice(4) : null;
     const matched = decorated.filter((s) => {
       if (filter === "archived") {
@@ -197,15 +195,13 @@ export default function SessionsScreen() {
         if (filter === "awaiting" && s.badge !== "approval") return false;
         if (tagFilter && !s.tags.includes(tagFilter)) return false;
       }
-      if (q.length === 0) return true;
-      const hay = `${s.title.toLowerCase()} ${(s.preview ?? "").toLowerCase()} ${s.tags.join(" ")}`;
-      return hay.includes(q);
+      return true;
     });
     if (filter === "archived") return matched;
     const pinned = matched.filter((s) => s.pinned);
     const rest = matched.filter((s) => !s.pinned);
     return [...pinned, ...rest];
-  }, [decorated, filter, query]);
+  }, [decorated, filter]);
 
   // Distinct tags across all sessions, used to render the per-tag filter
   // chips after the four built-in presets.
@@ -222,6 +218,7 @@ export default function SessionsScreen() {
   const [tagsEditTarget, setTagsEditTarget] = useState<SessionRow | null>(null);
   const tagsSheetRef = useRef<SheetHandle>(null);
   const actionSheetRef = useRef<ActionSheetHandle>(null);
+  const quickSwitcherRef = useRef<QuickSwitcherHandle>(null);
   const openTagsEditor = useCallback((s: SessionRow) => {
     setTagsEditTarget(s);
     setTimeout(() => tagsSheetRef.current?.present(), 50);
@@ -312,17 +309,11 @@ export default function SessionsScreen() {
     [archive, togglePinned, openTagsEditor, promptRename, confirmDelete],
   );
 
-  const onSettings = useCallback(() => {
-    router.push("/(settings)" as const);
-  }, [router]);
-
-  // Tapping the search NavIcon opens the QuickSwitcher modal. The legacy
-  // /(chats)/search screen file is intentionally left in place as a fallback
-  // and as a future deep-link target — we just don't navigate to it from the
-  // header anymore. `getState()` mirrors how other ad-hoc actions in this
-  // file (logout, etc.) reach into stores without subscribing.
+  // Tapping the search NavIcon opens the QuickSwitcher modal. Direct ref
+  // call mirrors the actionSheetRef / tagsSheetRef pattern in this file —
+  // a state-driven approach via Zustand silently no-op'd inside gorhom v5.
   const onSearchPress = useCallback(() => {
-    useQuickSwitcher.getState().open();
+    quickSwitcherRef.current?.present();
   }, []);
 
   const onCreate = useCallback(() => {
@@ -360,25 +351,17 @@ export default function SessionsScreen() {
         title="Chats"
         subtitle={headerSubtitle}
         leading={<HermesMark size={22} />}
-        trailing={
-          <>
-            <NavIcon name="search" onPress={onSearchPress} />
-            <NavIcon name="cog" onPress={onSettings} />
-          </>
-        }
+        titleAction={<NavIcon name="search" onPress={onSearchPress} />}
       />
 
-      {/* Search + filter chips. Stays pinned above the scrolling list. */}
+      {/* Filter chips. Stays pinned above the scrolling list. The legacy
+          "Search chats" client-side filter Input was removed in favor of the
+          full-text QuickSwitcher modal — the title-bar magnifying glass is
+          the single search entry point. */}
       <Stack
         gap={10}
         style={{ paddingHorizontal: 16, paddingTop: 4, paddingBottom: 8 }}
       >
-        <Input
-          value={query}
-          onChange={setQuery}
-          placeholder="Search chats"
-          icon="search"
-        />
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
@@ -476,6 +459,9 @@ export default function SessionsScreen() {
       </Pressable>
 
       <ActionSheet ref={actionSheetRef} />
+
+      <QuickSwitcher ref={quickSwitcherRef} />
+
 
       <Sheet
         ref={tagsSheetRef}
@@ -704,3 +690,4 @@ function SessionRowView({
     </Pressable>
   );
 }
+
