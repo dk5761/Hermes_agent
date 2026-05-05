@@ -36,6 +36,13 @@ export interface NotificationsInboxState {
   }) => void;
   markRead: (id: string) => void;
   markAllRead: () => void;
+  /**
+   * Mark every cron-output inbox entry whose data.outputId matches the
+   * argument as read. Used by the output detail screen — tapping into an
+   * output should clear its corresponding unread, even when the user
+   * navigated via in-app routing rather than the push tap.
+   */
+  markCronOutputRead: (outputId: string) => void;
   archive: (id: string) => void;
   unarchive: (id: string) => void;
   remove: (id: string) => void;
@@ -118,6 +125,29 @@ export const useNotificationsInbox = create<NotificationsInboxState>(
       set((s) => {
         if (s.items.every((it) => it.read)) return s;
         const next = s.items.map((it) => (it.read ? it : { ...it, read: true }));
+        persist(next);
+        return { items: next };
+      });
+    },
+
+    markCronOutputRead(outputId) {
+      set((s) => {
+        let mutated = false;
+        const next = s.items.map((it) => {
+          if (it.read) return it;
+          const d = it.data;
+          if (
+            d &&
+            typeof d === "object" &&
+            (d as Record<string, unknown>).type === "cron_output" &&
+            (d as Record<string, unknown>).outputId === outputId
+          ) {
+            mutated = true;
+            return { ...it, read: true };
+          }
+          return it;
+        });
+        if (!mutated) return s;
         persist(next);
         return { items: next };
       });

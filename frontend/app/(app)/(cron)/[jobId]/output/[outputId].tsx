@@ -8,11 +8,13 @@
  * placeholder — backend doesn't yet expose that endpoint, so we surface
  * a clear "Coming soon" alert rather than ship a dead control.
  */
-import { useCallback } from "react";
+import { useCallback, useEffect } from "react";
 import { Alert, RefreshControl, ScrollView, View } from "react-native";
 import { useLocalSearchParams } from "expo-router";
 import { safeBack } from "@/util/nav";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+
+import { useNotificationsInbox } from "@/state/notifications-inbox";
 
 import {
   Button,
@@ -40,6 +42,13 @@ export default function CronOutputDetailScreen() {
     queryFn: () => getOutput(jobId, outputId),
     enabled: jobId.length > 0 && outputId.length > 0,
   });
+
+  // Clear the unread badge on the cron tab when the user lands on the
+  // detail page — covers in-app navigation as well as push-tap entry.
+  useEffect(() => {
+    if (!outputId) return;
+    useNotificationsInbox.getState().markCronOutputRead(outputId);
+  }, [outputId]);
 
   const reRunMut = useMutation({
     mutationFn: () => triggerJob(jobId),

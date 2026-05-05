@@ -19,6 +19,7 @@ import type { BottomTabBarProps } from "@react-navigation/bottom-tabs";
 import { Icon, type IconName } from "./Icon";
 import { useThemeTokens } from "./tokens";
 import { useTheme } from "@/theme";
+import { useNotificationsInbox } from "@/state/notifications-inbox";
 
 interface TabSpec {
   routeName: string;
@@ -40,6 +41,21 @@ export function AppTabBar(props: BottomTabBarProps): React.ReactElement | null {
   // "system", which would mis-route the tint when OS is dark.
   const { resolvedMode } = useTheme();
   const segments = useSegments();
+  // Cron-tab unread badge: counts inbox items whose data.type is
+  // `cron_output` AND that haven't been opened or archived yet. Covers both
+  // foreground and background pushes; cleared by the output detail screen
+  // (markCronOutputRead) and by archive/clear-all on the inbox screen.
+  const cronUnread = useNotificationsInbox((s) => {
+    let n = 0;
+    for (const it of s.items) {
+      if (it.read || it.archived) continue;
+      const d = it.data;
+      if (d && typeof d === "object" && (d as Record<string, unknown>).type === "cron_output") {
+        n++;
+      }
+    }
+    return n;
+  });
 
   // Hide on push depth: segments after `(app)` and the active group should be
   // empty for tab roots. Anything deeper means we're inside a Stack child.
@@ -83,11 +99,17 @@ export function AppTabBar(props: BottomTabBarProps): React.ReactElement | null {
               navigation.navigate(route.name);
             }
           };
+          // Per-tab unread badge — wired only for the cron tab today.
+          // Future: wire chats unread similarly when needed.
+          const unread = tab.routeName === "(cron)" ? cronUnread : 0;
           return (
             <Pressable
               key={tab.routeName}
               accessibilityRole="button"
               accessibilityState={active ? { selected: true } : {}}
+              accessibilityLabel={
+                unread > 0 ? `${tab.label}, ${unread} unread` : tab.label
+              }
               onPress={onPress}
               style={[
                 styles.item,
@@ -96,11 +118,38 @@ export function AppTabBar(props: BottomTabBarProps): React.ReactElement | null {
                 },
               ]}
             >
-              <Icon
-                name={tab.icon}
-                size={16}
-                color={active ? tokens.surface : tokens.ink2}
-              />
+              <View>
+                <Icon
+                  name={tab.icon}
+                  size={16}
+                  color={active ? tokens.surface : tokens.ink2}
+                />
+                {unread > 0 ? (
+                  <View
+                    style={[
+                      styles.badge,
+                      {
+                        backgroundColor: tokens.accent,
+                        borderColor:
+                          resolvedMode === "dark"
+                            ? "rgba(28,28,30,1)"
+                            : "rgba(255,255,255,1)",
+                      },
+                    ]}
+                  >
+                    <Text
+                      style={{
+                        color: "#fff",
+                        fontSize: 9,
+                        fontWeight: "700",
+                        lineHeight: 10,
+                      }}
+                    >
+                      {unread > 9 ? "9+" : String(unread)}
+                    </Text>
+                  </View>
+                ) : null}
+              </View>
               <Text
                 style={[
                   styles.label,
@@ -149,5 +198,17 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: "500",
     letterSpacing: 0.2,
+  },
+  badge: {
+    position: "absolute",
+    top: -4,
+    right: -8,
+    minWidth: 14,
+    height: 14,
+    borderRadius: 7,
+    paddingHorizontal: 3,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1.5,
   },
 });
