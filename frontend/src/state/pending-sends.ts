@@ -22,6 +22,13 @@ import type { ClientFrame } from "../ws/events";
 
 const KEY = "chat.pending.v1";
 
+/**
+ * Per-session cap on retained frames. When enqueue would push past this,
+ * the OLDEST frame for that session is evicted. Protects against unbounded
+ * disk growth during a sustained outage where the user keeps composing.
+ */
+const MAX_FRAMES_PER_SESSION = 50;
+
 export type PendingStatus = "queued" | "sending" | "failed";
 
 export interface PendingFrame {
@@ -138,6 +145,28 @@ export const usePendingSends = create<PendingSendsState>((set, get) => ({
           retries: 0,
         },
       };
+      // Evict oldest frame for this session if we're at the per-session cap
+      // (50). Keeps the cache from growing unbounded during a long outage
+      // where the user keeps composing without sending.
+      const sessionFrames = Object.values(next).filter(
+        (f) => f.sessionId === sessionId,
+      );
+      if (sessionFrames.length > MAX_FRAMES_PER_SESSION) {
+        sessionFrames.sort((a, b) => a.enqueuedAt - b.enqueuedAt);
+        const overflow = sessionFrames.length - MAX_FRAMES_PER_SESSION;
+        for (let i = 0; i < overflow; i++) {
+          const evict = sessionFrames[i];
+          if (evict) delete next[evict.id];
+        }
+        if (__DEV__) {
+          console.warn(
+            "[pending-sends] session %s at cap (%d), evicted %d oldest",
+            sessionId,
+            MAX_FRAMES_PER_SESSION,
+            overflow,
+          );
+        }
+      }
       persist(next);
       return { frames: next };
     });
