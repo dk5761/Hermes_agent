@@ -11,6 +11,7 @@ import { makeRequireAuth } from "./auth/middleware.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerHealthRoutes } from "./routes/health.js";
 import { registerSessionsRoutes } from "./routes/sessions.js";
+import { registerSearchRoutes } from "./routes/search.js";
 import { registerCronRoutes } from "./routes/cron.js";
 import { registerCronPrefsRoutes } from "./routes/cron-prefs.js";
 import { registerDevicesRoutes } from "./routes/devices.js";
@@ -159,6 +160,11 @@ export async function buildServer(deps: BuildServerDeps): Promise<FastifyInstanc
     requireAuth,
     hermesHttp: deps.hermesHttp,
     wsPool: deps.wsPool,
+    logger: deps.logger,
+  });
+  await registerSearchRoutes(app, {
+    dbHandle: deps.dbHandle,
+    requireAuth,
     logger: deps.logger,
   });
   await registerCronRoutes(app, {
