@@ -57,7 +57,7 @@ const STORAGE_DENSITY = "theme.density";
 const STORAGE_FONT_OVERRIDE = "theme.fontOverride";
 
 const DEFAULT_VARIANT: Variant = "graphite";
-const DEFAULT_MODE: Mode = "light";
+const DEFAULT_MODE: Mode = "system";
 const DEFAULT_DENSITY: Density = "comfortable";
 
 // Motion preset from handoff: cubic-bezier(0.2, 0, 0, 1).
