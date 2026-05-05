@@ -48,11 +48,22 @@ import { Icon, type IconName } from "./Icon";
 import { MarkdownView } from "./Markdown";
 import { Row } from "./Row";
 import { Stack } from "./Stack";
+import { StatusDot, type StatusDotKind } from "./StatusDot";
 import { Text } from "./Text";
 import { TodoPlanCard } from "./TodoPlanCard";
 import type { TodoItem, TodoStatus } from "./TodoStepRow";
 import { CitationCardRow, isWebTool } from "./CitationCard";
 import { useThemeTokens } from "./tokens";
+
+// Map a pending-sends state to a StatusDot variant. queued → idle (greyed),
+// sending → connecting (warning), failed → offline (danger).
+export type PendingBubbleStatus = "queued" | "sending" | "failed";
+
+function pendingDotKind(s: PendingBubbleStatus): StatusDotKind {
+  if (s === "sending") return "connecting";
+  if (s === "failed") return "offline";
+  return "idle";
+}
 
 const TODO_STATUSES: ReadonlySet<TodoStatus> = new Set([
   "pending",
@@ -186,9 +197,16 @@ function UserAttachments({
 function UserRow({
   message,
   isActiveMatch,
+  pendingStatus,
 }: {
   message: UserMessage;
   isActiveMatch?: boolean;
+  // When set, the bubble paints a small absolute dot in its bottom-right
+  // corner indicating offline-queue state. Undefined for any user message
+  // that's been ack'd by the gateway (the chat-store overlay strips the
+  // clientId once a real user.message echoes back; until then the bubble
+  // carries its pending-sends id and the chat screen looks the status up).
+  pendingStatus?: PendingBubbleStatus;
 }) {
   const tokens = useThemeTokens();
   const hasText = message.text.length > 0;
@@ -221,6 +239,22 @@ function UserRow({
             >
               {message.text}
             </Text>
+          ) : null}
+          {pendingStatus ? (
+            // Bottom-right anchored. The bubble has rounded corners so the
+            // dot sits inside the rounded area; offset by 6/6 keeps it
+            // visually contained.
+            <View
+              pointerEvents="none"
+              accessibilityLabel={`Send status: ${pendingStatus}`}
+              style={{
+                position: "absolute",
+                right: 6,
+                bottom: 6,
+              }}
+            >
+              <StatusDot kind={pendingDotKind(pendingStatus)} />
+            </View>
           ) : null}
         </View>
       </BubbleHighlight>
@@ -941,6 +975,13 @@ interface MessageProps {
    */
   quickReplies?: ReadonlyArray<string>;
   onQuickReply?: (text: string) => void;
+  /**
+   * Offline-queue status overlay for user-message bubbles. Only meaningful
+   * for `kind: "user"` messages — assistant/tool/error rows ignore it. The
+   * chat screen looks this up by `UserMessage.clientId` from the
+   * pending-sends store and passes it through.
+   */
+  pendingStatus?: PendingBubbleStatus;
 }
 
 function MessageInner({
@@ -956,6 +997,7 @@ function MessageInner({
   onLongPress,
   quickReplies,
   onQuickReply,
+  pendingStatus,
 }: MessageProps) {
   // Active-match flash is scoped to the bubble inside each row variant — so
   // the rainbow overlay covers the visible bubble, not the entire row gutter.
@@ -965,7 +1007,13 @@ function MessageInner({
   let inner: React.ReactNode = null;
   switch (message.kind) {
     case "user":
-      inner = <UserRow message={message} isActiveMatch={activeFlash} />;
+      inner = (
+        <UserRow
+          message={message}
+          isActiveMatch={activeFlash}
+          pendingStatus={pendingStatus}
+        />
+      );
       break;
     case "assistant": {
       if (
@@ -1196,6 +1244,7 @@ export const Message = memo(MessageInner, (prev, next) => {
   if (prev.latestTodoToolId !== next.latestTodoToolId) return false;
   if (prev.onCopy !== next.onCopy) return false;
   if (prev.onRegenerate !== next.onRegenerate) return false;
+  if (prev.pendingStatus !== next.pendingStatus) return false;
   const a = prev.message;
   const b = next.message;
   if (a === b) return true;
@@ -1206,7 +1255,8 @@ export const Message = memo(MessageInner, (prev, next) => {
     return (
       a.text === b.text &&
       a.attachments === b.attachments &&
-      a.attachmentRefs === b.attachmentRefs
+      a.attachmentRefs === b.attachmentRefs &&
+      a.clientId === b.clientId
     );
   }
   if (a.kind === "assistant" && b.kind === "assistant") {

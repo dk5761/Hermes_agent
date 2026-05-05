@@ -4,8 +4,10 @@ import { WS_URL } from "../config";
 import { getAuthSnapshot } from "../auth/store";
 import { useChatStore } from "../state/chat-store";
 import { GatewayWsClient, type ConnectionStatus } from "./client";
+import { attachQueueDrainer } from "./queue-drainer";
 import type { ClientFrame } from "./events";
 import type { AttachmentDTO } from "../api/types";
+import { usePendingSends } from "../state/pending-sends";
 import {
   approvalPending,
   approvalResolved,
@@ -140,8 +142,14 @@ export function useChatStream(appSessionId: string | null): ChatStreamApi {
       setRetryInMs(info?.retryInMs ?? null);
     });
 
+    // Drainer flushes the offline queue (pending-sends store) on every WS
+    // status transition INTO "open". Scoped to this session so concurrent
+    // chat screens don't interfere with each other's queues.
+    const detachDrainer = attachQueueDrainer({ client, sessionId: appSessionId });
+
     client.connect();
     return () => {
+      detachDrainer();
       offRawFrame();
       offEvent();
       offStatus();
@@ -158,13 +166,33 @@ export function useChatStream(appSessionId: string | null): ChatStreamApi {
       // Permit empty text when attachments are present — gateway treats
       // attachment-only sends as an implicit "describe these" prompt.
       if (!trimmed && !hasAttachments) return;
-      pushUserMessage(appSessionId, trimmed, attachments);
       const attachmentIds = attachments?.map((a) => a.id);
       const frame: ClientFrame =
         hasAttachments && attachmentIds && attachmentIds.length > 0
           ? { type: "chat.send", text: trimmed, attachmentIds }
           : { type: "chat.send", text: trimmed };
-      clientRef.current?.send(frame);
+      // Always enqueue first — this is the durable record that survives an
+      // app kill or a flaky network. The bubble carries the same id so the
+      // renderer can paint queued/sending/failed dots.
+      const pendingId = usePendingSends
+        .getState()
+        .enqueue(appSessionId, frame);
+      pushUserMessage(appSessionId, trimmed, attachments, pendingId);
+      // Fast path: if WS is already open, send immediately and dequeue
+      // synchronously so the dot doesn't flash on a healthy connection.
+      const client = clientRef.current;
+      if (client && client.getStatus() === "open") {
+        try {
+          usePendingSends.getState().markSending(pendingId);
+          client.send(frame);
+          usePendingSends.getState().markSent(pendingId);
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : "send failed";
+          usePendingSends.getState().markFailed(pendingId, msg);
+        }
+      }
+      // Else: drainer (attached in the WS effect) will pick it up on the
+      // next "open" transition.
     },
     [appSessionId, pushUserMessage],
   );
@@ -177,15 +205,31 @@ export function useChatStream(appSessionId: string | null): ChatStreamApi {
       if (!trimmed && !hasAttachments) return;
       // Locally drop the prior turn first so the user sees the old answer
       // disappear immediately; the new one will stream into its place once
-      // the backend acks the re-submission.
+      // the backend acks the re-submission. Note: any prior queued frame
+      // for this session is INTENTIONALLY left alone — the user explicitly
+      // enqueued that text and regenerate replaces only the last turn UI,
+      // not the offline queue history.
       truncateLastTurn(appSessionId);
-      pushUserMessage(appSessionId, trimmed, attachments);
       const attachmentIds = attachments?.map((a) => a.id);
       const frame: ClientFrame =
         hasAttachments && attachmentIds && attachmentIds.length > 0
           ? { type: "chat.send", text: trimmed, attachmentIds, regenerate: true }
           : { type: "chat.send", text: trimmed, regenerate: true };
-      clientRef.current?.send(frame);
+      const pendingId = usePendingSends
+        .getState()
+        .enqueue(appSessionId, frame);
+      pushUserMessage(appSessionId, trimmed, attachments, pendingId);
+      const client = clientRef.current;
+      if (client && client.getStatus() === "open") {
+        try {
+          usePendingSends.getState().markSending(pendingId);
+          client.send(frame);
+          usePendingSends.getState().markSent(pendingId);
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : "send failed";
+          usePendingSends.getState().markFailed(pendingId, msg);
+        }
+      }
     },
     [appSessionId, pushUserMessage, truncateLastTurn],
   );

@@ -24,6 +24,7 @@ import { useSessionTags } from "@/state/session-tags";
 import { useAppLock } from "@/state/app-lock";
 import { useVoiceSettings } from "@/state/voice-settings";
 import { useReasoningCollapse } from "@/state/reasoning-collapse";
+import { usePendingSends } from "@/state/pending-sends";
 import { AppLockOverlay } from "@/components/AppLockOverlay";
 import { PrivacyVeil } from "@/components/PrivacyVeil";
 import { reconcileOnLaunch } from "@/live-activity/bridge";
@@ -76,6 +77,11 @@ function AuthGate() {
     void useAppLock.getState().hydrate();
     void useVoiceSettings.getState().hydrate();
     void useReasoningCollapse.getState().hydrate();
+    // Hydrate the offline send queue so any frames persisted across an app
+    // kill / OS reboot are visible the moment the chat screen mounts. The
+    // queue-drainer (attached per-chat in useChatStream) flushes them once
+    // the WS reaches "open".
+    void usePendingSends.getState().hydrate();
     // Kill any orphan Live Activities from a previous launch — we can't
     // reliably resync their elapsed-time state across an app restart.
     void reconcileOnLaunch();

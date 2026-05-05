@@ -20,6 +20,13 @@ export interface UserMessage {
   // Cold-load path: just the IDs from the permanent chat_history payload.
   // The renderer resolves each via getAttachment(id) and caches via TanStack.
   attachmentRefs?: string[];
+  // Cross-reference into pending-sends: when the bubble was created from an
+  // optimistic local send, this id matches the PendingFrame.id in the
+  // pending-sends store. The renderer looks up status (queued/sending/
+  // failed) by this id to overlay a StatusDot on the bubble. Undefined for
+  // history-loaded rows and any user message that came back from the
+  // server's chat_history feed.
+  clientId?: string;
 }
 
 export interface AssistantMessage {
@@ -135,7 +142,18 @@ interface ChatStore {
   ensure: (id: string) => void;
   get: (id: string) => ChatSessionState | undefined;
   reset: (id: string) => void;
-  pushUserMessage: (id: string, text: string, attachments?: AttachmentDTO[]) => void;
+  pushUserMessage: (
+    id: string,
+    text: string,
+    attachments?: AttachmentDTO[],
+    // Optional pending-sends frame id. Stored on UserMessage.clientId so the
+    // renderer can cross-reference per-bubble send status.
+    clientId?: string,
+  ) => void;
+  // Remove a user bubble by its pending-sends clientId. Used when the user
+  // chooses "Delete" on a failed offline send — the optimistic bubble must
+  // disappear alongside the queued frame.
+  removeUserMessage: (sessionId: string, clientId: string) => void;
   // Drop the last turn — every message from the latest user message onwards.
   // Used by Regenerate before re-issuing the prompt so the UI doesn't show
   // both the old and the new responses while the new turn streams in.
@@ -562,7 +580,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     set((s) => ({ byId: { ...s.byId, [id]: empty(id) } }));
   },
 
-  pushUserMessage(id, text, attachments) {
+  pushUserMessage(id, text, attachments, clientId) {
     set((s) => {
       const cur = s.byId[id] ?? empty(id);
       const msg: UserMessage = {
@@ -571,12 +589,31 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         text,
         createdAt: new Date().toISOString(),
         attachments: attachments && attachments.length > 0 ? attachments : undefined,
+        ...(clientId ? { clientId } : {}),
       };
       return {
         byId: {
           ...s.byId,
           [id]: { ...cur, messages: [...cur.messages, msg] },
         },
+      };
+    });
+  },
+
+  removeUserMessage(sessionId, clientId) {
+    set((s) => {
+      const cur = s.byId[sessionId];
+      if (!cur) return s;
+      // Match by clientId — id is a chat-store-internal counter, clientId is
+      // the pending-sends-side stable handle. Defensive: if the bubble has
+      // already been replaced (e.g. server echoed a real user.message),
+      // there's nothing to do.
+      const next = cur.messages.filter(
+        (m) => !(m.kind === "user" && m.clientId === clientId),
+      );
+      if (next.length === cur.messages.length) return s;
+      return {
+        byId: { ...s.byId, [sessionId]: { ...cur, messages: next } },
       };
     });
   },

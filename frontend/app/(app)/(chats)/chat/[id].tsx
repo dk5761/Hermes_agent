@@ -64,6 +64,7 @@ import { useChatStream } from "@/ws/use-chat-stream";
 import { useChatStore } from "@/state/chat-store";
 import { useTodosUi } from "@/state/todos";
 import { usePendingAttachments } from "@/state/pending-attachments";
+import { usePendingSends, type PendingFrame } from "@/state/pending-sends";
 import { pickDocument, pickImage, PickerError } from "@/attachments/picker";
 import {
   archiveSession,
@@ -422,6 +423,33 @@ export default function ChatScreen() {
   );
   const setLatestTodoToolId = useChatStore((s) => s.setLatestTodoToolId);
   const stream = useChatStream(sessionId);
+
+  // ─── offline send queue (pending-sends) ──────────────────────────────────
+  // Subscribe to the entire frames map; the per-session/per-clientId views
+  // are derived in useMemo below. The store mutates by replacing the map on
+  // every change, so reference identity here is the right invalidation
+  // signal. Frame counts are tiny (one-digit) so the cost is negligible.
+  const pendingFrames = usePendingSends((s) => s.frames);
+  // Map of clientId → status restricted to this session. Used by renderItem
+  // to overlay queued/sending/failed dots on user bubbles.
+  const pendingByClientId = useMemo<Map<string, PendingFrame>>(() => {
+    const m = new Map<string, PendingFrame>();
+    if (!sessionId) return m;
+    for (const f of Object.values(pendingFrames)) {
+      if (f.sessionId === sessionId) m.set(f.id, f);
+    }
+    return m;
+  }, [pendingFrames, sessionId]);
+  // Count of frames waiting on the wire (queued + failed). The composer's
+  // offline pill renders this when status !== "open" so the user knows
+  // their tap landed somewhere durable.
+  const queuedCount = useMemo<number>(() => {
+    let n = 0;
+    for (const f of pendingByClientId.values()) {
+      if (f.status === "queued" || f.status === "failed") n += 1;
+    }
+    return n;
+  }, [pendingByClientId]);
   const [input, setInput] = useState("");
   const inputRef = useRef<TextInput>(null);
 
@@ -1098,6 +1126,55 @@ export default function ChatScreen() {
           },
         });
       }
+      // Failed offline-queue rows: surface manual recovery actions FIRST so
+      // they're the most prominent options. Retry resets status to queued
+      // and immediately drains if the WS is healthy; Delete tears down both
+      // the optimistic bubble and the persisted frame.
+      if (m.kind === "user" && m.clientId) {
+        const pending = usePendingSends.getState().frames[m.clientId];
+        if (pending && pending.status === "failed") {
+          const clientId = m.clientId;
+          actions.unshift({
+            id: "delete",
+            label: "Delete",
+            icon: "close",
+            danger: true,
+            onPress: () => {
+              usePendingSends.getState().remove(clientId);
+              if (sessionId) {
+                useChatStore.getState().removeUserMessage(sessionId, clientId);
+              }
+            },
+          });
+          actions.unshift({
+            id: "retry",
+            label: "Retry",
+            icon: "refresh",
+            onPress: () => {
+              usePendingSends.getState().retry(clientId);
+              // The drainer is the canonical send path; if the WS happens
+              // to be open right now we still poke it via a synthetic
+              // status check by sending directly. The drainer's recovery
+              // reconciliation will catch any leftover state.
+              const client = stream.raw;
+              if (client && client.getStatus() === "open") {
+                const f = usePendingSends.getState().frames[clientId];
+                if (f) {
+                  try {
+                    usePendingSends.getState().markSending(clientId);
+                    client.send(f.frame);
+                    usePendingSends.getState().markSent(clientId);
+                  } catch (err: unknown) {
+                    const msg =
+                      err instanceof Error ? err.message : "send failed";
+                    usePendingSends.getState().markFailed(clientId, msg);
+                  }
+                }
+              }
+            },
+          });
+        }
+      }
       if (actions.length === 0) return;
       actionSheetRef.current?.present({
         title: hasText ? text.trim().slice(0, 60) : subtitle,
@@ -1105,7 +1182,7 @@ export default function ChatScreen() {
         actions,
       });
     },
-    [lastAssistantId, onRegenerateAssistant],
+    [lastAssistantId, onRegenerateAssistant, sessionId, stream],
   );
 
   // Send-gating: hold sends while uploads are in flight.
@@ -1335,6 +1412,13 @@ export default function ChatScreen() {
         const m = item.data;
         const isAssistant = m.kind === "assistant";
         const isLastAssistant = isAssistant && m.id === lastAssistantId;
+        // Look up offline-queue state for user bubbles only. clientId is
+        // unset for any user message that came from chat_history (cold load
+        // / replay), so this naturally short-circuits for non-pending rows.
+        const pendingStatus =
+          m.kind === "user" && m.clientId
+            ? pendingByClientId.get(m.clientId)?.status
+            : undefined;
         return (
           <MessageRow
             message={m}
@@ -1363,6 +1447,7 @@ export default function ChatScreen() {
               isLastAssistant && !isStreaming ? QUICK_REPLY_CHIPS : undefined
             }
             onQuickReply={onQuickReply}
+            pendingStatus={pendingStatus}
           />
         );
       }
@@ -1423,6 +1508,7 @@ export default function ChatScreen() {
       onQuickReply,
       isStreaming,
       flashMessageId,
+      pendingByClientId,
     ],
   );
 
@@ -1856,6 +1942,47 @@ export default function ChatScreen() {
             </View>
           );
         })()}
+
+        {/* Offline-queue pill — only shown when there are unsent frames AND
+            the WS is not currently open. Hidden when fully drained or when
+            online (drainer takes care of it instantly). Subtle styling to
+            match the connection-status banner aesthetic. */}
+        {queuedCount > 0 && stream.status !== "open" ? (
+          <View
+            style={{
+              paddingHorizontal: 12,
+              paddingTop: 4,
+              paddingBottom: 0,
+              backgroundColor: tokens.bg,
+            }}
+          >
+            <View
+              style={{
+                alignSelf: "flex-start",
+                flexDirection: "row",
+                alignItems: "center",
+                gap: 6,
+                paddingHorizontal: 10,
+                paddingVertical: 5,
+                borderRadius: 999,
+                backgroundColor: tokens.sunken,
+                borderWidth: 1,
+                borderColor: tokens.lineSoft,
+              }}
+              accessibilityLabel={`${queuedCount} message${queuedCount === 1 ? "" : "s"} queued, waiting for connection`}
+            >
+              <Icon name="shield" size={11} color={tokens.ink2} />
+              <Text
+                kind="micro"
+                color={tokens.ink2}
+                numberOfLines={1}
+                style={{ fontWeight: "500" }}
+              >
+                {`${queuedCount} queued · waiting for connection`}
+              </Text>
+            </View>
+          </View>
+        ) : null}
 
         {/* Pill composer */}
         <View
