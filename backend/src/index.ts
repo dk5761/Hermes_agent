@@ -13,6 +13,7 @@ import { CronOutputWatcher } from "./cron/output-watcher.js";
 import { resolveHermesHome } from "./hermes/cron-fs.js";
 import { startCleanupTasks } from "./cleanup/runner.js";
 import { ChatRunTimer } from "./observability/chat-run-timer.js";
+import { backfillSearchIndex } from "./db/searchable-text-indexer.js";
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -29,6 +30,17 @@ async function main(): Promise<void> {
   } catch (err) {
     logger.error({ err }, "db migrations failed");
     throw err;
+  }
+
+  // Backfill search_text for any chat_history rows that predate the FTS
+  // migration. Idempotent — exits immediately when there are no NULL rows.
+  // Does not block boot on failure; search will be incomplete but the server
+  // continues serving all other traffic.
+  try {
+    const stats = await backfillSearchIndex(dbHandle.raw, logger);
+    logger.info({ ...stats }, "search index ready");
+  } catch (err) {
+    logger.error({ err }, "search index backfill failed; search will be incomplete");
   }
 
   await bootstrapSingleUserIfEmpty({

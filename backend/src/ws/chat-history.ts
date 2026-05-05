@@ -1,6 +1,7 @@
 import { and, asc, eq } from "drizzle-orm";
 import type { Db } from "../db/client.js";
 import { chatHistory } from "../db/schema.js";
+import { extractSearchableText } from "../db/searchable-text.js";
 
 // Canonical narrative kinds — what a user expects to see when they reload
 // a conversation. Streaming-only events (deltas/progress) and internal
@@ -31,6 +32,9 @@ export async function appendHistory(
   createdAt?: number,
 ): Promise<HistoryRow> {
   const ts = createdAt ?? Math.floor(Date.now() / 1000);
+  // Approach A: populate search_text at write time so the FTS AI trigger
+  // mirrors usable content. Backfill indexer covers pre-FTS rows on boot.
+  const searchText = extractSearchableText(kind, payload) ?? "";
   const inserted = await db
     .insert(chatHistory)
     .values({
@@ -38,6 +42,7 @@ export async function appendHistory(
       kind,
       payloadJson: JSON.stringify(payload ?? null),
       createdAt: ts,
+      searchText,
     })
     .returning({ id: chatHistory.id });
   const idRow = inserted[0];

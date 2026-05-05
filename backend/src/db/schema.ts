@@ -162,6 +162,9 @@ export const chatHistory = sqliteTable(
     kind: text("kind").notNull(),
     payloadJson: text("payload_json").notNull(),
     createdAt: integer("created_at").notNull(),
+    // Populated at insert time by extractSearchableText (Approach A).
+    // NULL until backfilled for pre-existing rows; indexer fills them on boot.
+    searchText: text("search_text"),
   },
   (t) => ({
     sessionIdIdx: index("chat_history_session_id_idx").on(t.appSessionId, t.id),
