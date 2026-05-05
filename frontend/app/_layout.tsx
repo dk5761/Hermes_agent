@@ -28,7 +28,9 @@ import { useAppLock } from "@/state/app-lock";
 import { useVoiceSettings } from "@/state/voice-settings";
 import { useReasoningCollapse } from "@/state/reasoning-collapse";
 import { usePendingSends } from "@/state/pending-sends";
+import { usePendingMutations } from "@/state/pending-mutations";
 import { useNetworkStatus } from "@/state/network-status";
+import { attachMutationDrainer } from "@/ws/mutation-drainer";
 import { AppLockOverlay } from "@/components/AppLockOverlay";
 import { PrivacyVeil } from "@/components/PrivacyVeil";
 import { reconcileOnLaunch } from "@/live-activity/bridge";
@@ -102,10 +104,23 @@ function AuthGate() {
     // queue-drainer (attached per-chat in useChatStream) flushes them once
     // the WS reaches "open".
     void usePendingSends.getState().hydrate();
+    // Pending session-level mutations (archive/rename/delete/setModel).
+    // Hydrate is idempotent and does no network — safe to fire even when
+    // unauthenticated. The drainer below is what gates on auth.
+    void usePendingMutations.getState().hydrate();
     // Kill any orphan Live Activities from a previous launch — we can't
     // reliably resync their elapsed-time state across an app restart.
     void reconcileOnLaunch();
   }, [hydrate]);
+
+  // Mutation drainer: replays queued session-level writes whenever the
+  // user is authed AND the network is reachable. Mounted once per auth
+  // session — logging out tears it down (effect cleanup) so a logged-out
+  // app never retries 401-bound mutations.
+  useEffect(() => {
+    if (!isAuthed) return;
+    return attachMutationDrainer({ queryClient });
+  }, [isAuthed]);
 
   // Push token registration. Fires once auth is hydrated and the user is
   // signed in. Safe to re-fire — the underlying call short-circuits when

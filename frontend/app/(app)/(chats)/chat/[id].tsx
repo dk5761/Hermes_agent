@@ -66,15 +66,13 @@ import { useTodosUi } from "@/state/todos";
 import { usePendingAttachments } from "@/state/pending-attachments";
 import { usePendingSends, type PendingFrame } from "@/state/pending-sends";
 import { pickDocument, pickImage, PickerError } from "@/attachments/picker";
+import { getMessages, listSessions, reloadSessionMcp } from "@/api/sessions";
 import {
-  archiveSession,
-  deleteSession,
-  getMessages,
-  listSessions,
-  reloadSessionMcp,
-  renameSession,
-  setSessionModel,
-} from "@/api/sessions";
+  pendingArchiveSession,
+  pendingDeleteSession,
+  pendingRenameSession,
+  pendingSetSessionModel,
+} from "@/state/pending-mutations";
 import { getMainModel } from "@/api/settings";
 import type { AttachmentDTO, HistoryRow, MessagesPage, SessionDto } from "@/api/types";
 import type {
@@ -1299,9 +1297,7 @@ export default function ChatScreen() {
       "New title",
       (text) => {
         if (text && text.trim()) {
-          void renameSession(sessionId, text.trim()).then(() => {
-            void queryClient.invalidateQueries({ queryKey: ["sessions"] });
-          });
+          void pendingRenameSession(sessionId, text.trim(), queryClient);
         }
       },
       "plain-text",
@@ -1311,9 +1307,7 @@ export default function ChatScreen() {
 
   const onArchive = useCallback(() => {
     if (!sessionId || !session) return;
-    void archiveSession(sessionId, !session.archived).then(() => {
-      void queryClient.invalidateQueries({ queryKey: ["sessions"] });
-    });
+    void pendingArchiveSession(sessionId, !session.archived, queryClient);
   }, [sessionId, session, queryClient]);
 
   const onDelete = useCallback(() => {
@@ -1324,14 +1318,15 @@ export default function ChatScreen() {
         text: "Delete",
         style: "destructive",
         onPress: () => {
-          void deleteSession(sessionId).then(() => {
-            void queryClient.invalidateQueries({ queryKey: ["sessions"] });
-            safeBack("/(chats)");
-          });
+          // Optimistic: navigate away immediately. The pending wrapper
+          // queues the delete + retries on reconnect; the user shouldn't
+          // wait on the network to leave a chat they've decided to delete.
+          void pendingDeleteSession(sessionId, queryClient);
+          safeBack("/(chats)");
         },
       },
     ]);
-  }, [sessionId, queryClient, router]);
+  }, [sessionId, queryClient]);
 
   const onReloadMcp = useCallback(() => {
     if (!sessionId) return;
@@ -1875,11 +1870,11 @@ export default function ChatScreen() {
                 label: "Use default model",
                 icon: "refresh",
                 onPress: () => {
-                  void setSessionModel(sessionId, { clear: true })
-                    .then(() =>
-                      queryClient.invalidateQueries({ queryKey: ["sessions"] }),
-                    )
-                    .catch(() => undefined);
+                  void pendingSetSessionModel(
+                    sessionId,
+                    { clear: true },
+                    queryClient,
+                  );
                 },
               });
             }

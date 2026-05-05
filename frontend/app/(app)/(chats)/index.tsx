@@ -22,6 +22,11 @@ import { FlashList, type ListRenderItem } from "@shopify/flash-list";
 import { useFocusEffect, useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  pendingArchiveSession,
+  pendingDeleteSession,
+  pendingRenameSession,
+} from "@/state/pending-mutations";
 import * as Haptics from "expo-haptics";
 
 import {
@@ -45,13 +50,7 @@ import {
   type ActionSheetHandle,
   type SheetHandle,
 } from "@/components/ui";
-import {
-  archiveSession,
-  createSession,
-  deleteSession,
-  listSessions,
-  renameSession,
-} from "@/api/sessions";
+import { createSession, listSessions } from "@/api/sessions";
 import type { SessionDto } from "@/api/types";
 import { useChatStore } from "@/state/chat-store";
 import { usePinnedSessions } from "@/state/pinned-sessions";
@@ -125,22 +124,28 @@ export default function SessionsScreen() {
     },
   });
 
-  const remove = useMutation({
-    mutationFn: (id: string) => deleteSession(id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: QUERY_KEY }),
-  });
-
-  const archive = useMutation({
-    mutationFn: ({ id, archived }: { id: string; archived: boolean }) =>
-      archiveSession(id, archived),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: QUERY_KEY }),
-  });
-
-  const rename = useMutation({
-    mutationFn: ({ id, title }: { id: string; title: string }) =>
-      renameSession(id, title),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: QUERY_KEY }),
-  });
+  // Session-level writes route through the pending-mutations queue: they
+  // enqueue a durable record first, then attempt the API call. On failure
+  // (offline or transient 5xx) the mutation-drainer takes over and replays
+  // on reconnect — see `frontend/src/state/pending-mutations.ts`.
+  const onArchiveSession = useCallback(
+    (id: string, archived: boolean) => {
+      void pendingArchiveSession(id, archived, queryClient);
+    },
+    [queryClient],
+  );
+  const onRenameSession = useCallback(
+    (id: string, title: string) => {
+      void pendingRenameSession(id, title, queryClient);
+    },
+    [queryClient],
+  );
+  const onDeleteSession = useCallback(
+    (id: string) => {
+      void pendingDeleteSession(id, queryClient);
+    },
+    [queryClient],
+  );
 
   const allSessions = sessionsQuery.data?.sessions ?? [];
 
@@ -230,14 +235,14 @@ export default function SessionsScreen() {
         "New title",
         (text) => {
           if (text && text.trim()) {
-            rename.mutate({ id: s.id, title: text.trim() });
+            onRenameSession(s.id, text.trim());
           }
         },
         "plain-text",
         s.title,
       );
     },
-    [rename],
+    [onRenameSession],
   );
   const confirmDelete = useCallback(
     (s: SessionRow) => {
@@ -246,11 +251,11 @@ export default function SessionsScreen() {
         {
           text: "Delete",
           style: "destructive",
-          onPress: () => remove.mutate(s.id),
+          onPress: () => onDeleteSession(s.id),
         },
       ]);
     },
-    [remove],
+    [onDeleteSession],
   );
   const onLongPress = useCallback(
     (s: SessionRow) => {
@@ -293,8 +298,7 @@ export default function SessionsScreen() {
             id: "archive",
             label: archiveLabel,
             icon: "archive",
-            onPress: () =>
-              archive.mutate({ id: s.id, archived: !s.archived }),
+            onPress: () => onArchiveSession(s.id, !s.archived),
           },
           {
             id: "delete",
@@ -306,7 +310,13 @@ export default function SessionsScreen() {
         ],
       });
     },
-    [archive, togglePinned, openTagsEditor, promptRename, confirmDelete],
+    [
+      onArchiveSession,
+      togglePinned,
+      openTagsEditor,
+      promptRename,
+      confirmDelete,
+    ],
   );
 
   // Tapping the search NavIcon opens the QuickSwitcher modal. Direct ref
