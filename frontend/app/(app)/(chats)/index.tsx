@@ -56,6 +56,7 @@ import { useChatStore } from "@/state/chat-store";
 import { usePinnedSessions } from "@/state/pinned-sessions";
 import { useSessionTags } from "@/state/session-tags";
 import { QuickSwitcher, type QuickSwitcherHandle } from "@/search";
+import { OfflineBanner } from "@/components/OfflineBanner";
 import { formatRelative } from "@/util/time";
 
 const QUERY_KEY = ["sessions"] as const;
@@ -363,6 +364,7 @@ export default function SessionsScreen() {
         leading={<HermesMark size={22} />}
         titleAction={<NavIcon name="search" onPress={onSearchPress} />}
       />
+      <OfflineBanner />
 
       {/* Filter chips. Stays pinned above the scrolling list. The legacy
           "Search chats" client-side filter Input was removed in favor of the

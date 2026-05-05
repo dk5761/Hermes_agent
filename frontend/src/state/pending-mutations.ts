@@ -95,6 +95,12 @@ export interface PendingMutationsState {
   /** Convenience selectors for the Diagnostics screen + offline banner. */
   pendingCount: () => number;
   failedCount: () => number;
+  /**
+   * Drop every entry (failed or pending). Used by the Diagnostics "Reset
+   * all queues" action — the user has explicitly opted to forget queued
+   * writes that haven't replayed yet.
+   */
+  clearAll: () => void;
 }
 
 // Math.random is fine for client-only ids; not security-sensitive. Mirrors
@@ -267,6 +273,14 @@ export const usePendingMutations = create<PendingMutationsState>((set, get) => (
     let n = 0;
     for (const e of get().queue) if (e.failed) n += 1;
     return n;
+  },
+
+  clearAll() {
+    set(() => {
+      const next: PendingMutationEntry[] = [];
+      persist(next);
+      return { queue: next };
+    });
   },
 }));
 

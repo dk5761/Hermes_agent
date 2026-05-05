@@ -35,6 +35,7 @@ import {
 } from "@/api/settings";
 import { useNotificationsInbox } from "@/state/notifications-inbox";
 import { useVoiceSettings } from "@/state/voice-settings";
+import { OfflineBanner } from "@/components/OfflineBanner";
 
 function formatBytes(n: number): string {
   if (!n) return "—";
@@ -145,6 +146,7 @@ export default function SettingsIndexScreen() {
   return (
     <PhoneSafeArea>
       <NavBar large title="Settings" />
+      <OfflineBanner />
       {/* paddingBottom must clear the floating AppTabBar (~50pt bar + safe area). */}
       <ScrollView contentContainerStyle={{ paddingBottom: 140 }}>
         <Stack gap={20}>

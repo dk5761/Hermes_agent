@@ -45,6 +45,7 @@ import {
 } from "@/api/cron";
 import type { CronJob } from "@/api/types";
 import { formatRelative, toDate } from "@/util/time";
+import { OfflineBanner } from "@/components/OfflineBanner";
 
 type FilterKey = "all" | "enabled" | "paused" | "notify";
 
@@ -193,6 +194,7 @@ export default function CronListScreen() {
         subtitle={subtitle}
         trailing={<NavIcon name="plus" onPress={onNew} />}
       />
+      <OfflineBanner />
 
       {/* Filter chip row. Horizontal scroll for narrow widths.
           Wrapped in a fixed-height View — a bare horizontal ScrollView in a

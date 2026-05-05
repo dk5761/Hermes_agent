@@ -51,6 +51,11 @@ export interface PendingSendsState {
   retry: (id: string) => void;
   remove: (id: string) => void;
   framesForSession: (sessionId: string) => PendingFrame[];
+  /**
+   * Drop every persisted frame. Used by the Diagnostics "Reset all queues"
+   * action — wipes both queued and failed entries indiscriminately.
+   */
+  clearAll: () => void;
 }
 
 // Math.random is fine for client-only frame keys; not security-sensitive.
@@ -209,5 +214,13 @@ export const usePendingSends = create<PendingSendsState>((set, get) => ({
     }
     out.sort((a, b) => a.enqueuedAt - b.enqueuedAt);
     return out;
+  },
+
+  clearAll() {
+    set(() => {
+      const next: Record<string, PendingFrame> = {};
+      persist(next);
+      return { frames: next };
+    });
   },
 }));

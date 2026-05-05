@@ -13,6 +13,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
   type ListRenderItemInfo,
   Pressable,
@@ -23,11 +24,14 @@ import { useRouter } from "expo-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 import {
   Button,
   EmptyState,
   Input,
+  ListGroup,
+  ListRow,
   NavBar,
   PhoneSafeArea,
   Row,
@@ -36,10 +40,13 @@ import {
   StatusPill,
   Text,
   Toggle,
+  showToast,
   useThemeTokens,
   useToast,
 } from "@/components/ui";
 import { getLogs, type LogFile } from "@/api/logs";
+import { usePendingSends } from "@/state/pending-sends";
+import { usePendingMutations } from "@/state/pending-mutations";
 
 type Tab = "hermes" | "server" | "network";
 
@@ -286,6 +293,7 @@ export default function DiagnosticsScreen() {
         onBack={() => router.back()}
         trailing={headerRight}
       />
+      <SyncDiagnostics />
       <Stack gap={10} style={{ paddingHorizontal: 16, paddingBottom: 10 }}>
         <SegControl
           options={TAB_OPTIONS}
@@ -379,3 +387,144 @@ export default function DiagnosticsScreen() {
     </PhoneSafeArea>
   );
 }
+
+// ─── sync diagnostics ───────────────────────────────────────────────────────
+
+const RQ_CACHE_KEY = "hermes.rq.cache.v1";
+
+function SyncDiagnostics() {
+  const queryClient = useQueryClient();
+  const sendsCount = usePendingSends((s) => Object.keys(s.frames).length);
+  const mutQueue = usePendingMutations((s) => s.queue);
+  const mutPending = usePendingMutations((s) => s.pendingCount());
+  const mutFailed = usePendingMutations((s) => s.failedCount());
+
+  const onMutationsRow = useCallback(() => {
+    if (mutFailed === 0 && mutPending === 0) return;
+    const opts: Array<{ text: string; onPress?: () => void; style?: "destructive" | "cancel" | "default" }> = [];
+    if (mutFailed > 0) {
+      opts.push({
+        text: "Retry failed",
+        onPress: () => {
+          const ids = usePendingMutations
+            .getState()
+            .queue.filter((e) => e.failed)
+            .map((e) => e.id);
+          for (const id of ids) usePendingMutations.getState().resetForRetry(id);
+        },
+      });
+      opts.push({
+        text: "Discard failed",
+        style: "destructive",
+        onPress: () => {
+          Alert.alert("Discard failed changes?", "This cannot be undone.", [
+            { text: "Cancel", style: "cancel" },
+            {
+              text: "Discard",
+              style: "destructive",
+              onPress: () => {
+                const ids = usePendingMutations
+                  .getState()
+                  .queue.filter((e) => e.failed)
+                  .map((e) => e.id);
+                for (const id of ids) usePendingMutations.getState().remove(id);
+              },
+            },
+          ]);
+        },
+      });
+    }
+    opts.push({ text: "Close", style: "cancel" });
+    Alert.alert(
+      "Pending mutations",
+      `${mutPending} pending · ${mutFailed} failed`,
+      opts,
+    );
+  }, [mutFailed, mutPending]);
+
+  const onClearCache = useCallback(() => {
+    Alert.alert(
+      "Clear cache?",
+      "Removes the persisted query cache (sessions list, chat history). Auth, queues and preferences stay.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Clear",
+          style: "destructive",
+          onPress: () => {
+            void AsyncStorage.removeItem(RQ_CACHE_KEY)
+              .then(() => queryClient.clear())
+              .then(() => {
+                showToast("Cache cleared", "info");
+              })
+              .catch(() => undefined);
+          },
+        },
+      ],
+    );
+  }, [queryClient]);
+
+  const onResetQueues = useCallback(() => {
+    Alert.alert(
+      "Reset all queues?",
+      "Drops every queued send and mutation, including failed ones. This cannot be undone.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Reset",
+          style: "destructive",
+          onPress: () => {
+            usePendingSends.getState().clearAll();
+            usePendingMutations.getState().clearAll();
+            showToast("Queues reset", "info");
+          },
+        },
+      ],
+    );
+  }, []);
+
+  return (
+    <Stack gap={6} style={{ paddingHorizontal: 16, paddingTop: 12, paddingBottom: 4 }}>
+      <Text kind="micro" className="text-ink-3 uppercase" style={{ paddingLeft: 4 }}>
+        Sync
+      </Text>
+      <ListGroup>
+        <ListRow
+          title="Pending sends"
+          detail={String(sendsCount)}
+          icon="send"
+          chevron={sendsCount > 0}
+          onPress={() => {
+            if (sendsCount === 0) return;
+            Alert.alert("Pending sends", `${sendsCount} message${sendsCount === 1 ? "" : "s"} waiting to deliver. They'll send automatically once the network is reachable.`);
+          }}
+        />
+        <ListRow
+          title="Pending mutations"
+          detail={
+            mutFailed > 0
+              ? `${mutPending} pending · ${mutFailed} failed`
+              : String(mutQueue.length)
+          }
+          icon="refresh"
+          chevron={mutQueue.length > 0}
+          onPress={onMutationsRow}
+        />
+        <ListRow
+          title="Clear cache"
+          icon="archive"
+          chevron
+          onPress={onClearCache}
+        />
+        <ListRow
+          title="Reset all queues"
+          icon="close"
+          danger
+          onPress={onResetQueues}
+        />
+      </ListGroup>
+    </Stack>
+  );
+}
+
+
