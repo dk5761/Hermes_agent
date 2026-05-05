@@ -364,9 +364,18 @@ function statusLabel(s: ConnectionStatus, retryInMs: number | null): string {
 // ─── screen ─────────────────────────────────────────────────────────────────
 
 export default function ChatScreen() {
-  const params = useLocalSearchParams<{ id: string }>();
+  const params = useLocalSearchParams<{ id: string; messageId?: string }>();
   const sessionId = typeof params.id === "string" ? params.id : null;
   const router = useRouter();
+  // Phase 6 deep-link: numeric chat_history row id from a search-result tap.
+  // Parsed once per param change; null when missing or non-finite.
+  const targetMessageId = useMemo<number | null>(() => {
+    if (typeof params.messageId !== "string" || params.messageId.length === 0) {
+      return null;
+    }
+    const n = Number(params.messageId);
+    return Number.isFinite(n) ? n : null;
+  }, [params.messageId]);
   const tokens = useThemeTokens();
   const queryClient = useQueryClient();
   const sheetRef = useRef<SheetHandle>(null);
@@ -376,6 +385,10 @@ export default function ChatScreen() {
   const [searchQuery, setSearchQuery] = useState("");
   const [matchIdx, setMatchIdx] = useState(0);
   const searchInputRef = useRef<TextInput>(null);
+  // Phase 6 deep-link: brief accent-tint on the message we navigated to.
+  // Distinct from `activeMatchId` (in-chat search). One-shot; cleared after
+  // ~1.5s so the row reverts to its default rendering.
+  const [flashMessageId, setFlashMessageId] = useState<number | null>(null);
 
   const sessionState = useChatStore((s) => (sessionId ? s.byId[sessionId] : undefined));
   const latestTodoToolId = useChatStore((s) =>
@@ -692,6 +705,82 @@ export default function ChatScreen() {
       });
   }, [activeMatchId, reversed]);
 
+  // Phase 6 deep-link: when the chat is opened with `?messageId=<chat_history.id>`
+  // (set by QuickSwitcher), scroll to that message and flash an accent tint.
+  // Reuses the same scroll + tint pipeline as the in-chat search path; just a
+  // different one-shot trigger. UI message ids are encoded as
+  // `hist-{u,a,r,t,e}-<chat_history.id>`, so we match by trailing numeric id
+  // rather than the raw `messageId` number.
+  //
+  // Replay guard: a `consumedRef` records the last messageId we acted on.
+  // We can't rely solely on the deps array because the effect itself calls
+  // `router.setParams({ messageId: undefined })` to clean the URL — that
+  // flips `targetMessageId` to null and re-triggers the effect, which would
+  // otherwise tear down our own timers via the cleanup function. Timers are
+  // therefore held in refs and only cleared on unmount (separate effect
+  // below), not on this effect's deps-change cycle.
+  //
+  // Limitation: if the target message lies outside the currently loaded
+  // history window (long chats, no around-cursor pagination yet) we no-op
+  // with an info log. The plan calls out a `?around=<rowId>` endpoint as a
+  // ~1h follow-up; deliberately deferred for v1.
+  const consumedDeepLinkRef = useRef<number | null>(null);
+  const deepLinkScrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const deepLinkFlashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (targetMessageId == null) return;
+    if (consumedDeepLinkRef.current === targetMessageId) return;
+    if (reversed.length === 0) return;
+    const suffix = `-${targetMessageId}`;
+    const idx = reversed.findIndex((r) => {
+      if (r.rowKind !== "msg") return false;
+      const id = r.data.id;
+      if (typeof id !== "string" || !id.startsWith("hist-")) return false;
+      if (!id.endsWith(suffix)) return false;
+      // Strict trailing-number guard — `endsWith("-12")` would also match
+      // "hist-u-112". Compare the parsed trailing integer instead.
+      const dash = id.lastIndexOf("-");
+      const tail = id.slice(dash + 1);
+      return tail === String(targetMessageId);
+    });
+    consumedDeepLinkRef.current = targetMessageId;
+    if (idx < 0) {
+      console.info(
+        `[chat] deep-link messageId=${targetMessageId} not found in loaded window (session=${sessionId ?? "?"})`,
+      );
+      // Still consume the param so back-and-forth navigation doesn't keep
+      // re-firing this effect on an unresolvable target.
+      router.setParams({ messageId: undefined });
+      return;
+    }
+    if (deepLinkScrollTimerRef.current) clearTimeout(deepLinkScrollTimerRef.current);
+    if (deepLinkFlashTimerRef.current) clearTimeout(deepLinkFlashTimerRef.current);
+    deepLinkScrollTimerRef.current = setTimeout(() => {
+      flatListRef.current
+        ?.scrollToIndex({ index: idx, animated: true, viewPosition: 0.5 })
+        .catch(() => undefined);
+    }, 150);
+    setFlashMessageId(targetMessageId);
+    deepLinkFlashTimerRef.current = setTimeout(() => setFlashMessageId(null), 1500);
+    // Clear the URL param so a re-render / refocus doesn't replay the deep
+    // link. expo-router treats a fresh navigation with the same key as a new
+    // value (the consumedRef tracks the numeric id), so the next
+    // QuickSwitcher tap on the same target still fires the effect.
+    router.setParams({ messageId: undefined });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `router` and
+    // `sessionId` are stable per mount and intentionally excluded so we
+    // don't re-fire on unrelated navigation churn.
+  }, [targetMessageId, reversed.length]);
+  // Unmount-only cleanup: cancel any in-flight deep-link timers so a quick
+  // back-out doesn't fire setState on an unmounted screen. Empty dep array
+  // intentional — runs once at unmount.
+  useEffect(() => {
+    return () => {
+      if (deepLinkScrollTimerRef.current) clearTimeout(deepLinkScrollTimerRef.current);
+      if (deepLinkFlashTimerRef.current) clearTimeout(deepLinkFlashTimerRef.current);
+    };
+  }, []);
+
   const onSearchOpen = useCallback(() => {
     setSearchOpen(true);
     setTimeout(() => searchInputRef.current?.focus(), 50);
@@ -997,7 +1086,14 @@ export default function ChatScreen() {
             latestTodoToolId={latestTodoToolId}
             searchActive={searchActive}
             isMatch={isMatch}
-            isActiveMatch={searchActive && m.id === activeMatchId}
+            isActiveMatch={
+              (searchActive && m.id === activeMatchId) ||
+              (flashMessageId != null && m.id === `hist-u-${flashMessageId}`) ||
+              (flashMessageId != null && m.id === `hist-a-${flashMessageId}`) ||
+              (flashMessageId != null && m.id === `hist-r-${flashMessageId}`) ||
+              (flashMessageId != null && m.id === `hist-t-${flashMessageId}`) ||
+              (flashMessageId != null && m.id === `hist-e-${flashMessageId}`)
+            }
             onCopy={
               isAssistant && m.kind === "assistant"
                 ? () => onCopyAssistant(m.text)
@@ -1062,6 +1158,7 @@ export default function ChatScreen() {
       lastAssistantId,
       onCopyAssistant,
       onRegenerateAssistant,
+      flashMessageId,
     ],
   );
 
