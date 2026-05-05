@@ -16,6 +16,7 @@
  */
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  ActivityIndicator,
   Alert,
   KeyboardAvoidingView,
   Platform,
@@ -27,7 +28,7 @@ import { MicButton } from "@/voice";
 import { useVoiceSettings } from "@/state/voice-settings";
 import { FlashList, type FlashListRef, type ListRenderItem } from "@shopify/flash-list";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import { setCurrentChatId } from "@/notifications/handler";
 
 import {
@@ -69,7 +70,7 @@ import {
   reloadSessionMcp,
   renameSession,
 } from "@/api/sessions";
-import type { AttachmentDTO, HistoryRow, SessionDto } from "@/api/types";
+import type { AttachmentDTO, HistoryRow, MessagesPage, SessionDto } from "@/api/types";
 import type {
   ApprovalRequest,
   AssistantMessage,
@@ -424,15 +425,62 @@ export default function ChatScreen() {
     [sessionsQuery.data, sessionId],
   );
 
-  // Cold-load history.
-  const messagesQuery = useQuery({
-    queryKey: ["session-messages", sessionId],
-    queryFn: () =>
-      sessionId
-        ? getMessages(sessionId)
-        : Promise.resolve({ rows: [], hasBefore: false, hasAfter: false }),
+  // Cold-load history (paginated). "Next page" semantically = "older history",
+  // keyed off the earliest loaded id. Newer content arrives via the WS stream
+  // (chat-store), not via fetchPreviousPage — so there's no
+  // getPreviousPageParam.
+  type MessagesPageParam = { before?: number; around?: number } | undefined;
+
+  const messagesQuery = useInfiniteQuery<
+    MessagesPage,
+    Error,
+    { pages: MessagesPage[]; pageParams: MessagesPageParam[] },
+    readonly ["session-messages", string | null],
+    MessagesPageParam
+  >({
+    queryKey: ["session-messages", sessionId] as const,
     enabled: !!sessionId,
+    initialPageParam: undefined,
+    queryFn: ({ pageParam }) => {
+      if (!sessionId) {
+        return Promise.resolve({ rows: [], hasBefore: false, hasAfter: false });
+      }
+      return getMessages(sessionId, { ...pageParam, limit: 50 });
+    },
+    getNextPageParam: (last) =>
+      last.hasBefore && last.rows[0]
+        ? { before: last.rows[0].id }
+        : undefined,
+    staleTime: 30_000,
+    gcTime: 60_000,
   });
+
+  // Flatten paginated history into a single ascending-by-id list. Each
+  // additional page is prepended (older first) by the gateway, so flatMap
+  // preserves "oldest → newest" order across the full loaded window.
+  const apiRows = useMemo<HistoryRow[]>(
+    () => messagesQuery.data?.pages.flatMap((p) => p.rows) ?? [],
+    [messagesQuery.data],
+  );
+
+  // Scroll-up handler — wired to FlashList's onStartReached. Guards on both
+  // hasNextPage and the in-flight flags so rapid scroll bounces don't fire
+  // duplicate fetches (TanStack also dedupes, but the guard avoids the
+  // overhead of even calling fetchNextPage during an active fetch).
+  const handleStartReached = useCallback(() => {
+    if (
+      messagesQuery.hasNextPage &&
+      !messagesQuery.isFetchingNextPage &&
+      !messagesQuery.isFetching
+    ) {
+      void messagesQuery.fetchNextPage();
+    }
+  }, [
+    messagesQuery.hasNextPage,
+    messagesQuery.isFetchingNextPage,
+    messagesQuery.isFetching,
+    messagesQuery.fetchNextPage,
+  ]);
 
   // Cold-load: walk history backward, find the most recent tool.call with
   // name="todo" and seed latestTodoToolIdById so the right card gets the
@@ -440,7 +488,6 @@ export default function ChatScreen() {
   // the same field via the chat-store reducer.
   useEffect(() => {
     if (!sessionId) return;
-    const apiRows: HistoryRow[] = messagesQuery.data?.rows ?? [];
     if (apiRows.length === 0) return;
     for (let i = apiRows.length - 1; i >= 0; i--) {
       const r = apiRows[i];
@@ -454,7 +501,7 @@ export default function ChatScreen() {
       }
       return;
     }
-  }, [sessionId, messagesQuery.data, setLatestTodoToolId]);
+  }, [sessionId, apiRows, setLatestTodoToolId]);
 
   // ─── foreground push suppression ────────────────────────────────────────
   // Tell the notification handler which chat is currently on screen so it
@@ -480,7 +527,6 @@ export default function ChatScreen() {
   }, [sessionId, todosPinnedMap]);
 
   const historyRows = useMemo<Row[]>(() => {
-    const apiRows: HistoryRow[] = messagesQuery.data?.rows ?? [];
     if (!apiRows.length) return [];
     const out: Row[] = [];
     // Reasoning placement (option B): a `reasoning` row folds into the bubble
@@ -575,7 +621,7 @@ export default function ChatScreen() {
       });
     }
     return out;
-  }, [messagesQuery.data]);
+  }, [apiRows]);
 
   const rows = useMemo<Row[]>(() => {
     const live = buildRows(sessionState);
@@ -638,7 +684,6 @@ export default function ChatScreen() {
       if (todos) return { todos, status: m.status, createdAt: m.createdAt };
     }
     // History rows fallback.
-    const apiRows: HistoryRow[] = messagesQuery.data?.rows ?? [];
     for (let i = apiRows.length - 1; i >= 0; i--) {
       const r = apiRows[i];
       if (r.kind !== "tool.call") continue;
@@ -656,7 +701,7 @@ export default function ChatScreen() {
       }
     }
     return null;
-  }, [pinnedToolId, sessionState, messagesQuery.data]);
+  }, [pinnedToolId, sessionState, apiRows]);
 
   // FlashList v2 with startRenderingFromBottom anchors the END of the data
   // array to the bottom of the viewport, so chronological order (oldest first,
@@ -1052,13 +1097,12 @@ export default function ChatScreen() {
 
   const onExport = useCallback(() => {
     if (!sessionId || !session) return;
-    const rows = messagesQuery.data?.rows ?? [];
-    if (rows.length === 0) {
+    if (apiRows.length === 0) {
       Alert.alert("Nothing to export", "This chat has no messages yet.");
       return;
     }
     const run = (format: "markdown" | "json") => {
-      void exportChat(session, rows, format).catch((err: unknown) => {
+      void exportChat(session, apiRows, format).catch((err: unknown) => {
         const msg = err instanceof Error ? err.message : "Export failed";
         Alert.alert("Export failed", msg);
       });
@@ -1071,7 +1115,7 @@ export default function ChatScreen() {
         { id: "json", label: "JSON", icon: "doc", onPress: () => run("json") },
       ],
     });
-  }, [sessionId, session, messagesQuery.data]);
+  }, [sessionId, session, apiRows]);
 
   // ─── render ───────────────────────────────────────────────────────────────
 
@@ -1374,8 +1418,11 @@ export default function ChatScreen() {
       >
         {/* On a cold open we'd otherwise show a blank list flash before
             history hydrates — replace with skeleton bubbles that mirror the
-            real Message row rhythm. */}
-        {messagesQuery.isFetching && reversed.length === 0 ? (
+            real Message row rhythm. `isPending` is true only on the very
+            first fetch (before any page lands); subsequent paginated fetches
+            set `isFetchingNextPage` instead, so the skeleton no longer
+            re-shows when scrolling up. */}
+        {messagesQuery.isPending && reversed.length === 0 ? (
           <View style={{ flex: 1 }}>
             <SkeletonChat count={5} />
           </View>
@@ -1390,6 +1437,15 @@ export default function ChatScreen() {
               startRenderingFromBottom: true,
               autoscrollToBottomThreshold: 0.2,
             }}
+            onStartReached={handleStartReached}
+            onStartReachedThreshold={0.3}
+            ListHeaderComponent={
+              messagesQuery.isFetchingNextPage ? (
+                <View style={{ paddingVertical: 12, alignItems: "center" }}>
+                  <ActivityIndicator size="small" color={tokens.ink3} />
+                </View>
+              ) : null
+            }
             contentContainerStyle={{ paddingVertical: 12 }}
             keyboardDismissMode="interactive"
             keyboardShouldPersistTaps="handled"
