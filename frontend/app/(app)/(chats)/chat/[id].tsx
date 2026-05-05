@@ -21,6 +21,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   Pressable,
+  Share,
   TextInput,
   View,
   type NativeScrollEvent,
@@ -82,7 +83,7 @@ import type {
   ToolCallState,
 } from "@/state/chat-store";
 import type { ConnectionStatus } from "@/ws/client";
-import type { StatusDotKind } from "@/components/ui";
+import type { IconName, StatusDotKind } from "@/components/ui";
 import { UsagePill } from "@/chat/UsagePill";
 
 // ─── row model (carried over from legacy) ───────────────────────────────────
@@ -982,6 +983,91 @@ export default function ChatScreen() {
     [findPairedUserMessage, stream],
   );
 
+  /**
+   * Long-press handler that opens a contextual ActionSheet with message-level
+   * actions. Action set is computed per-message:
+   *   - Copy: any kind that has visible text
+   *   - Regenerate: assistant only, last assistant only (mirrors the existing
+   *     inline action — same constraint, same wiring)
+   *   - Share: any kind with text, hands off to the system Share dialog
+   *   - Find in chat: prefills the in-chat search with the first ~40 chars
+   *     of the message text
+   */
+  const onLongPressMessage = useCallback(
+    (m: Message) => {
+      const text =
+        m.kind === "user" || m.kind === "assistant"
+          ? m.text
+          : m.kind === "tool"
+            ? m.name
+            : "";
+      const hasText = text.trim().length > 0;
+      const isAssistant = m.kind === "assistant";
+      const isLastAssistant = isAssistant && m.id === lastAssistantId;
+      const subtitle =
+        m.kind === "user"
+          ? "You"
+          : m.kind === "assistant"
+            ? "Assistant"
+            : m.kind === "tool"
+              ? `Tool · ${m.name}`
+              : m.kind;
+      const actions: Array<{
+        id: string;
+        label: string;
+        icon?: IconName;
+        danger?: boolean;
+        onPress: () => void;
+      }> = [];
+      if (hasText) {
+        actions.push({
+          id: "copy",
+          label: "Copy",
+          icon: "copy",
+          onPress: () => {
+            void Clipboard.setStringAsync(text);
+          },
+        });
+      }
+      if (isLastAssistant && m.kind === "assistant") {
+        actions.push({
+          id: "regenerate",
+          label: "Regenerate",
+          icon: "refresh",
+          onPress: () => onRegenerateAssistant(m.id),
+        });
+      }
+      if (hasText) {
+        actions.push({
+          id: "share",
+          label: "Share",
+          icon: "share",
+          onPress: () => {
+            void Share.share({ message: text }).catch(() => undefined);
+          },
+        });
+        actions.push({
+          id: "find",
+          label: "Find in chat",
+          icon: "search",
+          onPress: () => {
+            const seed = text.trim().slice(0, 40);
+            setSearchQuery(seed);
+            setSearchOpen(true);
+            setTimeout(() => searchInputRef.current?.focus(), 50);
+          },
+        });
+      }
+      if (actions.length === 0) return;
+      actionSheetRef.current?.present({
+        title: hasText ? text.trim().slice(0, 60) : subtitle,
+        subtitle,
+        actions,
+      });
+    },
+    [lastAssistantId, onRegenerateAssistant],
+  );
+
   // Send-gating: hold sends while uploads are in flight.
   const uploadingCount = pendingList.filter(
     (p) => p.status === "queued" || p.status === "uploading",
@@ -1232,6 +1318,7 @@ export default function ChatScreen() {
             onRegenerate={
               isLastAssistant ? () => onRegenerateAssistant(m.id) : undefined
             }
+            onLongPress={() => onLongPressMessage(m)}
           />
         );
       }
@@ -1288,6 +1375,7 @@ export default function ChatScreen() {
       lastAssistantId,
       onCopyAssistant,
       onRegenerateAssistant,
+      onLongPressMessage,
       flashMessageId,
     ],
   );

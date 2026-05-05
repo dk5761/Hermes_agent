@@ -858,6 +858,12 @@ interface MessageProps {
   // because it truncates the last turn server-side.
   onCopy?: () => void;
   onRegenerate?: () => void;
+  /**
+   * Long-press handler (~350ms hold) that opens a contextual action menu —
+   * copy, regenerate, share, search-similar. Wired by the chat screen so the
+   * Message component itself stays unaware of which menu surface is used.
+   */
+  onLongPress?: () => void;
 }
 
 function MessageInner({
@@ -870,6 +876,7 @@ function MessageInner({
   streaming,
   onCopy,
   onRegenerate,
+  onLongPress,
 }: MessageProps) {
   // Active-match flash is scoped to the bubble inside each row variant — so
   // the rainbow overlay covers the visible bubble, not the entire row gutter.
@@ -975,10 +982,39 @@ function MessageInner({
   // searchActive drives the in-chat-search dim behavior (non-matches fade to
   // 0.35). The active-match flash is now applied per-row inside each variant
   // via BubbleHighlight, so the wrap is only needed during in-chat search.
-  if (!searchActive) return <>{inner}</>;
-  return (
+  const body = searchActive ? (
     <SearchHighlightWrap isMatch={!!isMatch}>{inner}</SearchHighlightWrap>
+  ) : (
+    inner
   );
+
+  // Long-press wrapper. Pressable's `onPress` is intentionally undefined so
+  // child Pressables (markdown links, action buttons) handle taps as today;
+  // only the long-hold gesture bubbles to this outer handler. Haptic on
+  // press-in for a tactile cue that the gesture is being captured.
+  if (onLongPress) {
+    const handle = () => {
+      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(
+        () => undefined,
+      );
+      onLongPress();
+    };
+    return (
+      <Pressable
+        onLongPress={handle}
+        delayLongPress={350}
+        accessibilityActions={[
+          { name: "longpress", label: "Show message actions" },
+        ]}
+        onAccessibilityAction={(e) => {
+          if (e.nativeEvent.actionName === "longpress") handle();
+        }}
+      >
+        {body}
+      </Pressable>
+    );
+  }
+  return <>{body}</>;
 }
 
 // Rainbow stops the active-match overlay cycles through.
