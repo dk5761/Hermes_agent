@@ -56,6 +56,7 @@ import type { SessionDto } from "@/api/types";
 import { useChatStore } from "@/state/chat-store";
 import { usePinnedSessions } from "@/state/pinned-sessions";
 import { useSessionTags } from "@/state/session-tags";
+import { useQuickSwitcher } from "@/search";
 import { formatRelative } from "@/util/time";
 
 const QUERY_KEY = ["sessions"] as const;
@@ -315,9 +316,14 @@ export default function SessionsScreen() {
     router.push("/(settings)" as const);
   }, [router]);
 
+  // Tapping the search NavIcon opens the QuickSwitcher modal. The legacy
+  // /(chats)/search screen file is intentionally left in place as a fallback
+  // and as a future deep-link target — we just don't navigate to it from the
+  // header anymore. `getState()` mirrors how other ad-hoc actions in this
+  // file (logout, etc.) reach into stores without subscribing.
   const onSearchPress = useCallback(() => {
-    router.push("/(chats)/search" as const);
-  }, [router]);
+    useQuickSwitcher.getState().open();
+  }, []);
 
   const onCreate = useCallback(() => {
     create.mutate();

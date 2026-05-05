@@ -15,10 +15,12 @@ import { Pressable, StyleSheet, Text, View } from "react-native";
 import { BlurView } from "expo-blur";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useSegments } from "expo-router";
+import * as Haptics from "expo-haptics";
 import type { BottomTabBarProps } from "@react-navigation/bottom-tabs";
 import { Icon, type IconName } from "./Icon";
 import { useThemeTokens } from "./tokens";
 import { useTheme } from "@/theme";
+import { useQuickSwitcher } from "@/search";
 
 interface TabSpec {
   routeName: string;
@@ -40,6 +42,9 @@ export function AppTabBar(props: BottomTabBarProps): React.ReactElement | null {
   // "system", which would mis-route the tint when OS is dark.
   const { resolvedMode } = useTheme();
   const segments = useSegments();
+  // Narrow selector — only re-renders if `open` identity changes (it won't,
+  // since Zustand actions are stable).
+  const openQuickSwitcher = useQuickSwitcher((s) => s.open);
 
   // Hide on push depth: segments after `(app)` and the active group should be
   // empty for tab roots. Anything deeper means we're inside a Stack child.
@@ -83,12 +88,43 @@ export function AppTabBar(props: BottomTabBarProps): React.ReactElement | null {
               navigation.navigate(route.name);
             }
           };
+          // Only the Chats tab gets a long-press shortcut into QuickSwitcher.
+          // Other tabs intentionally no-op on long-press to avoid surprising
+          // users who hold a tab while reaching across the bar.
+          const isChatsTab = tab.routeName === "(chats)";
+          const triggerQuickSwitcher = () => {
+            try {
+              void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(
+                () => undefined,
+              );
+            } catch {
+              // Haptics must never crash the UI — swallow.
+            }
+            openQuickSwitcher();
+          };
+          const onLongPress = isChatsTab ? triggerQuickSwitcher : undefined;
           return (
             <Pressable
               key={tab.routeName}
               accessibilityRole="button"
               accessibilityState={active ? { selected: true } : {}}
+              accessibilityActions={
+                isChatsTab
+                  ? [{ name: "longpress", label: "Open quick search" }]
+                  : undefined
+              }
+              onAccessibilityAction={
+                isChatsTab
+                  ? (event) => {
+                      if (event.nativeEvent.actionName === "longpress") {
+                        triggerQuickSwitcher();
+                      }
+                    }
+                  : undefined
+              }
               onPress={onPress}
+              onLongPress={onLongPress}
+              delayLongPress={350}
               style={[
                 styles.item,
                 {
