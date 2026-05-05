@@ -511,6 +511,9 @@ export default function ChatScreen() {
         : undefined,
     staleTime: 30_000,
     gcTime: 60_000,
+    // Cap on-disk persisted size per session — TanStack drops the oldest
+    // page once length exceeds 3. See OFFLINE_SUPPORT_PLAN.md Phase 2.
+    maxPages: 3,
   });
 
   // Flatten paginated history into a single ascending-by-id list. Each

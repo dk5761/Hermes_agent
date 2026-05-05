@@ -28,6 +28,7 @@ import { useAppLock } from "@/state/app-lock";
 import { useVoiceSettings } from "@/state/voice-settings";
 import { useReasoningCollapse } from "@/state/reasoning-collapse";
 import { usePendingSends } from "@/state/pending-sends";
+import { useNetworkStatus } from "@/state/network-status";
 import { AppLockOverlay } from "@/components/AppLockOverlay";
 import { PrivacyVeil } from "@/components/PrivacyVeil";
 import { reconcileOnLaunch } from "@/live-activity/bridge";
@@ -81,6 +82,10 @@ function AuthGate() {
   const hydrate = useAuthStore((s) => s.hydrate);
   const isAuthed = useAuthStore((s) => Boolean(s.accessToken && s.user));
   const router = useRouter();
+
+  // NetInfo singleton — must come up before any consumer (queue drainers,
+  // offline banner, retry buttons) reads `online`. See Phase 3.
+  useEffect(() => useNetworkStatus.getState().init(), []);
 
   useEffect(() => {
     void hydrate();
