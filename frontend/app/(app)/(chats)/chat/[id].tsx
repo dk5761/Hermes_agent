@@ -155,6 +155,20 @@ function buildRows(state: ChatSessionState | undefined): Row[] {
 
 const EMPTY_PENDING: never[] = [];
 
+/**
+ * Curated follow-up prompts shown as chips under the last assistant turn.
+ * Static list rather than an LLM-generated set: zero latency, zero cost,
+ * applies cleanly to any conversation. A future enhancement could swap
+ * these out per-session by asking an aux model for context-aware
+ * suggestions.
+ */
+const QUICK_REPLY_CHIPS: ReadonlyArray<string> = [
+  "Explain more",
+  "Show example",
+  "Summarize",
+  "What's next?",
+];
+
 function pickString(p: Record<string, unknown>, key: string): string {
   const v = p[key];
   return typeof v === "string" ? v : "";
@@ -988,6 +1002,19 @@ export default function ChatScreen() {
     [],
   );
 
+  /**
+   * Quick-reply tap. Drops the chip text into the composer (doesn't auto-
+   * send — the user almost always wants to edit or extend the prompt
+   * before firing). Focuses the input so the keyboard slides up.
+   */
+  const onQuickReply = useCallback(
+    (text: string) => {
+      setInput((prev) => (prev.trim().length > 0 ? `${prev.trim()} ${text}` : text));
+      setTimeout(() => inputRef.current?.focus(), 50);
+    },
+    [],
+  );
+
   const onRegenerateAssistant = useCallback(
     (assistantId: string) => {
       const paired = findPairedUserMessage(assistantId);
@@ -1332,6 +1359,10 @@ export default function ChatScreen() {
               isLastAssistant ? () => onRegenerateAssistant(m.id) : undefined
             }
             onLongPress={() => onLongPressMessage(m)}
+            quickReplies={
+              isLastAssistant && !isStreaming ? QUICK_REPLY_CHIPS : undefined
+            }
+            onQuickReply={onQuickReply}
           />
         );
       }
@@ -1389,6 +1420,8 @@ export default function ChatScreen() {
       onCopyAssistant,
       onRegenerateAssistant,
       onLongPressMessage,
+      onQuickReply,
+      isStreaming,
       flashMessageId,
     ],
   );

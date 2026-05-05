@@ -346,12 +346,16 @@ function AssistantRow({
   onCopy,
   onRegenerate,
   isActiveMatch,
+  quickReplies,
+  onQuickReply,
 }: {
   message: AssistantMessage;
   streaming?: boolean;
   onCopy?: () => void;
   onRegenerate?: () => void;
   isActiveMatch?: boolean;
+  quickReplies?: ReadonlyArray<string>;
+  onQuickReply?: (text: string) => void;
 }) {
   const tokens = useThemeTokens();
   const hasText = message.text.length > 0;
@@ -422,8 +426,49 @@ function AssistantRow({
           ) : null}
         </Row>
       ) : null}
+      {/* Quick-reply chips — appear under the last assistant turn only.
+          Tapping a chip routes to the chat screen which decides whether
+          to drop the text into the composer or auto-send. */}
+      {!streaming && quickReplies && quickReplies.length > 0 && onQuickReply ? (
+        <QuickReplyRow chips={quickReplies} onPick={onQuickReply} />
+      ) : null}
       </View>
     </BubbleHighlight>
+  );
+}
+
+function QuickReplyRow({
+  chips,
+  onPick,
+}: {
+  chips: ReadonlyArray<string>;
+  onPick: (text: string) => void;
+}) {
+  const tokens = useThemeTokens();
+  return (
+    <Row gap={6} align="center" style={{ marginTop: 8, flexWrap: "wrap" }}>
+      {chips.map((c) => (
+        <Pressable
+          key={c}
+          onPress={() => onPick(c)}
+          accessibilityRole="button"
+          accessibilityLabel={`Quick reply: ${c}`}
+          style={({ pressed }) => ({
+            paddingHorizontal: 10,
+            paddingVertical: 6,
+            borderRadius: 999,
+            borderWidth: 1,
+            borderColor: tokens.line,
+            backgroundColor: tokens.surface,
+            opacity: pressed ? 0.6 : 1,
+          })}
+        >
+          <Text kind="caption" color={tokens.ink2} style={{ fontWeight: "500" }}>
+            {c}
+          </Text>
+        </Pressable>
+      ))}
+    </Row>
   );
 }
 
@@ -888,6 +933,14 @@ interface MessageProps {
    * Message component itself stays unaware of which menu surface is used.
    */
   onLongPress?: () => void;
+  /**
+   * Quick reply chips rendered under the assistant message. Populated only
+   * for the last assistant message (after streaming completes). Tapping a
+   * chip routes back through `onQuickReply` so the chat screen owns where
+   * the text lands (composer input, auto-send, etc.).
+   */
+  quickReplies?: ReadonlyArray<string>;
+  onQuickReply?: (text: string) => void;
 }
 
 function MessageInner({
@@ -901,6 +954,8 @@ function MessageInner({
   onCopy,
   onRegenerate,
   onLongPress,
+  quickReplies,
+  onQuickReply,
 }: MessageProps) {
   // Active-match flash is scoped to the bubble inside each row variant — so
   // the rainbow overlay covers the visible bubble, not the entire row gutter.
@@ -933,6 +988,8 @@ function MessageInner({
             onCopy={onCopy}
             onRegenerate={onRegenerate}
             isActiveMatch={activeFlash}
+            quickReplies={quickReplies}
+            onQuickReply={onQuickReply}
           />
         );
       }
