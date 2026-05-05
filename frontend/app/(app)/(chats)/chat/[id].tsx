@@ -72,7 +72,9 @@ import {
   listSessions,
   reloadSessionMcp,
   renameSession,
+  setSessionModel,
 } from "@/api/sessions";
+import { getMainModel } from "@/api/settings";
 import type { AttachmentDTO, HistoryRow, MessagesPage, SessionDto } from "@/api/types";
 import type {
   ApprovalRequest,
@@ -476,6 +478,17 @@ export default function ChatScreen() {
     () => messagesQuery.data?.pages.flatMap((p) => p.rows) ?? [],
     [messagesQuery.data],
   );
+
+  // Global default model — used to fill the per-chat model pill when there's
+  // no per-session override. Shared cache key with the Settings index, so
+  // the typical landing path (Settings → Models) primes this query and the
+  // chat pill paints from cache without an extra fetch.
+  const mainModelQuery = useQuery({
+    queryKey: ["settings", "model"] as const,
+    queryFn: getMainModel,
+    staleTime: 60_000,
+    retry: false,
+  });
 
   // Refresh per-session usage whenever a turn finishes streaming. Detect the
   // streaming → idle edge: when state.streaming was non-null on the previous
@@ -1429,32 +1442,91 @@ export default function ChatScreen() {
         title={headerTitle}
         onBack={() => safeBack("/(chats)")}
         leading={
-          // Connection status moved to the dedicated banner below the
-          // NavBar — keeping it here too was redundant and crowded the
-          // title. Only the per-chat model-override pill remains in the
-          // leading slot, and only when an override is actually active.
-          session?.modelOverride ? (
-            <Row gap={6} align="center" style={{ marginLeft: 4 }}>
-              <View
-                className="bg-accent-bg"
-                style={{
-                  paddingHorizontal: 6,
-                  paddingVertical: 2,
-                  borderRadius: 4,
-                }}
+          // Tappable model pill: shows the per-chat override (accent) when
+          // set, falls back to the global default (muted). One-tap into the
+          // model picker preserves the existing more-sheet entry as a
+          // secondary path. Hidden until at least one of override/default
+          // resolves so we don't paint an empty placeholder.
+          (() => {
+            const override = session?.modelOverride ?? null;
+            const defaultModel = mainModelQuery.data?.model ?? null;
+            const label = override ?? defaultModel;
+            if (!label || !sessionId) return null;
+            const isOverride = !!override;
+            const goToPicker = () =>
+              router.push({
+                pathname: "/(settings)/model" as never,
+                params: { sessionId },
+              } as never);
+            const onLongPressPill = () => {
+              const actions: Array<{
+                id: string;
+                label: string;
+                icon?: IconName;
+                onPress: () => void;
+              }> = [
+                {
+                  id: "switch",
+                  label: "Switch model",
+                  icon: "spark",
+                  onPress: goToPicker,
+                },
+              ];
+              if (isOverride) {
+                actions.unshift({
+                  id: "clear",
+                  label: "Use default model",
+                  icon: "refresh",
+                  onPress: () => {
+                    void setSessionModel(sessionId, { clear: true })
+                      .then(() =>
+                        queryClient.invalidateQueries({ queryKey: ["sessions"] }),
+                      )
+                      .catch(() => undefined);
+                  },
+                });
+              }
+              actionSheetRef.current?.present({
+                title: label,
+                subtitle: isOverride
+                  ? "Override active for this chat"
+                  : "Default model",
+                actions,
+              });
+            };
+            return (
+              <Pressable
+                onPress={goToPicker}
+                onLongPress={onLongPressPill}
+                delayLongPress={350}
+                accessibilityRole="button"
+                accessibilityLabel={
+                  isOverride
+                    ? `Model override: ${label}. Tap to change, hold for options.`
+                    : `Model: ${label}. Tap to override for this chat.`
+                }
+                hitSlop={6}
+                style={({ pressed }) => ({
+                  marginLeft: 4,
+                  paddingHorizontal: 8,
+                  paddingVertical: 3,
+                  borderRadius: 6,
+                  backgroundColor: isOverride ? tokens.accentBg : tokens.chip,
+                  opacity: pressed ? 0.6 : 1,
+                })}
               >
                 <Text
                   kind="micro"
                   mono
-                  color={tokens.accent}
+                  color={isOverride ? tokens.accent : tokens.ink2}
                   numberOfLines={1}
-                  style={{ maxWidth: 90 }}
+                  style={{ maxWidth: 110 }}
                 >
-                  {session.modelOverride}
+                  {label}
                 </Text>
-              </View>
-            </Row>
-          ) : null
+              </Pressable>
+            );
+          })()
         }
         trailing={
           <>
