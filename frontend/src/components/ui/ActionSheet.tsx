@@ -24,6 +24,7 @@ import React, {
 } from "react";
 import { Pressable, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useSegments } from "expo-router";
 
 import { Icon, type IconName } from "./Icon";
 import { Sheet, type SheetHandle } from "./Sheet";
@@ -57,12 +58,19 @@ export const ActionSheet = forwardRef<ActionSheetHandle>(function ActionSheet(
 ) {
   const tokens = useThemeTokens();
   const insets = useSafeAreaInsets();
+  const segments = useSegments();
   const sheetRef = useRef<SheetHandle>(null);
   const [config, setConfig] = useState<ActionSheetConfig | null>(null);
-  // Clear the floating AppTabBar (~58pt pill + 4pt margin) on tab-root
-  // screens so the Cancel button doesn't sit underneath it. Mirrors the
-  // padding used by tab-root scroll containers.
-  const tabBarFloor = Math.max(insets.bottom, 12) + 60 + 12;
+  // The floating AppTabBar is only painted on tab-root screens. Push the
+  // sheet content above it on those screens; on Stack children (e.g. the
+  // chat detail screen) the tab bar isn't visible, so we use just the
+  // safe-area inset and let the sheet sit flush at the bottom.
+  const appIdx = segments.indexOf("(app)" as never);
+  const afterApp = appIdx >= 0 ? segments.slice(appIdx + 1) : segments;
+  const tabBarVisible = afterApp.length <= 1;
+  const tabBarFloor = tabBarVisible
+    ? Math.max(insets.bottom, 12) + 60 + 12
+    : Math.max(insets.bottom, 12);
 
   useImperativeHandle(
     ref,
