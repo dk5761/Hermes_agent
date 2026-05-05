@@ -71,6 +71,33 @@ export async function getMessages(
   return apiFetch<MessagesPage>(`/sessions/${id}/messages`, { query });
 }
 
+/** Per-model row in {@link SessionUsage.byModel}. Mirrors the backend type. */
+export interface SessionUsageByModel {
+  model: string;
+  provider: string;
+  calls: number;
+  tokensIn: number;
+  tokensOut: number;
+  tokensCached: number;
+  costUsd: number;
+}
+
+/** Aggregated usage + computed cost for a single session. */
+export interface SessionUsage {
+  totals: {
+    tokensIn: number;
+    tokensOut: number;
+    tokensCached: number;
+    costUsd: number;
+    turns: number;
+  };
+  byModel: SessionUsageByModel[];
+}
+
+export async function getSessionUsage(id: string): Promise<SessionUsage> {
+  return apiFetch<SessionUsage>(`/sessions/${id}/usage`);
+}
+
 export interface ReloadMcpResponse {
   output: string;
   warning: string | null;

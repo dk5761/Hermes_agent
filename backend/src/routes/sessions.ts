@@ -7,6 +7,7 @@ import { appSessions, wsEvents } from "../db/schema.js";
 import type { HermesHttpClient } from "../hermes/http-client.js";
 import type { HermesWsPool } from "../hermes/ws-pool.js";
 import type { AppLogger } from "../logger.js";
+import { loadSessionUsage } from "../usage/session-usage.js";
 import { loadHistoryWindow } from "../ws/chat-history.js";
 
 const PREVIEW_EVENT_TYPES = ["message.complete", "message.delta"] as const;
@@ -241,6 +242,31 @@ export async function registerSessionsRoutes(
     const filtered = filterSearchResultsByOwnership(upstream, ownedHermesIds);
     return reply.send(filtered);
   });
+
+  // Aggregated token usage + computed cost for a single session. Sums across
+  // every assistant.message row's `usage` block and groups by model. Cost is
+  // derived locally from a price table (see usage/model-prices.ts) since
+  // Hermes ships rows with cost_status="unknown".
+  app.get(
+    "/sessions/:id/usage",
+    { preHandler: requireAuth },
+    async (request, reply) => {
+      const user = request.user;
+      if (!user) return reply.code(401).send({ error: "unauthenticated" });
+      const params = idParams.safeParse(request.params);
+      if (!params.success) return reply.code(400).send({ error: "invalid_params" });
+
+      const ownership = await db
+        .select({ id: appSessions.id })
+        .from(appSessions)
+        .where(and(eq(appSessions.id, params.data.id), eq(appSessions.userId, user.id)))
+        .limit(1);
+      if (!ownership[0]) return reply.code(404).send({ error: "not_found" });
+
+      const usage = await loadSessionUsage(db, params.data.id);
+      return reply.send(usage);
+    },
+  );
 
   app.get(
     "/sessions/:id/messages",
