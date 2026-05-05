@@ -23,7 +23,12 @@ import {
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { BottomSheetFlashList } from "@gorhom/bottom-sheet";
+import {
+  BottomSheetBackdrop,
+  type BottomSheetBackdropProps,
+  BottomSheetFlatList,
+  BottomSheetModal,
+} from "@gorhom/bottom-sheet";
 import { router } from "expo-router";
 
 import {
@@ -33,8 +38,6 @@ import {
   Row,
   Stack,
   Text,
-  Sheet,
-  type SheetHandle,
   useThemeTokens,
 } from "@/components/ui";
 import { formatRelative } from "@/util/time";
@@ -182,7 +185,7 @@ export const QuickSwitcher = forwardRef<QuickSwitcherHandle>(function QuickSwitc
 ) {
   const tokens = useThemeTokens();
   const insets = useSafeAreaInsets();
-  const sheetRef = useRef<SheetHandle>(null);
+  const sheetRef = useRef<BottomSheetModal>(null);
   const inputRef = useRef<TextInput>(null);
   // Floor padding so list/empty-state content clears the floating AppTabBar
   // (~50pt pill + 4pt margin + safe-area). Mirrors the calc in ActionSheet.
@@ -261,6 +264,21 @@ export const QuickSwitcher = forwardRef<QuickSwitcherHandle>(function QuickSwitc
     hasQuery && !loading && !error && results.length === 0;
   const showResults = hasQuery && results.length > 0;
 
+  // Tappable scrim — fades in once the sheet starts presenting and out on
+  // dismiss. Matches the Sheet wrapper's backdrop opacity so the visual is
+  // consistent with the rest of the app's bottom sheets.
+  const renderBackdrop = useCallback(
+    (props: BottomSheetBackdropProps) => (
+      <BottomSheetBackdrop
+        {...props}
+        appearsOnIndex={0}
+        disappearsOnIndex={-1}
+        opacity={0.4}
+      />
+    ),
+    [],
+  );
+
   const keyExtractor = useCallback(
     (r: SearchResult) => String(r.messageId),
     [],
@@ -282,124 +300,156 @@ export const QuickSwitcher = forwardRef<QuickSwitcherHandle>(function QuickSwitc
     );
   }, [hasMore, tokens.accent]);
 
-  return (
-    <Sheet
-      ref={sheetRef}
-      snapPoints={["85%"]}
-      onChange={onSheetChange}
-      enablePanDownToClose
-      enableDynamicSizing={false}
+  // Sticky search bar — pinned at the top of the FlatList via
+  // stickyHeaderIndices={[0]}. The opaque background matches the sheet
+  // surface so result rows that scroll behind it remain hidden.
+  const ListHeader = (
+    <View
+      style={{
+        paddingHorizontal: 16,
+        paddingTop: 4,
+        paddingBottom: 12,
+        backgroundColor: tokens.surface,
+      }}
     >
-      <Stack gap={0} style={{ flex: 1 }}>
-        {/* Sticky search bar. Mirrors Input.tsx styling but uses a raw
-            TextInput so we can attach our own ref + autoFocus reliably
-            inside the sheet. */}
-        <View style={{ paddingHorizontal: 16, paddingTop: 4, paddingBottom: 12 }}>
-          <View
-            style={{
-              flexDirection: "row",
-              alignItems: "center",
-              height: 44,
-              paddingHorizontal: 12,
-              borderRadius: 10,
-              gap: 8,
-              borderWidth: 1,
-              borderColor: tokens.line,
-              backgroundColor: tokens.surface,
-            }}
-          >
-            <Icon name="search" size={16} color={tokens.ink3} />
-            <TextInput
-              ref={inputRef}
-              value={query}
-              onChangeText={setQuery}
-              placeholder="Search across chats"
-              placeholderTextColor={tokens.ink3}
-              autoFocus
-              autoCapitalize="none"
-              autoCorrect={false}
-              returnKeyType="search"
-              style={{
-                flex: 1,
-                fontSize: 15,
-                letterSpacing: -0.1,
-                color: tokens.ink,
-                fontFamily: "Inter_400Regular",
-                paddingVertical: 0,
-              }}
-            />
-            {loading ? (
-              <ActivityIndicator size="small" color={tokens.ink3} />
-            ) : null}
-            {hasQuery ? (
-              <Pressable onPress={handleClearInput} hitSlop={8}>
-                <Icon name="close" size={16} color={tokens.ink3} />
-              </Pressable>
-            ) : null}
-          </View>
-        </View>
-
-        {error ? (
-          <Pressable
-            onPress={handleRetry}
-            style={{
-              marginHorizontal: 16,
-              marginBottom: 8,
-              padding: 10,
-              borderRadius: 10,
-              backgroundColor: tokens.accentBg,
-            }}
-          >
-            <Row align="center" justify="space-between" gap={8}>
-              <Text kind="caption" color={tokens.danger} style={{ flex: 1 }}>
-                {error.message || "Search failed"}
-              </Text>
-              <Text kind="caption" color={tokens.accent}>
-                Retry
-              </Text>
-            </Row>
+      <View
+        style={{
+          flexDirection: "row",
+          alignItems: "center",
+          height: 44,
+          paddingHorizontal: 12,
+          borderRadius: 10,
+          gap: 8,
+          borderWidth: 1,
+          borderColor: tokens.line,
+          backgroundColor: tokens.surface,
+        }}
+      >
+        <Icon name="search" size={16} color={tokens.ink3} />
+        <TextInput
+          ref={inputRef}
+          value={query}
+          onChangeText={setQuery}
+          placeholder="Search across chats"
+          placeholderTextColor={tokens.ink3}
+          autoFocus
+          autoCapitalize="none"
+          autoCorrect={false}
+          returnKeyType="search"
+          style={{
+            flex: 1,
+            fontSize: 15,
+            letterSpacing: -0.1,
+            color: tokens.ink,
+            fontFamily: "Inter_400Regular",
+            paddingVertical: 0,
+          }}
+        />
+        {loading ? (
+          <ActivityIndicator size="small" color={tokens.ink3} />
+        ) : null}
+        {hasQuery ? (
+          <Pressable onPress={handleClearInput} hitSlop={8}>
+            <Icon name="close" size={16} color={tokens.ink3} />
           </Pressable>
         ) : null}
+      </View>
+    </View>
+  );
 
-        {showInitialEmpty ? (
-          <View style={{ flex: 1 }}>
-            <RecentList
-              recent={recentQueries}
-              onPick={handlePickRecent}
-              onClear={clearRecent}
-            />
-          </View>
-        ) : null}
+  // ListEmptyComponent: rendered when the FlatList's data is empty. Carries
+  // recent-queries / no-matches / error states. Sits below the sticky search
+  // bar and scrolls with the list (no rows to scroll past, but vertical drag
+  // still inside the sheet).
+  const ListEmpty = (
+    <View>
+      {error ? (
+        <Pressable
+          onPress={handleRetry}
+          style={{
+            marginHorizontal: 16,
+            marginTop: 4,
+            marginBottom: 8,
+            padding: 10,
+            borderRadius: 10,
+            backgroundColor: tokens.accentBg,
+          }}
+        >
+          <Row align="center" justify="space-between" gap={8}>
+            <Text kind="caption" color={tokens.danger} style={{ flex: 1 }}>
+              {error.message || "Search failed"}
+            </Text>
+            <Text kind="caption" color={tokens.accent}>
+              Retry
+            </Text>
+          </Row>
+        </Pressable>
+      ) : null}
 
-        {showNoMatches ? (
-          <View style={{ flex: 1 }}>
-            <EmptyState
-              icon="search"
-              title="No matches"
-              body={`Nothing found for "${trimmed}". Try a different query.`}
-            />
-          </View>
-        ) : null}
+      {showInitialEmpty ? (
+        <RecentList
+          recent={recentQueries}
+          onPick={handlePickRecent}
+          onClear={clearRecent}
+        />
+      ) : null}
 
-        {showResults ? (
-          <View style={{ flex: 1 }}>
-            {/* BottomSheetFlashList — gorhom-aware list that cooperates with
-                the sheet's gesture handler so scrolling works inside the
-                modal. Plain FlashList swallows the scroll gesture. */}
-            <BottomSheetFlashList
-              data={results}
-              keyExtractor={keyExtractor}
-              renderItem={renderItem}
-              onEndReached={loadMore}
-              onEndReachedThreshold={0.5}
-              ListFooterComponent={ListFooter}
-              keyboardShouldPersistTaps="handled"
-              keyboardDismissMode="on-drag"
-              contentContainerStyle={{ paddingTop: 4, paddingBottom: tabBarFloor }}
-            />
-          </View>
-        ) : null}
-      </Stack>
-    </Sheet>
+      {showNoMatches ? (
+        <EmptyState
+          icon="search"
+          title="No matches"
+          body={`Nothing found for "${trimmed}". Try a different query.`}
+        />
+      ) : null}
+    </View>
+  );
+
+  return (
+    <BottomSheetModal
+      ref={sheetRef}
+      snapPoints={SNAP_POINTS}
+      enablePanDownToClose
+      enableDynamicSizing={false}
+      onChange={onSheetChange}
+      backdropComponent={renderBackdrop}
+      backgroundStyle={{ backgroundColor: tokens.surface }}
+      handleStyle={{ paddingTop: 8, paddingBottom: 4 }}
+      handleIndicatorStyle={{
+        backgroundColor: tokens.line,
+        width: 24,
+        height: 4,
+        borderRadius: 2,
+      }}
+    >
+      {/* BottomSheetFlatList is a DIRECT child of BottomSheetModal — gorhom
+          v5's gesture coordinator only finds the scrollable when it's not
+          nested under BottomSheetView. Search bar + recents + empty states
+          ride along as ListHeaderComponent so the whole sheet is one
+          scrollable surface. */}
+      <BottomSheetFlatList
+        data={showResults ? results : EMPTY}
+        keyExtractor={keyExtractor}
+        renderItem={renderItem}
+        onEndReached={loadMore}
+        onEndReachedThreshold={0.5}
+        ListHeaderComponent={ListHeader}
+        ListEmptyComponent={ListEmpty}
+        ListFooterComponent={ListFooter}
+        stickyHeaderIndices={STICKY_HEADER_INDICES}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
+        contentContainerStyle={{ paddingTop: 0, paddingBottom: tabBarFloor }}
+      />
+    </BottomSheetModal>
   );
 });
+
+const SNAP_POINTS: Array<string> = ["85%"];
+
+// Pin index 0 (the search bar ListHeaderComponent) to the top while the
+// list scrolls underneath. Stable reference avoids FlatList prop churn.
+const STICKY_HEADER_INDICES: Array<number> = [0];
+
+// Stable empty-array reference so the FlatList's `data` identity is stable
+// when there are no results to show.
+const EMPTY: ReadonlyArray<SearchResult> = [];
