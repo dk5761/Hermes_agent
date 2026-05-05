@@ -932,7 +932,12 @@ function MessageInner({
       break;
   }
 
-  if (!searchActive) return <>{inner}</>;
+  // searchActive drives the in-chat-search dim/highlight pair (matches stay
+  // bright, non-matches dim to 0.35). isActiveMatch alone fires the accent
+  // border — used by both the in-chat active match AND the deep-link flash
+  // (which has searchActive=false). Without the second guard, deep-link
+  // navigations from QuickSwitcher show no highlight at all.
+  if (!searchActive && !isActiveMatch) return <>{inner}</>;
   return (
     <SearchHighlightWrap isMatch={!!isMatch} isActiveMatch={!!isActiveMatch}>
       {inner}

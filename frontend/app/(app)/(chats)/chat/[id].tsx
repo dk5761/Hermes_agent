@@ -812,18 +812,26 @@ export default function ChatScreen() {
     if (targetMessageId == null) return;
     if (consumedDeepLinkRef.current === targetMessageId) return;
     if (reversed.length === 0) return;
-    const suffix = `-${targetMessageId}`;
-    const idx = reversed.findIndex((r) => {
-      if (r.rowKind !== "msg") return false;
+    // Match strategy: parse the trailing chat_history.id from each msg row
+    // and pick the FIRST row whose id is >= target. Exact match works for
+    // user/assistant/tool rows that survive the historyRows folding. For
+    // folded rows (reasoning collapsed into the next assistant message),
+    // the absorbing row's id is the smallest id strictly greater than the
+    // target's, so the >= test still lands on the right visual row.
+    let idx = -1;
+    for (let i = 0; i < reversed.length; i++) {
+      const r = reversed[i];
+      if (!r || r.rowKind !== "msg") continue;
       const id = r.data.id;
-      if (typeof id !== "string" || !id.startsWith("hist-")) return false;
-      if (!id.endsWith(suffix)) return false;
-      // Strict trailing-number guard — `endsWith("-12")` would also match
-      // "hist-u-112". Compare the parsed trailing integer instead.
+      if (typeof id !== "string" || !id.startsWith("hist-")) continue;
       const dash = id.lastIndexOf("-");
-      const tail = id.slice(dash + 1);
-      return tail === String(targetMessageId);
-    });
+      const numeric = Number(id.slice(dash + 1));
+      if (!Number.isFinite(numeric)) continue;
+      if (numeric >= targetMessageId) {
+        idx = i;
+        break;
+      }
+    }
     consumedDeepLinkRef.current = targetMessageId;
     if (idx < 0) {
       console.info(
@@ -831,15 +839,44 @@ export default function ChatScreen() {
       );
       return;
     }
+    // The matched row's actual chat_history.id may differ from the target
+    // when a reasoning row was folded into the next assistant message. Flash
+    // the absorbing row's id so the row renderer's `isActiveMatch` check
+    // hits — the renderer compares against the rendered row's prefixed id.
+    const matchedRow = reversed[idx];
+    const matchedId =
+      matchedRow && matchedRow.rowKind === "msg" && typeof matchedRow.data.id === "string"
+        ? Number(matchedRow.data.id.slice(matchedRow.data.id.lastIndexOf("-") + 1))
+        : targetMessageId;
+    const flashId = Number.isFinite(matchedId) ? matchedId : targetMessageId;
     if (deepLinkScrollTimerRef.current) clearTimeout(deepLinkScrollTimerRef.current);
     if (deepLinkFlashTimerRef.current) clearTimeout(deepLinkFlashTimerRef.current);
+    // Chain: warm-up → scroll → flash. Flash fires only AFTER the scroll
+    // animation resolves so the user sees the target tinted as they land
+    // on it, not before it's even on-screen. The fallback timeout is a
+    // safety net in case scrollToIndex never resolves (rare; happens if
+    // index drops out of range mid-render).
     deepLinkScrollTimerRef.current = setTimeout(() => {
-      flatListRef.current
-        ?.scrollToIndex({ index: idx, animated: true, viewPosition: 0.5 })
-        .catch(() => undefined);
+      const scrollPromise = flatListRef.current?.scrollToIndex({
+        index: idx,
+        animated: true,
+        viewPosition: 0.5,
+      });
+      const startFlash = () => {
+        setFlashMessageId(flashId);
+        deepLinkFlashTimerRef.current = setTimeout(
+          () => setFlashMessageId(null),
+          1500,
+        );
+      };
+      if (scrollPromise && typeof scrollPromise.then === "function") {
+        scrollPromise.then(startFlash).catch(startFlash);
+      } else {
+        // Promise unavailable — approximate scroll-complete with a fixed
+        // delay so the flash still trails the animation.
+        setTimeout(startFlash, 450);
+      }
     }, 150);
-    setFlashMessageId(targetMessageId);
-    deepLinkFlashTimerRef.current = setTimeout(() => setFlashMessageId(null), 1500);
   }, [targetMessageId, reversed.length, sessionId]);
   // Unmount-only cleanup: cancel any in-flight deep-link timers so a quick
   // back-out doesn't fire setState on an unmounted screen. Empty dep array
@@ -1455,10 +1492,20 @@ export default function ChatScreen() {
             keyExtractor={keyExtractor}
             renderItem={renderItem}
             getItemType={(item) => item.rowKind}
-            maintainVisibleContentPosition={{
-              startRenderingFromBottom: true,
-              autoscrollToBottomThreshold: 0.2,
-            }}
+            // Disable bottom-anchor when the chat was opened with a
+            // ?messageId deep-link: startRenderingFromBottom would override
+            // our scrollToIndex on initial paint, and autoscrollToBottomThreshold
+            // snaps back to bottom when content shifts within 20% of the end.
+            // The Phase 5 "Jump to latest" pill is the deliberate way to
+            // reach the bottom from a deep-link landing.
+            maintainVisibleContentPosition={
+              targetMessageId == null
+                ? {
+                    startRenderingFromBottom: true,
+                    autoscrollToBottomThreshold: 0.2,
+                  }
+                : undefined
+            }
             onStartReached={handleStartReached}
             onStartReachedThreshold={0.3}
             onScroll={handleScroll}
