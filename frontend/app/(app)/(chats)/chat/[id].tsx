@@ -23,6 +23,8 @@ import {
   Pressable,
   TextInput,
   View,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
 } from "react-native";
 import { MicButton } from "@/voice";
 import { useVoiceSettings } from "@/state/voice-settings";
@@ -390,6 +392,11 @@ export default function ChatScreen() {
   // Distinct from `activeMatchId` (in-chat search). One-shot; cleared after
   // ~1.5s so the row reverts to its default rendering.
   const [flashMessageId, setFlashMessageId] = useState<number | null>(null);
+  // Phase 5 jump-to-latest: visible when the user has scrolled up more than
+  // one viewport from the bottom. Updates only on threshold crossings (no
+  // per-frame re-render).
+  const [showJumpToLatest, setShowJumpToLatest] = useState(false);
+  const showJumpToLatestRef = useRef(false);
 
   const sessionState = useChatStore((s) => (sessionId ? s.byId[sessionId] : undefined));
   const latestTodoToolId = useChatStore((s) =>
@@ -486,6 +493,28 @@ export default function ChatScreen() {
     messagesQuery.isFetching,
     messagesQuery.fetchNextPage,
   ]);
+
+  // Phase 5: detect when the user is more than one viewport above the bottom
+  // and surface a floating "Jump to latest" button. We compare the current
+  // ref value before flipping state so the FlashList only re-renders on the
+  // edge transition, not on every scroll frame.
+  const handleScroll = useCallback(
+    (e: NativeSyntheticEvent<NativeScrollEvent>) => {
+      const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;
+      const distanceFromBottom =
+        contentSize.height - layoutMeasurement.height - contentOffset.y;
+      const shouldShow = distanceFromBottom > layoutMeasurement.height;
+      if (shouldShow !== showJumpToLatestRef.current) {
+        showJumpToLatestRef.current = shouldShow;
+        setShowJumpToLatest(shouldShow);
+      }
+    },
+    [],
+  );
+
+  const onJumpToLatestPress = useCallback(() => {
+    flatListRef.current?.scrollToEnd({ animated: true });
+  }, []);
 
   // Cold-load: walk history backward, find the most recent tool.call with
   // name="todo" and seed latestTodoToolIdById so the right card gets the
@@ -1432,6 +1461,8 @@ export default function ChatScreen() {
             }}
             onStartReached={handleStartReached}
             onStartReachedThreshold={0.3}
+            onScroll={handleScroll}
+            scrollEventThrottle={64}
             ListHeaderComponent={
               messagesQuery.isFetchingNextPage ? (
                 <View style={{ paddingVertical: 12, alignItems: "center" }}>
@@ -1445,6 +1476,43 @@ export default function ChatScreen() {
             style={{ flex: 1 }}
           />
         )}
+
+        {/* Phase 5: Jump-to-latest pill — floating, above the pinned plan
+            card and composer. Only paints when the user has scrolled more
+            than one viewport from the end. */}
+        {showJumpToLatest ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Jump to latest"
+            onPress={onJumpToLatestPress}
+            style={{
+              position: "absolute",
+              alignSelf: "center",
+              bottom: 96,
+              paddingHorizontal: 14,
+              paddingVertical: 8,
+              borderRadius: 999,
+              backgroundColor: tokens.accent,
+              flexDirection: "row",
+              alignItems: "center",
+              gap: 6,
+              shadowColor: "#000",
+              shadowOpacity: 0.18,
+              shadowRadius: 6,
+              shadowOffset: { width: 0, height: 2 },
+              elevation: 4,
+            }}
+          >
+            <Icon name="chevD" size={14} color={tokens.surface} />
+            <Text
+              kind="caption"
+              color={tokens.surface}
+              style={{ fontWeight: "600" }}
+            >
+              Jump to latest
+            </Text>
+          </Pressable>
+        ) : null}
 
         {/* Pinned plan card sits between the message list and the composer
             (above the keyboard) so the active plan is always visible
