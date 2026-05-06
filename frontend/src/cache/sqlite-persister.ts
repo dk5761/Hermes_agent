@@ -1,5 +1,5 @@
 import type { PersistedClient, Persister } from "@tanstack/react-query-persist-client";
-import { getDb } from "@/db/sqlite";
+import { getDb, withTx } from "@/db/sqlite";
 import { TABLES } from "@/db/schema";
 
 interface SQLitePersisterOptions {
@@ -30,7 +30,7 @@ export function createSQLitePersister(opts: SQLitePersisterOptions): Persister {
       const now = Date.now();
       const queries = client.clientState.queries;
 
-      await db.withTransactionAsync(async () => {
+      await withTx(db, async () => {
         // Upsert every query in the current dehydrated snapshot. The queries
         // array has already been filtered by PersistQueryClientProvider's
         // dehydrateOptions.shouldDehydrateQuery before reaching us here.
@@ -98,7 +98,7 @@ export function createSQLitePersister(opts: SQLitePersisterOptions): Persister {
 
     async removeClient(): Promise<void> {
       const db = await getDb();
-      await db.withTransactionAsync(async () => {
+      await withTx(db, async () => {
         await db.runAsync(`DELETE FROM ${TABLES.rqCache}`);
         await db.runAsync(`DELETE FROM ${TABLES.meta} WHERE key = 'rq_meta'`);
       });

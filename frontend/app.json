@@ -69,7 +69,8 @@
           "speechRecognitionPermission": "Hermes uses speech recognition to transcribe your voice into chat messages. Audio stays on your device.",
           "microphonePermission": "Hermes needs the microphone to record your voice for dictation."
         }
-      ]
+      ],
+      "./plugins/with-whisperkit-spm.js"
     ],
     "extra": {
       "router": {},

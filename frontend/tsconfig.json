@@ -12,6 +12,9 @@
       ],
       "ios-tools": [
         "modules/ios-tools/src/index.ts"
+      ],
+      "whisperkit": [
+        "modules/whisperkit/index.ts"
       ]
     }
   },

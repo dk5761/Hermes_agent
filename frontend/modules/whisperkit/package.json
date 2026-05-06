@@ -1,0 +1,8 @@
+{
+  "name": "whisperkit",
+  "version": "1.0.0",
+  "description": "Expo native module wrapping WhisperKit for on-device streaming Whisper transcription",
+  "main": "index.ts",
+  "types": "index.ts",
+  "private": true
+}

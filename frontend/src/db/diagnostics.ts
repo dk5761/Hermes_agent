@@ -10,7 +10,7 @@
  */
 import { File, Paths } from "expo-file-system";
 
-import { getDb, closeDb } from "./sqlite";
+import { getDb, closeDb, withTx } from "./sqlite";
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -95,7 +95,7 @@ export async function vacuumDb(): Promise<void> {
  */
 export async function clearRqCache(): Promise<void> {
   const db = await getDb();
-  await db.withTransactionAsync(async () => {
+  await withTx(db, async () => {
     await db.execAsync("DELETE FROM rq_cache");
     await db.runAsync("DELETE FROM meta WHERE key = ?", "rq_meta");
   });
@@ -108,7 +108,7 @@ export async function clearRqCache(): Promise<void> {
  */
 export async function clearAllQueues(): Promise<void> {
   const db = await getDb();
-  await db.withTransactionAsync(async () => {
+  await withTx(db, async () => {
     await db.execAsync("DELETE FROM pending_mutations");
     await db.execAsync("DELETE FROM pending_sends");
   });

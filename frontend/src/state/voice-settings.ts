@@ -1,15 +1,19 @@
 /**
- * Voice settings store — Zustand + AsyncStorage persistence.
+ * Voice settings store — Zustand + SQLite persistence.
  *
- * Persists four preferences:
+ * Persists five preferences:
  *   enabled         — whether voice input is surfaced at all
  *   mode            — "ptt" (press-and-hold) or "toggle" (tap on/off)
  *   language        — null means "use device locale"; otherwise a BCP-47 tag
- *   addsPunctuation — Apple's auto-punctuation (SFSpeechRecognitionRequest)
+ *   addsPunctuation — Apple's auto-punctuation (SFSpeechRecognitionRequest).
+ *                     Only meaningful when the SFSpeech engine is active.
+ *   engine          — "auto" | "whisper" | "sfspeech". Default "auto".
+ *                     "auto" resolves at start() time based on WhisperKit model
+ *                     readiness (see resolveEngine in useVoiceInput).
  *
  * Pattern matches the other stores in this directory (notifications-inbox,
  * todos, pinned-sessions): create() with a plain hydrate() that reads from
- * AsyncStorage, and a persist() helper that writes back on every mutation.
+ * sqliteKv, and a persist() helper that writes back on every mutation.
  *
  * Hydration is non-blocking — called from app/_layout.tsx alongside the
  * other stores. Reads against a non-hydrated store return defaults.
@@ -23,6 +27,9 @@ const KEY = "voice.settings.v1";
 // Public types
 // ---------------------------------------------------------------------------
 
+/** Which speech recognition engine to use. */
+export type VoiceEngine = "auto" | "whisper" | "sfspeech";
+
 export interface VoiceSettings {
   enabled: boolean;
   mode: "ptt" | "toggle";
@@ -31,7 +38,15 @@ export interface VoiceSettings {
    * Otherwise a BCP-47 locale tag e.g. "en-US", "es-ES".
    */
   language: string | null;
+  /** Apple's auto-punctuation. Only meaningful when SFSpeech engine is active. */
   addsPunctuation: boolean;
+  /**
+   * Speech recognition engine preference.
+   *   "auto"     — use WhisperKit when model is ready, fall back to SFSpeech otherwise.
+   *   "whisper"  — WhisperKit only; surfaces model_not_ready error if model absent.
+   *   "sfspeech" — iOS native SFSpeech; always available, no model download needed.
+   */
+  engine: VoiceEngine;
 }
 
 export interface VoiceSettingsActions {
@@ -39,6 +54,7 @@ export interface VoiceSettingsActions {
   setMode: (m: "ptt" | "toggle") => void;
   setLanguage: (lang: string | null) => void;
   setAddsPunctuation: (v: boolean) => void;
+  setEngine: (e: VoiceEngine) => void;
   reset: () => void;
   hydrate: () => Promise<void>;
 }
@@ -52,6 +68,7 @@ const DEFAULTS: VoiceSettings = {
   mode: "ptt",
   language: null,
   addsPunctuation: true,
+  engine: "auto",
 };
 
 // ---------------------------------------------------------------------------
@@ -63,6 +80,7 @@ interface Serialized {
   mode?: unknown;
   language?: unknown;
   addsPunctuation?: unknown;
+  engine?: unknown;
 }
 
 function parseSettings(raw: string | null): VoiceSettings {
@@ -86,8 +104,12 @@ function parseSettings(raw: string | null): VoiceSettings {
       typeof r.addsPunctuation === "boolean"
         ? r.addsPunctuation
         : DEFAULTS.addsPunctuation;
+    const engine: VoiceEngine =
+      r.engine === "auto" || r.engine === "whisper" || r.engine === "sfspeech"
+        ? r.engine
+        : DEFAULTS.engine;
 
-    return { enabled, mode, language, addsPunctuation };
+    return { enabled, mode, language, addsPunctuation, engine };
   } catch {
     return { ...DEFAULTS };
   }
@@ -141,6 +163,14 @@ export const useVoiceSettings = create<VoiceSettings & VoiceSettingsActions>(
         const next = { ...s, addsPunctuation: v };
         persistSettings(next);
         return { addsPunctuation: v };
+      });
+    },
+
+    setEngine(e) {
+      set((s) => {
+        const next = { ...s, engine: e };
+        persistSettings(next);
+        return { engine: e };
       });
     },
 

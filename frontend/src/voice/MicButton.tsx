@@ -10,6 +10,12 @@
  *               idle after 2s
  *   disabled  → 40% opacity, non-interactive
  *
+ * Model-state overlays (WhisperKit):
+ *   absent     → small download-arrow badge on the button; long-press starts download
+ *   downloading → animated progress ring around the button; tap is disabled
+ *   failed     → red X badge; tap retries ensureModelReady()
+ *   ready      → no overlay; normal behaviour
+ *
  * Slide-to-cancel (PTT only):
  *   We use plain Pressable onPressIn / onPressOut and track the touch position
  *   via onLayout (to get button bounds) plus a pan handler implemented with
@@ -154,6 +160,122 @@ function RecDot({ color }: { color: string }) {
   );
 }
 
+/**
+ * Download-arrow badge (model absent).
+ * Small filled down-arrow in the bottom-right corner of the button.
+ */
+function DownloadBadge({ color, bg }: { color: string; bg: string }) {
+  return (
+    <View
+      style={{
+        position: "absolute",
+        bottom: -2,
+        right: -2,
+        width: 12,
+        height: 12,
+        borderRadius: 6,
+        backgroundColor: bg,
+        alignItems: "center",
+        justifyContent: "center",
+      }}
+      pointerEvents="none"
+    >
+      <Svg width={8} height={8} viewBox="0 0 24 24" fill="none">
+        <Path
+          d="M12 3v13M5 12l7 7 7-7"
+          stroke={color}
+          strokeWidth={2.5}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </Svg>
+    </View>
+  );
+}
+
+/**
+ * Error-X badge (model download failed).
+ * Small red filled circle with an X in the bottom-right corner.
+ */
+function ErrorBadge({ dangerColor }: { dangerColor: string }) {
+  return (
+    <View
+      style={{
+        position: "absolute",
+        bottom: -2,
+        right: -2,
+        width: 12,
+        height: 12,
+        borderRadius: 6,
+        backgroundColor: dangerColor,
+        alignItems: "center",
+        justifyContent: "center",
+      }}
+      pointerEvents="none"
+    >
+      <Svg width={7} height={7} viewBox="0 0 24 24" fill="none">
+        <Path
+          d="M18 6L6 18M6 6l12 12"
+          stroke="#fff"
+          strokeWidth={3}
+          strokeLinecap="round"
+        />
+      </Svg>
+    </View>
+  );
+}
+
+/**
+ * Circular progress ring that wraps the button during model download.
+ * Uses SVG stroke-dashoffset technique.
+ */
+function ProgressRing({
+  size,
+  progress,
+  color,
+}: {
+  size: number;
+  progress: number;
+  color: string;
+}) {
+  const r = size / 2 - 2;
+  const circumference = 2 * Math.PI * r;
+  const offset = circumference * (1 - Math.min(1, Math.max(0, progress)));
+  return (
+    <Svg
+      width={size}
+      height={size}
+      viewBox={`0 0 ${size} ${size}`}
+      style={{ position: "absolute" }}
+      pointerEvents="none"
+    >
+      {/* Track */}
+      <Circle
+        cx={size / 2}
+        cy={size / 2}
+        r={r}
+        stroke={color}
+        strokeWidth={2}
+        opacity={0.2}
+        fill="none"
+      />
+      {/* Fill arc — rotated so it starts at the top */}
+      <Circle
+        cx={size / 2}
+        cy={size / 2}
+        r={r}
+        stroke={color}
+        strokeWidth={2}
+        fill="none"
+        strokeDasharray={circumference}
+        strokeDashoffset={offset}
+        strokeLinecap="round"
+        transform={`rotate(-90, ${size / 2}, ${size / 2})`}
+      />
+    </Svg>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
@@ -161,6 +283,17 @@ function RecDot({ color }: { color: string }) {
 export interface MicButtonProps {
   /** Final transcript handler. Called when user releases (PTT) or stops (toggle). */
   onTranscript: (text: string) => void;
+  /**
+   * Fires every time a new confirmed segment arrives during recording with the
+   * full accumulated transcript for that session. Allows incremental append to
+   * the composer's input value without waiting for the final stop.
+   */
+  onTranscriptChange?: (fullTranscript: string) => void;
+  /**
+   * Called once at the very start of each recording session (when state enters
+   * "recording"). Use to snapshot composer base-input for the append flow.
+   */
+  onRecordingStart?: () => void;
   /** Live partial transcript while recording. Optional — used for inline preview. */
   onPartial?: (text: string) => void;
   /** Error callback (permission denied, mic unavailable, etc.). */
@@ -185,6 +318,8 @@ type VisualState = "idle" | "recording" | "error";
 
 export function MicButton({
   onTranscript,
+  onTranscriptChange,
+  onRecordingStart,
   onPartial,
   onError,
   disabled = false,
@@ -212,22 +347,33 @@ export function MicButton({
 
   const [visualState, setVisualState] = useState<VisualState>("idle");
 
+  // Track whether we've already fired onRecordingStart for the current session.
+  const recordingStartFiredRef = useRef<boolean>(false);
+
   // Sync recording / error transitions from the hook's state machine.
   useEffect(() => {
     const k = voice.state.kind;
     if (k === "recording") {
       setVisualState("recording");
+      if (!recordingStartFiredRef.current) {
+        recordingStartFiredRef.current = true;
+        onRecordingStart?.();
+      }
     } else if (k === "error") {
+      recordingStartFiredRef.current = false;
       setVisualState("error");
       const t = setTimeout(() => setVisualState("idle"), ERROR_DISPLAY_MS);
       return () => clearTimeout(t);
     } else if (k === "idle" || k === "stopping") {
       // Don't immediately clear recording visual until idle — lets the user see
       // the button held-active through the stopping transition.
-      if (k === "idle") setVisualState("idle");
+      if (k === "idle") {
+        recordingStartFiredRef.current = false;
+        setVisualState("idle");
+      }
     }
     return undefined;
-  }, [voice.state]);
+  }, [voice.state, onRecordingStart]);
 
   // Surface error to caller whenever the hook enters error state.
   useEffect(() => {
@@ -242,6 +388,19 @@ export function MicButton({
       onPartial?.(voice.state.partialTranscript);
     }
   }, [voice.state, onPartial]);
+
+  // Emit incremental transcript changes so the composer can do live append.
+  // Track previous transcript to emit only on actual changes.
+  const prevTranscriptRef = useRef<string>("");
+  useEffect(() => {
+    if (voice.transcript !== prevTranscriptRef.current) {
+      prevTranscriptRef.current = voice.transcript;
+      // Only fire while a session is active to avoid emitting on reset().
+      if (voice.isListening && voice.transcript.length > 0) {
+        onTranscriptChange?.(voice.transcript);
+      }
+    }
+  }, [voice.transcript, voice.isListening, onTranscriptChange]);
 
   // -------------------------------------------------------------------------
   // PTT slide-to-cancel tracking
@@ -355,19 +514,36 @@ export function MicButton({
     visualState === "recording" ? tokens.accentBg : tokens.surface;
 
   // -------------------------------------------------------------------------
+  // Model-state derived values
+  // -------------------------------------------------------------------------
+
+  const modelStatus = voice.modelStatus;
+  const modelProgress = voice.modelProgress;
+
+  // Tap is disabled when the model is downloading (long-press to cancel would
+  // be idempotent; just block taps to avoid confusing state transitions).
+  const tapDisabled = disabled || modelStatus === "downloading";
+
+  // -------------------------------------------------------------------------
   // PTT press handlers
   // -------------------------------------------------------------------------
 
   const handlePressIn = useCallback(() => {
-    if (disabled) return;
+    if (tapDisabled) return;
     if (mode !== "ptt") return;
+    // When model is absent: long-press starts download; regular press-in is
+    // a short tap that should be ignored (downloading is the right CTA).
+    if (modelStatus !== "ready" && modelStatus !== "absent") return;
     cancelOnReleaseRef.current = false;
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
-    void voice.start();
-  }, [disabled, mode, voice]);
+    void voice.start().catch(() => {
+      // start() throws model_not_ready if model isn't ready — handled by the
+      // error effect above which surfaces it to onError. No extra handling here.
+    });
+  }, [tapDisabled, mode, modelStatus, voice]);
 
   const handlePressOut = useCallback(() => {
-    if (disabled) return;
+    if (tapDisabled) return;
     if (mode !== "ptt") return;
     if (cancelOnReleaseRef.current) {
       cancelOnReleaseRef.current = false;
@@ -377,24 +553,52 @@ export function MicButton({
       void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => undefined);
       void voice.stop();
     }
-  }, [disabled, mode, voice]);
+  }, [tapDisabled, mode, voice]);
 
   // -------------------------------------------------------------------------
   // Toggle press handler
   // -------------------------------------------------------------------------
 
   const handlePress = useCallback(() => {
-    if (disabled) return;
     if (mode !== "toggle") return;
+
+    // Model failed — tap retries the download.
+    if (modelStatus === "failed") {
+      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
+      void voice.ensureModelReady().catch(() => {
+        // error forwarded via onError through the effect above
+      });
+      return;
+    }
+
+    // Model absent — tap is not the right affordance; long-press starts download.
+    // Provide a light haptic to signal the model needs downloading.
+    if (modelStatus !== "ready") return;
+
+    if (disabled) return;
     const k = voice.state.kind;
     if (k === "idle" || k === "error") {
       void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
-      void voice.start();
+      void voice.start().catch(() => undefined);
     } else if (k === "recording" || k === "stopping" || k === "requesting_permission") {
       void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => undefined);
       void voice.stop();
     }
-  }, [disabled, mode, voice]);
+  }, [disabled, mode, modelStatus, voice]);
+
+  // -------------------------------------------------------------------------
+  // Long-press handler — triggers model download when not ready
+  // -------------------------------------------------------------------------
+
+  const handleLongPress = useCallback(() => {
+    // During download or when ready, long-press is a no-op.
+    if (modelStatus === "downloading" || modelStatus === "ready") return;
+
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => undefined);
+    void voice.ensureModelReady().catch(() => {
+      // error forwarded via onError through the effect above
+    });
+  }, [modelStatus, voice]);
 
   // Fire a haptic + error notification whenever an error surfaces.
   useEffect(() => {
@@ -409,15 +613,22 @@ export function MicButton({
   // Accessibility
   // -------------------------------------------------------------------------
 
-  const a11yLabel =
-    mode === "ptt"
-      ? "Voice input. Hold to record."
-      : visualState === "recording"
-        ? "Voice input. Tap to stop recording."
-        : "Voice input. Tap to start recording.";
+  const a11yLabel = (() => {
+    if (modelStatus === "absent") return "Voice input. Hold to download voice model.";
+    if (modelStatus === "downloading") return `Voice model downloading, ${Math.round(modelProgress * 100)}%`;
+    if (modelStatus === "failed") return "Voice model download failed. Tap to retry.";
+    if (mode === "ptt") return "Voice input. Hold to record.";
+    return visualState === "recording"
+      ? "Voice input. Tap to stop recording."
+      : "Voice input. Tap to start recording.";
+  })();
 
   const a11yHint =
-    mode === "ptt" ? "Slide finger up while holding to cancel." : undefined;
+    mode === "ptt" && modelStatus === "ready"
+      ? "Slide finger up while holding to cancel."
+      : modelStatus === "absent"
+        ? "Hold to download the voice model."
+        : undefined;
 
   // -------------------------------------------------------------------------
   // Render
@@ -425,6 +636,8 @@ export function MicButton({
 
   const iconSize = Math.round(size * 0.5);
   const pulseSize = size * 1.6;
+  // Progress ring is slightly larger than the button circle.
+  const ringSize = size + 8;
 
   return (
     <View
@@ -433,7 +646,7 @@ export function MicButton({
       onResponderMove={handleResponderMove}
       style={{ width: size, height: size, alignItems: "center", justifyContent: "center" }}
     >
-      {/* Pulse ring — rendered behind the button */}
+      {/* Pulse ring — rendered behind the button (recording state only) */}
       {!reducedMotion && (
         <Animated.View
           pointerEvents="none"
@@ -450,18 +663,34 @@ export function MicButton({
         />
       )}
 
+      {/* Model download progress ring */}
+      {modelStatus === "downloading" ? (
+        <View
+          pointerEvents="none"
+          style={{ position: "absolute", width: ringSize, height: ringSize }}
+        >
+          <ProgressRing
+            size={ringSize}
+            progress={modelProgress}
+            color={tokens.accent}
+          />
+        </View>
+      ) : null}
+
       {/* Button + shake wrapper */}
       <Animated.View style={shakeStyle}>
         <Pressable
           onPressIn={mode === "ptt" ? handlePressIn : undefined}
           onPressOut={mode === "ptt" ? handlePressOut : undefined}
           onPress={mode === "toggle" ? handlePress : undefined}
-          disabled={disabled}
+          onLongPress={handleLongPress}
+          delayLongPress={400}
+          disabled={tapDisabled}
           accessibilityLabel={a11yLabel}
           accessibilityHint={a11yHint}
           accessibilityRole="button"
           accessibilityState={{
-            disabled,
+            disabled: tapDisabled,
             selected: visualState === "recording",
           }}
           style={[
@@ -474,7 +703,7 @@ export function MicButton({
               backgroundColor: bgColor,
               alignItems: "center",
               justifyContent: "center",
-              opacity: disabled ? 0.4 : 1,
+              opacity: tapDisabled && modelStatus !== "downloading" ? 0.4 : 1,
             },
           ]}
         >
@@ -490,6 +719,14 @@ export function MicButton({
           )}
         </Pressable>
       </Animated.View>
+
+      {/* Model state badges — rendered above the button */}
+      {modelStatus === "absent" && visualState !== "recording" ? (
+        <DownloadBadge color={tokens.ink} bg={tokens.surface} />
+      ) : null}
+      {modelStatus === "failed" ? (
+        <ErrorBadge dangerColor={tokens.danger} />
+      ) : null}
     </View>
   );
 }

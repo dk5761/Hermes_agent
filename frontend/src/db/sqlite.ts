@@ -3,6 +3,33 @@ import { runMigrations } from "./migrations";
 import { PERSIST_MAX_AGE } from "../cache/query-persister";
 
 /**
+ * expo-sqlite issues BEGIN/COMMIT against the single shared connection — two
+ * concurrent `withTransactionAsync` calls collide ("cannot start a transaction
+ * within a transaction"). Every transaction in the app must serialise through
+ * this queue so we never overlap.
+ *
+ * @param db   - Open database handle.
+ * @param fn   - Body to run inside a transaction. Awaited.
+ */
+let txQueue: Promise<unknown> = Promise.resolve();
+export function withTx<T>(
+  db: SQLiteDatabase,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const next = txQueue.then<T>(async () => {
+    let result: T;
+    await db.withTransactionAsync(async () => {
+      result = await fn();
+    });
+    return result!;
+  });
+  // Don't let one rejected tx poison the chain — swallow at the queue level
+  // while still surfacing the error to the caller.
+  txQueue = next.catch(() => undefined);
+  return next;
+}
+
+/**
  * Prune stale rows from the three durable tables on every boot.
  *
  * Runs inside a single transaction so the three deletes are atomic.
@@ -17,7 +44,7 @@ async function runBootHygiene(db: SQLiteDatabase): Promise<void> {
   let mut = 0;
   let sends = 0;
 
-  await db.withTransactionAsync(async () => {
+  await withTx(db, async () => {
     const rqResult = await db.runAsync(
       "DELETE FROM rq_cache WHERE updated_at < ?",
       cutoff,
