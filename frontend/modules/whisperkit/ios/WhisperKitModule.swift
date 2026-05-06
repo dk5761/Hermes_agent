@@ -1,5 +1,6 @@
 import AVFoundation
 import ExpoModulesCore
+import Foundation
 import WhisperKit
 
 // MARK: - Valid model names
@@ -152,6 +153,7 @@ public class WhisperKitModule: Module {
 /// Serialises all mutable WhisperKit state via Swift structured concurrency.
 private actor WhisperKitBackend {
   private var whisperKit: WhisperKit?
+  private var loadedModelName: String?
   private var streamTranscriber: AudioStreamTranscriber?
 
   // Tracks how many confirmed segments have been emitted across this stream.
@@ -161,18 +163,18 @@ private actor WhisperKitBackend {
   // MARK: Cache directory
 
   /// The directory under which WhisperKit (via HuggingFace Hub) stores downloaded
-  /// model variants.  Path: `<Caches>/huggingface/models/argmaxinc/whisperkit-coreml/`
+  /// model variants.  Path: `<Documents>/huggingface/models/argmaxinc/whisperkit-coreml/`
   ///
-  /// This mirrors the path that `WhisperKit.download()` writes to when
-  /// `downloadBase` is nil (i.e. the default).
+  /// This mirrors ArgmaxCore's default `HubApi.downloadBase` when
+  /// `downloadBase` is nil.
   nonisolated static func modelCacheBase() -> URL? {
     guard
-      let cachesDir = FileManager.default.urls(
-        for: .cachesDirectory,
+      let documentsDir = FileManager.default.urls(
+        for: .documentDirectory,
         in: .userDomainMask
       ).first
     else { return nil }
-    return cachesDir
+    return documentsDir
       .appendingPathComponent("huggingface/models/argmaxinc/whisperkit-coreml",
                               isDirectory: true)
   }
@@ -192,9 +194,12 @@ private actor WhisperKitBackend {
     onProgress: @escaping @Sendable (Double) -> Void
   ) async throws {
     // If the model is already loaded for this variant, no work to do.
-    if whisperKit != nil {
+    if whisperKit != nil, loadedModelName == modelName {
       onProgress(1.0)
       return
+    }
+    if streamTranscriber != nil, loadedModelName != modelName {
+      throw WhisperKitModuleError.alreadyRunning
     }
 
     // Wipe only the specific model variant directory when no completion marker
@@ -208,73 +213,181 @@ private actor WhisperKitBackend {
       WhisperKitBackend.wipePartialDownload(for: modelName)
     }
 
-    NSLog("[whisperkit] init+load \(modelName) (markerExists=\(markerExists))")
+    NSLog("[whisperkit] download+load \(modelName) (markerExists=\(markerExists))")
     onProgress(0.0)
 
-    // Use WhisperKit's all-in-one constructor — the canonical path used by
-    // their sample apps.  It handles the download internally via its own
-    // pipeline rather than the standalone `WhisperKit.download` helper which
-    // hits a metadata-cache edge case in this swift-transformers version.
-    let config = WhisperKitConfig(
-      model: modelName,
-      verbose: false,
-      logLevel: .none,
-      prewarm: false,
-      load: true,
-      download: true
-    )
-
     do {
-      let kit = try await WhisperKit(config)
-      whisperKit = kit
-      emittedConfirmedCount = 0
-      nextSegmentId = 0
-
-      // Write completion marker so future cold-starts skip the wipe.
-      if let cacheBase = WhisperKitBackend.modelCacheBase() {
-        let modelDir = cacheBase.appendingPathComponent(modelName, isDirectory: true)
-        if !FileManager.default.fileExists(atPath: modelDir.path) {
-          try? FileManager.default.createDirectory(
-            at: modelDir, withIntermediateDirectories: true)
-        }
-        let marker = modelDir.appendingPathComponent(".download-complete")
-        FileManager.default.createFile(atPath: marker.path, contents: nil)
+      let downloadedDir: URL
+      if markerExists, let cachedDir = WhisperKitBackend.modelDir(for: modelName) {
+        downloadedDir = cachedDir
+      } else {
+        downloadedDir = try await WhisperKitBackend.downloadModel(
+          modelName: modelName,
+          onProgress: onProgress
+        )
       }
 
-      NSLog("[whisperkit] init+load complete: \(modelName)")
+      try await loadDownloadedModel(downloadedDir, modelName: modelName)
+
+      NSLog("[whisperkit] download+load complete: \(modelName) at \(downloadedDir.path)")
       onProgress(1.0)
     } catch {
-      NSLog("[whisperkit] init+load failed: \(String(describing: error))")
+      if markerExists {
+        NSLog("[whisperkit] cached model failed to load; retrying clean download: \(String(describing: error))")
+        WhisperKitBackend.wipePartialDownload(for: modelName)
+        let downloadedDir = try await WhisperKitBackend.downloadModel(
+          modelName: modelName,
+          onProgress: onProgress
+        )
+        try await loadDownloadedModel(downloadedDir, modelName: modelName)
+        NSLog("[whisperkit] clean retry complete: \(modelName) at \(downloadedDir.path)")
+        onProgress(1.0)
+        return
+      }
+      NSLog("[whisperkit] download+load failed: \(String(describing: error))")
       throw error
     }
   }
 
+  private func loadDownloadedModel(_ modelDir: URL, modelName: String) async throws {
+    let config = WhisperKitConfig(
+      modelFolder: modelDir.path,
+      verbose: false,
+      logLevel: .none,
+      prewarm: false,
+      load: true,
+      download: false
+    )
+    let kit = try await WhisperKit(config)
+    whisperKit = kit
+    loadedModelName = modelName
+    emittedConfirmedCount = 0
+    nextSegmentId = 0
+
+    // Write completion marker so future cold-starts skip the wipe.
+    let marker = modelDir.appendingPathComponent(".download-complete")
+    FileManager.default.createFile(atPath: marker.path, contents: nil)
+  }
+
+  nonisolated static func downloadModel(
+    modelName: String,
+    onProgress: @escaping @Sendable (Double) -> Void
+  ) async throws -> URL {
+    guard let repoDir = modelCacheBase() else {
+      throw WhisperKitModuleError.cacheDirectoryUnavailable
+    }
+
+    let modelDir = repoDir.appendingPathComponent(modelName, isDirectory: true)
+    try FileManager.default.createDirectory(
+      at: modelDir,
+      withIntermediateDirectories: true
+    )
+
+    let files = try await fetchModelFiles(modelName: modelName)
+    let totalBytes = max(files.reduce(0) { $0 + $1.size }, 1)
+    var completedBytes = 0
+
+    for file in files {
+      let relativePath = String(file.path.dropFirst("\(modelName)/".count))
+      let destination = modelDir.appendingPathComponent(relativePath)
+      try FileManager.default.createDirectory(
+        at: destination.deletingLastPathComponent(),
+        withIntermediateDirectories: true
+      )
+
+      let source = URL(string: "https://huggingface.co")!
+        .appendingPathComponent("argmaxinc/whisperkit-coreml")
+        .appendingPathComponent("resolve")
+        .appendingPathComponent("main")
+        .appendingPathComponent(file.path)
+
+      let (temporaryURL, response) = try await URLSession.shared.download(from: source)
+      if let http = response as? HTTPURLResponse,
+         !(200...299).contains(http.statusCode) {
+        throw WhisperKitModuleError.downloadFailed(file.path, http.statusCode)
+      }
+
+      if FileManager.default.fileExists(atPath: destination.path) {
+        try FileManager.default.removeItem(at: destination)
+      }
+      try FileManager.default.moveItem(at: temporaryURL, to: destination)
+
+      completedBytes += file.size
+      let fraction = max(0.0, min(Double(completedBytes) / Double(totalBytes), 1.0))
+      NSLog("[whisperkit] progress: \(Int(fraction * 100))% \(relativePath)")
+      onProgress(fraction)
+    }
+
+    return modelDir
+  }
+
+  private struct HuggingFaceTreeEntry: Decodable {
+    let type: String
+    let path: String
+    let size: Int
+  }
+
+  private nonisolated static func fetchModelFiles(modelName: String) async throws -> [HuggingFaceTreeEntry] {
+    let url = URL(string: "https://huggingface.co")!
+      .appendingPathComponent("api")
+      .appendingPathComponent("models")
+      .appendingPathComponent("argmaxinc/whisperkit-coreml")
+      .appendingPathComponent("tree")
+      .appendingPathComponent("main")
+      .appendingPathComponent(modelName)
+      .appending(queryItems: [URLQueryItem(name: "recursive", value: "true")])
+
+    let (data, response) = try await URLSession.shared.data(from: url)
+    if let http = response as? HTTPURLResponse,
+       !(200...299).contains(http.statusCode) {
+      throw WhisperKitModuleError.modelTreeUnavailable(modelName, http.statusCode)
+    }
+
+    let entries = try JSONDecoder().decode([HuggingFaceTreeEntry].self, from: data)
+    let files = entries
+      .filter { $0.type == "file" && $0.path.hasPrefix("\(modelName)/") }
+      .sorted { $0.path < $1.path }
+
+    if files.isEmpty {
+      throw WhisperKitModuleError.emptyModelTree(modelName)
+    }
+    return files
+  }
+
   /// Returns true if the on-disk completion marker exists for this model.
   nonisolated static func markerExistsForModel(_ modelName: String) -> Bool {
-    guard let cacheBase = modelCacheBase() else { return false }
-    let modelDir = cacheBase.appendingPathComponent(modelName, isDirectory: true)
+    guard let modelDir = modelDir(for: modelName) else { return false }
     let marker = modelDir.appendingPathComponent(".download-complete")
     return FileManager.default.fileExists(atPath: marker.path)
   }
 
-  /// Removes the specific model variant directory (and its sibling in Documents
-  /// if present) to clear stale partial-download state.  Only the requested
-  /// variant is affected; other cached models are untouched.
+  /// Returns the expected HuggingFace snapshot folder for the public model name.
+  nonisolated static func modelDir(for modelName: String) -> URL? {
+    guard let cacheBase = modelCacheBase() else { return nil }
+    return cacheBase.appendingPathComponent(modelName, isDirectory: true)
+  }
+
+  /// Removes the specific model variant directory plus HuggingFace's per-file
+  /// metadata for that variant. Both trees must be cleared together because
+  /// HubApi stores downloaded files and metadata as siblings under the repo.
   ///
   /// - Parameter modelName: The WhisperKit model variant folder name, e.g.
   ///   `"openai_whisper-large-v3-v20240930"`.
   nonisolated static func wipePartialDownload(for modelName: String) {
-    let dirs: [FileManager.SearchPathDirectory] = [.cachesDirectory, .documentDirectory]
-    for dir in dirs {
-      guard let base = FileManager.default.urls(for: dir, in: .userDomainMask).first
-      else { continue }
-      let modelDir = base
-        .appendingPathComponent("huggingface/models/argmaxinc/whisperkit-coreml",
-                                isDirectory: true)
-        .appendingPathComponent(modelName, isDirectory: true)
-      guard FileManager.default.fileExists(atPath: modelDir.path) else { continue }
+    guard let repoDir = modelCacheBase() else { return }
+
+    let modelDir = repoDir.appendingPathComponent(modelName, isDirectory: true)
+    if FileManager.default.fileExists(atPath: modelDir.path) {
       NSLog("[whisperkit] wiping partial download: \(modelDir.path)")
       try? FileManager.default.removeItem(at: modelDir)
+    }
+
+    let metadataDir = repoDir
+      .appendingPathComponent(".cache/huggingface/download", isDirectory: true)
+      .appendingPathComponent(modelName, isDirectory: true)
+    if FileManager.default.fileExists(atPath: metadataDir.path) {
+      NSLog("[whisperkit] wiping partial metadata: \(metadataDir.path)")
+      try? FileManager.default.removeItem(at: metadataDir)
     }
   }
 
@@ -283,7 +396,7 @@ private actor WhisperKitBackend {
   /// Load a model that is already on disk into memory.
   /// Now a no-op if `ensureModel` already loaded it (the all-in-one path).
   func load(modelName: String) async throws {
-    if whisperKit != nil { return }
+    if whisperKit != nil, loadedModelName == modelName { return }
     try await ensureModel(modelName: modelName, onProgress: { _ in })
   }
 
@@ -389,6 +502,7 @@ private actor WhisperKitBackend {
     await streamTranscriber?.stopStreamTranscription()
     clearTranscriber()
     whisperKit = nil
+    loadedModelName = nil
     emittedConfirmedCount = 0
     nextSegmentId = 0
     deactivateAudioSession()
@@ -424,6 +538,10 @@ private enum WhisperKitModuleError: Error {
   case notInitialized
   case alreadyRunning
   case audioSessionError(Error)
+  case cacheDirectoryUnavailable
+  case modelTreeUnavailable(String, Int)
+  case emptyModelTree(String)
+  case downloadFailed(String, Int)
   /// Callers passed a model name not in `knownModelNames`.
   case unknownModel(String)
 }
