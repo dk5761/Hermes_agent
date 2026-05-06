@@ -10,6 +10,52 @@ import type { AppLogger } from "../logger.js";
 import { nextBranchTitle } from "../sessions/branch-title.js";
 import { loadSessionUsage } from "../usage/session-usage.js";
 import { loadHistoryWindow } from "../ws/chat-history.js";
+import { HermesRpcError } from "../hermes/types.js";
+
+/**
+ * Issues a slash.exec call with one transparent retry on the
+ * "slash worker exited" error path (Hermes RPC code 5030, message
+ * containing "slash worker"). Hermes' dashboard caches a long-lived
+ * subprocess per session for slash commands; when that subprocess dies
+ * (idle timeout, restart of the parent, manual kill, hot-patch) the
+ * first call to `worker.run()` throws and the dashboard clears the
+ * stale slot — making the SECOND call succeed by spawning a fresh
+ * worker. Retrying on the gateway side hides that handshake from the
+ * client.
+ *
+ * Other RPC errors are surfaced unchanged. Network / non-RPC errors
+ * are surfaced unchanged (those are real outages, not stale handles).
+ */
+async function slashExecWithRetry(
+  client: ReturnType<HermesWsPool["getOrCreateShared"]>,
+  params: { session_id: string; command: string },
+  timeoutMs: number,
+): Promise<{ output?: string; warning?: string }> {
+  const once = () =>
+    Promise.race([
+      client.request("slash.exec", params),
+      new Promise((_, reject) =>
+        setTimeout(
+          () => reject(new Error("upstream_request_timeout:slash.exec")),
+          timeoutMs,
+        ).unref(),
+      ),
+    ]) as Promise<{ output?: string; warning?: string }>;
+
+  try {
+    return await once();
+  } catch (err) {
+    const isStaleWorker =
+      err instanceof HermesRpcError &&
+      err.code === 5030 &&
+      /slash worker/i.test(err.message);
+    if (!isStaleWorker) throw err;
+    // Dashboard has cleared the slot now; the next call spawns a fresh
+    // worker that loads any on-disk patches we might have applied since
+    // the previous worker booted.
+    return await once();
+  }
+}
 
 const PREVIEW_EVENT_TYPES = ["message.complete", "message.delta"] as const;
 const PREVIEW_MAX_CHARS = 120;
@@ -367,10 +413,11 @@ export async function registerSessionsRoutes(
 
       const client = wsPool.getOrCreateShared();
       try {
-        const result = (await client.request("slash.exec", {
-          session_id: row.hermesSessionId,
-          command: "/reload-mcp",
-        })) as { output?: string; warning?: string };
+        const result = await slashExecWithRetry(
+          client,
+          { session_id: row.hermesSessionId, command: "/reload-mcp" },
+          BRANCH_SLASH_TIMEOUT_MS,
+        );
         return reply.send({
           output: typeof result?.output === "string" ? result.output : "",
           warning: typeof result?.warning === "string" ? result.warning : null,
@@ -455,18 +502,11 @@ export async function registerSessionsRoutes(
       // a stuck Hermes can't pin the request handler beyond 30s.
       let result: { output?: string; warning?: string };
       try {
-        result = (await Promise.race([
-          client.request("slash.exec", {
-            session_id: parent.hermesSessionId,
-            command,
-          }),
-          new Promise((_, reject) =>
-            setTimeout(
-              () => reject(new Error("upstream_request_timeout:slash.exec")),
-              BRANCH_SLASH_TIMEOUT_MS,
-            ).unref(),
-          ),
-        ])) as { output?: string; warning?: string };
+        result = await slashExecWithRetry(
+          client,
+          { session_id: parent.hermesSessionId, command },
+          BRANCH_SLASH_TIMEOUT_MS,
+        );
       } catch (err) {
         logger.warn({ err, appSessionId: parent.id }, "branch slash.exec failed");
         return reply.code(503).send({
