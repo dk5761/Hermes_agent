@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { and, desc, eq, inArray, max } from "drizzle-orm";
+import { and, desc, eq, inArray, max, sql } from "drizzle-orm";
 import type { FastifyInstance, preHandlerHookHandler } from "fastify";
 import { z } from "zod";
 import type { Db } from "../db/client.js";
@@ -7,6 +7,7 @@ import { appSessions, wsEvents } from "../db/schema.js";
 import type { HermesHttpClient } from "../hermes/http-client.js";
 import type { HermesWsPool } from "../hermes/ws-pool.js";
 import type { AppLogger } from "../logger.js";
+import { nextBranchTitle } from "../sessions/branch-title.js";
 import { loadSessionUsage } from "../usage/session-usage.js";
 import { loadHistoryWindow } from "../ws/chat-history.js";
 
@@ -45,6 +46,13 @@ const messagesQuery = z.object({
 });
 const MESSAGES_DEFAULT_LIMIT = 50;
 const MESSAGES_MAX_LIMIT = 100;
+const branchBody = z.object({
+  title: z.string().min(1).max(200).optional(),
+});
+// Hard cap for the slash.exec round-trip. The shared ws client also has its
+// own configured timeout, but we layer a defensive 30s deadline here so a
+// hung Hermes can't pin the request thread indefinitely.
+const BRANCH_SLASH_TIMEOUT_MS = 30_000;
 const modelOverrideBody = z.union([
   z.object({
     clear: z.literal(true),
@@ -89,6 +97,10 @@ export async function registerSessionsRoutes(
       preview: previews.get(row.id) ?? null,
       modelOverride: row.modelOverride,
       providerOverride: row.providerOverride,
+      // Lineage pointer for branched sessions; null for root chats. Mobile
+      // uses this to paint a "branched from X" chip and group children
+      // under their parent.
+      parentAppSessionId: row.parentAppSessionId,
     }));
     return reply.send({ sessions: enriched });
   });
@@ -370,6 +382,173 @@ export async function registerSessionsRoutes(
           message: err instanceof Error ? err.message : "slash command failed",
         });
       }
+    },
+  );
+
+  // POST /sessions/:id/branch — fork the current Hermes conversation. We
+  // dispatch Hermes' built-in `/branch <title>` slash command (which copies
+  // the conversation upstream and returns the new Hermes session_id), then
+  // mirror the lineage on our side: a fresh app_session row + a per-row copy
+  // of chat_history so the branched chat reads back the full prior narrative.
+  // Inherits model/provider override so the branch keeps the user's choice.
+  app.post(
+    "/sessions/:id/branch",
+    { preHandler: requireAuth },
+    async (request, reply) => {
+      const user = request.user;
+      if (!user) return reply.code(401).send({ error: "unauthenticated" });
+      const params = idParams.safeParse(request.params);
+      if (!params.success) return reply.code(400).send({ error: "invalid_params" });
+      const body = branchBody.safeParse(request.body ?? {});
+      if (!body.success) {
+        return reply
+          .code(400)
+          .send({ error: "invalid_body", details: body.error.flatten() });
+      }
+
+      const rows = await db
+        .select({
+          id: appSessions.id,
+          hermesSessionId: appSessions.hermesSessionId,
+          titleOverride: appSessions.titleOverride,
+          modelOverride: appSessions.modelOverride,
+          providerOverride: appSessions.providerOverride,
+        })
+        .from(appSessions)
+        .where(and(eq(appSessions.id, params.data.id), eq(appSessions.userId, user.id)))
+        .limit(1);
+      const parent = rows[0];
+      if (!parent) return reply.code(404).send({ error: "not_found" });
+      if (!parent.hermesSessionId) {
+        return reply.code(409).send({
+          error: "no_hermes_session",
+          message: "Send a message first — Hermes session not yet created.",
+        });
+      }
+
+      // Resolve final title. Body wins; otherwise auto-suffix against this
+      // user's existing branches of THIS parent (not global, not other users).
+      let finalTitle: string;
+      if (body.data.title !== undefined) {
+        finalTitle = body.data.title;
+      } else {
+        const siblings = await db
+          .select({ title: appSessions.titleOverride })
+          .from(appSessions)
+          .where(
+            and(
+              eq(appSessions.userId, user.id),
+              eq(appSessions.parentAppSessionId, parent.id),
+            ),
+          );
+        const existing = new Set<string>();
+        for (const s of siblings) {
+          if (s.title !== null) existing.add(s.title);
+        }
+        finalTitle = nextBranchTitle(parent.titleOverride, existing);
+      }
+
+      const command = `/branch ${finalTitle}`;
+      const client = wsPool.getOrCreateShared();
+
+      // Layer an explicit deadline on top of the ws client's own timeout so
+      // a stuck Hermes can't pin the request handler beyond 30s.
+      let result: { output?: string; warning?: string };
+      try {
+        result = (await Promise.race([
+          client.request("slash.exec", {
+            session_id: parent.hermesSessionId,
+            command,
+          }),
+          new Promise((_, reject) =>
+            setTimeout(
+              () => reject(new Error("upstream_request_timeout:slash.exec")),
+              BRANCH_SLASH_TIMEOUT_MS,
+            ).unref(),
+          ),
+        ])) as { output?: string; warning?: string };
+      } catch (err) {
+        logger.warn({ err, appSessionId: parent.id }, "branch slash.exec failed");
+        return reply.code(503).send({
+          error: "slash_failed",
+          message: err instanceof Error ? err.message : "slash command failed",
+        });
+      }
+
+      // Parse the new Hermes session id out of the markdown response. Hermes
+      // returns the line `Branch: \`<id>\``; the regex anchors on that exact
+      // label so an unrelated backticked id (e.g. Original) won't match.
+      const output = typeof result.output === "string" ? result.output : "";
+      const m = /Branch:\s*`([^`]+)`/.exec(output);
+      if (!m || !m[1]) {
+        logger.error(
+          { appSessionId: parent.id, output },
+          "branch slash.exec returned no parseable session id",
+        );
+        return reply.code(502).send({
+          error: "branch_parse_failed",
+          message: "Hermes /branch did not return a recognisable session id.",
+        });
+      }
+      const newHermesId: string = m[1];
+
+      // Atomically create the branch app_session + clone chat_history so the
+      // FTS5 AI trigger fires per-row and the branch reads back the same
+      // narrative the parent had at fork time. better-sqlite3 transactions
+      // are synchronous: do NOT await inside the callback.
+      const newAppId = crypto.randomUUID();
+      const now = Math.floor(Date.now() / 1000);
+      try {
+        db.transaction((tx) => {
+          tx.insert(appSessions)
+            .values({
+              id: newAppId,
+              userId: user.id,
+              hermesSessionId: newHermesId,
+              titleOverride: finalTitle,
+              archivedAt: null,
+              modelOverride: parent.modelOverride,
+              providerOverride: parent.providerOverride,
+              createdAt: now,
+              updatedAt: now,
+              parentAppSessionId: parent.id,
+            })
+            .run();
+          // Raw INSERT…SELECT preserves search_text so the chat_history_fts_ai
+          // trigger indexes the branch's rows with the same content the
+          // parent already had.
+          tx.run(sql`
+            INSERT INTO chat_history (app_session_id, kind, payload_json, created_at, search_text)
+            SELECT ${newAppId}, kind, payload_json, created_at, search_text
+            FROM chat_history
+            WHERE app_session_id = ${parent.id}
+          `);
+        });
+      } catch (err) {
+        // slash.exec already succeeded → the upstream Hermes session exists
+        // but no app_session points at it. Log loudly so the upstream id is
+        // recoverable for manual cleanup; we deliberately don't ship a janitor
+        // for what should be vanishingly rare.
+        logger.error(
+          {
+            parentAppSessionId: parent.id,
+            orphanHermesSessionId: newHermesId,
+            err,
+          },
+          "branch DB write failed; Hermes session orphaned",
+        );
+        return reply.code(503).send({
+          error: "branch_db_write_failed",
+          message: "Branch created upstream but local persistence failed.",
+        });
+      }
+
+      return reply.send({
+        id: newAppId,
+        title: finalTitle,
+        hermesSessionId: newHermesId,
+        parentId: parent.id,
+      });
     },
   );
 }

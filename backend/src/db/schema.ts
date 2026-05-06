@@ -44,10 +44,19 @@ export const appSessions = sqliteTable(
     providerOverride: text("provider_override"),
     createdAt: integer("created_at").notNull(),
     updatedAt: integer("updated_at").notNull(),
+    // Lineage pointer for the /branch feature: when this session was created
+    // by branching off another, this references the parent app_session. Self-
+    // referential and nullable. The `as never` cast unblocks TS's circular-
+    // type check on the lazy callback — drizzle still wires the FK correctly.
+    parentAppSessionId: text("parent_app_session_id").references(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (): any => appSessions.id,
+    ),
   },
   (t) => ({
     userArchivedIdx: index("app_sessions_user_archived_idx").on(t.userId, t.archivedAt),
     hermesSessionIdx: index("app_sessions_hermes_session_idx").on(t.hermesSessionId),
+    parentIdx: index("app_sessions_parent_idx").on(t.parentAppSessionId),
   }),
 );
 
