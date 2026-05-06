@@ -116,6 +116,17 @@ Snapshots of the Hermes side (not gateway DB) are taken via
 
 ## Deploy log
 
+### 2026-05-07 — server-side transcription (`stt.transcribe` RPC + `POST /transcribe`)
+
+- **Source:** `aef31bf` (latest `main`).
+- **Previous:** `183d293` (slash-worker history refresh).
+- **Migrations applied:** none.
+- **Hermes source patch:** `scripts/patch-hermes-stt-rpc.py` injects the `stt.transcribe` JSON-RPC handler into `tui_gateway/server.py` (registered via the same `@method()` decorator used for every other handler) and adds `"stt.transcribe"` to the `_LONG_HANDLERS` frozenset so faster-whisper transcription runs on the dashboard's `ThreadPoolExecutor` instead of stalling the WS event loop. Idempotent; `--check` reports both patches PATCHED. Wired into `post-hermes-update.sh` step 2c and `install-vps.sh` step 10 so it survives `hermes update` + fresh provisioning.
+- **Backend:** new endpoint `POST /sessions/:id/transcribe` accepts a multipart `audio` field (10 MB cap), session ownership-checked, calls Hermes via the shared WS pool with a 30s deadline and one-shot stale-worker retry. Returns `{ transcript, provider, durationMs }`. Hermes-side provider stays whatever `/root/.hermes/config.yaml` `stt.provider` is — currently `local` (faster-whisper, model `base`).
+- **Verified (auth-gated, 401):** `POST /sessions/:id/transcribe`. `/health` = 200. Existing `POST /sessions/:id/branch` still 401 (no regression).
+- **Restarted:** `hermes-dashboard` (so the patched `server.py` reloads with the new method + frozenset), then `hermes-gateway` (rebuilt with the new route).
+- **Branch state on VPS after deploy:** `main` tracking `origin/main` at `aef31bf`.
+
 ### 2026-05-06 (PM) — slash-worker history refresh + branch retry
 
 - **Source:** `183d293` (latest `main`).
