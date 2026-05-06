@@ -2,12 +2,14 @@
  * Voice settings screen — `(app)/(settings)/voice`.
  *
  * Sections:
- *   (A) Info card — on-device transcription notice
+ *   (A) Info card — transcription notice
  *   (B) Active model card — status badge, progress bar, action buttons
  *   (C) Model picker — curated WhisperKit variants with radio selection
- *   (D) Speech recognition engine — engine radio + addsPunctuation + current label
- *   (E) General — voice enabled toggle, interaction mode, language picker
- *   (F) Permissions — iOS Settings deep-link
+ *   (D) Speech recognition engine — four-option engine radio + fallback toggle
+ *                                   + addsPunctuation + current effective label
+ *   (E) Recording limits — local cap slider + server cap slider
+ *   (F) General — voice enabled toggle, interaction mode, language picker
+ *   (G) Permissions — iOS Settings deep-link
  *
  * Layout mirrors notifications.tsx: NavBar + ScrollView + ListGroup sections.
  */
@@ -16,6 +18,7 @@ import { Alert, Pressable, ScrollView, View } from "react-native";
 import { useRouter } from "expo-router";
 import { ExpoSpeechRecognitionModule } from "expo-speech-recognition";
 import { Platform } from "react-native";
+import Slider from "@react-native-community/slider";
 
 import {
   Button,
@@ -31,8 +34,13 @@ import {
   Toggle,
   useThemeTokens,
 } from "@/components/ui";
-import { useVoiceSettings } from "@/state/voice-settings";
+import {
+  useVoiceSettings,
+  LOCAL_CAP_RANGE,
+  SERVER_CAP_RANGE,
+} from "@/state/voice-settings";
 import type { VoiceEngine } from "@/state/voice-settings";
+import { useNetworkStatus } from "@/state/network-status";
 import { useWhisperModelState } from "@/voice/whisper-model-state";
 import { resolveEngine } from "@/voice/useVoiceInput";
 import type { WhisperModelName } from "whisperkit";
@@ -159,17 +167,22 @@ const ENGINE_OPTIONS: ReadonlyArray<EngineOption> = [
   {
     value: "auto",
     label: "Auto (recommended)",
-    detail: "Uses WhisperKit when ready, otherwise Apple system recognition.",
+    detail: "On-device when ready, else system. Falls back to system if offline.",
   },
   {
     value: "whisper",
-    label: "WhisperKit only",
-    detail: "On-device ML model. Requires a downloaded model.",
+    label: "WhisperKit (on-device)",
+    detail: "Best privacy and quality. Requires model download.",
   },
   {
     value: "sfspeech",
     label: "Apple system (SFSpeech)",
-    detail: "Always available. No download required.",
+    detail: "Instant. Uses system languages.",
+  },
+  {
+    value: "server",
+    label: "Hermes server",
+    detail: "Long recordings, best for >60s. Requires connection.",
   },
 ] as const;
 
@@ -177,21 +190,24 @@ function EnginePicker() {
   const tokens = useThemeTokens();
   const engine = useVoiceSettings((s) => s.engine);
   const addsPunctuation = useVoiceSettings((s) => s.addsPunctuation);
+  const fallbackOnOffline = useVoiceSettings((s) => s.fallbackOnOffline);
   const setEngine = useVoiceSettings((s) => s.setEngine);
   const setAddsPunctuation = useVoiceSettings((s) => s.setAddsPunctuation);
+  const setFallbackOnOffline = useVoiceSettings((s) => s.setFallbackOnOffline);
   const modelStatus = useWhisperModelState((s) => s.status);
-  const activeModel = useWhisperModelState((s) => s.activeModel);
+  const online = useNetworkStatus((s) => s.online);
 
   // Derive which engine is actually active right now for the status label.
-  const effectiveEngine = resolveEngine({ engine, modelStatus });
+  const effectiveEngine = resolveEngine({ engine, modelStatus, online, fallbackOnOffline });
 
-  const modelOption = CURATED_MODELS.find((m) => m.name === activeModel);
-  const modelFriendlyName = modelOption?.label ?? activeModel;
-
-  const currentEngineLabel =
-    effectiveEngine === "whisper"
-      ? `WhisperKit — ${modelFriendlyName}`
-      : "Apple SFSpeech";
+  const currentEngineLabel: string = (() => {
+    switch (effectiveEngine) {
+      case "whisper": return "WhisperKit (on-device)";
+      case "sfspeech": return "Apple system (SFSpeech)";
+      case "server": return "Hermes server";
+      case "blocked": return "Offline — server unavailable";
+    }
+  })();
 
   // Show the addsPunctuation toggle only when SFSpeech is the active engine.
   const showPunctuationToggle = effectiveEngine === "sfspeech";
@@ -265,6 +281,16 @@ function EnginePicker() {
         );
       })}
 
+      {/* Fallback toggle — always visible; controls behaviour when server engine is offline */}
+      <ListRow
+        icon="globe"
+        title="Use on-device when offline"
+        subtitle="If on, switches to WhisperKit or Apple Speech when offline and Hermes server is selected. If off, mic is disabled offline."
+        right={
+          <Toggle on={fallbackOnOffline} onChange={setFallbackOnOffline} />
+        }
+      />
+
       {/* Punctuation toggle — only visible when SFSpeech is effective engine */}
       {showPunctuationToggle ? (
         <ListRow
@@ -289,6 +315,109 @@ function EnginePicker() {
         <Text kind="micro" className="text-ink-3">
           Currently using: {currentEngineLabel}
         </Text>
+      </View>
+    </ListGroup>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Helpers for cap display
+// ---------------------------------------------------------------------------
+
+/** Format seconds as "{n}s" or "{m}m {s}s" when >= 60. */
+function formatCapSeconds(s: number): string {
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const rem = s % 60;
+  return rem === 0 ? `${m}m` : `${m}m ${rem}s`;
+}
+
+// ---------------------------------------------------------------------------
+// Recording limits card
+// ---------------------------------------------------------------------------
+
+function RecordingLimitsCard() {
+  const tokens = useThemeTokens();
+
+  const localCapSeconds = useVoiceSettings((s) => s.localCapSeconds);
+  const serverCapSeconds = useVoiceSettings((s) => s.serverCapSeconds);
+  const setLocalCapSeconds = useVoiceSettings((s) => s.setLocalCapSeconds);
+  const setServerCapSeconds = useVoiceSettings((s) => s.setServerCapSeconds);
+
+  // Local state mirrors the slider thumb during drag; the store write
+  // fires only on slide-complete to avoid spamming SQLite on every tick.
+  const [localDraft, setLocalDraft] = useState<number>(localCapSeconds);
+  const [serverDraft, setServerDraft] = useState<number>(serverCapSeconds);
+
+  return (
+    <ListGroup
+      header="Recording limits"
+      footer="Recordings auto-stop at the limit. Captured audio is still transcribed."
+    >
+      {/* Local engines (WhisperKit, Apple) cap */}
+      <View style={{ paddingHorizontal: 16, paddingVertical: 12, gap: 6 }}>
+        <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+          <Text kind="body-lg">Local engines (WhisperKit, Apple)</Text>
+          <Text kind="label" style={{ color: tokens.accent }}>
+            {formatCapSeconds(localDraft)}
+          </Text>
+        </View>
+        <Text kind="caption" className="text-ink-3">
+          Recordings auto-stop at this limit. Captured audio is still transcribed.
+        </Text>
+        <Slider
+          minimumValue={LOCAL_CAP_RANGE.min}
+          maximumValue={LOCAL_CAP_RANGE.max}
+          step={5}
+          value={localDraft}
+          minimumTrackTintColor={tokens.accent}
+          maximumTrackTintColor={tokens.lineSoft}
+          thumbTintColor={tokens.accent}
+          onValueChange={(v: number) => setLocalDraft(Math.round(v))}
+          onSlidingComplete={(v: number) => {
+            const rounded = Math.round(v);
+            setLocalDraft(rounded);
+            setLocalCapSeconds(rounded);
+          }}
+          accessibilityLabel="Local engine recording limit"
+        />
+      </View>
+
+      <View
+        style={{
+          height: 1,
+          backgroundColor: tokens.lineSoft,
+          marginHorizontal: 16,
+        }}
+      />
+
+      {/* Hermes server cap */}
+      <View style={{ paddingHorizontal: 16, paddingVertical: 12, gap: 6 }}>
+        <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+          <Text kind="body-lg">Hermes server</Text>
+          <Text kind="label" style={{ color: tokens.accent }}>
+            {formatCapSeconds(serverDraft)}
+          </Text>
+        </View>
+        <Text kind="caption" className="text-ink-3">
+          Server recordings can be longer than on-device.
+        </Text>
+        <Slider
+          minimumValue={SERVER_CAP_RANGE.min}
+          maximumValue={SERVER_CAP_RANGE.max}
+          step={30}
+          value={serverDraft}
+          minimumTrackTintColor={tokens.accent}
+          maximumTrackTintColor={tokens.lineSoft}
+          thumbTintColor={tokens.accent}
+          onValueChange={(v: number) => setServerDraft(Math.round(v))}
+          onSlidingComplete={(v: number) => {
+            const rounded = Math.round(v);
+            setServerDraft(rounded);
+            setServerCapSeconds(rounded);
+          }}
+          accessibilityLabel="Server engine recording limit"
+        />
       </View>
     </ListGroup>
   );
@@ -637,10 +766,11 @@ export default function VoiceSettingsScreen() {
             style={{ marginHorizontal: 16, padding: 14, borderRadius: 12 }}
           >
             <Stack gap={4}>
-              <Text kind="label">On-device transcription</Text>
+              <Text kind="label">Voice transcription</Text>
               <Text kind="caption" className="text-ink-3">
-                Voice input uses WhisperKit for on-device transcription. Audio
-                is processed entirely on your device and never sent to a server.
+                On-device engines (WhisperKit, Apple) process audio entirely on
+                your device. The Hermes server engine uploads audio to your
+                self-hosted server for longer recordings.
               </Text>
             </Stack>
           </View>
@@ -662,6 +792,9 @@ export default function VoiceSettingsScreen() {
 
           {/* ── Speech recognition engine ──────────────────────────── */}
           <EnginePicker />
+
+          {/* ── Recording limits ───────────────────────────────────── */}
+          <RecordingLimitsCard />
 
           {/* ── General ────────────────────────────────────────────── */}
           <ListGroup header="General">

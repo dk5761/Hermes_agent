@@ -392,6 +392,8 @@ export function useWhisperVoiceInput(
       cancel: NOOP_SYNC,
       reset: NOOP_SYNC,
       ensureModelReady: NOOP,
+      // Cap timer lives in the parent router (useVoiceInput); always null here.
+      capExceededAt: null,
     };
   }
 
@@ -408,5 +410,7 @@ export function useWhisperVoiceInput(
     cancel,
     reset,
     ensureModelReady,
+    // Cap timer lives in the parent router (useVoiceInput); always null here.
+    capExceededAt: null,
   };
 }

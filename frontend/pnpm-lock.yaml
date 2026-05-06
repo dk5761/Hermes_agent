@@ -34,6 +34,9 @@ importers:
       '@react-native-community/netinfo':
         specifier: ^12.0.1
         version: 12.0.1(react-native@0.83.6(patch_hash=4884b5e375a331cf1d6bc06c606472ec4a958852cabe451a423ec392fd7bea3f)(@babel/core@7.29.0)(@react-native/metro-config@0.85.2(@babel/core@7.29.0))(@types/react@19.2.14)(react@19.2.0))(react@19.2.0)
+      '@react-native-community/slider':
+        specifier: ^5.2.0
+        version: 5.2.0
       '@shopify/flash-list':
         specifier: ^2.3.1
         version: 2.3.1(@babel/runtime@7.29.2)(react-native@0.83.6(patch_hash=4884b5e375a331cf1d6bc06c606472ec4a958852cabe451a423ec392fd7bea3f)(@babel/core@7.29.0)(@react-native/metro-config@0.85.2(@babel/core@7.29.0))(@types/react@19.2.14)(react@19.2.0))(react@19.2.0)
@@ -49,6 +52,9 @@ importers:
       expo:
         specifier: ~55.0.18
         version: 55.0.18(@babel/core@7.29.0)(@expo/dom-webview@55.0.5)(@expo/metro-runtime@55.0.10)(expo-router@55.0.13)(react-dom@19.2.5(react@19.2.0))(react-native-worklets@0.7.4(patch_hash=45c6e4cc97e4bc7d1ebbd4bc8f7a83f0be8821e1dbcf818d82faa0d2f450a94d)(@babel/core@7.29.0)(react-native@0.83.6(patch_hash=4884b5e375a331cf1d6bc06c606472ec4a958852cabe451a423ec392fd7bea3f)(@babel/core@7.29.0)(@react-native/metro-config@0.85.2(@babel/core@7.29.0))(@types/react@19.2.14)(react@19.2.0))(react@19.2.0))(react-native@0.83.6(patch_hash=4884b5e375a331cf1d6bc06c606472ec4a958852cabe451a423ec392fd7bea3f)(@babel/core@7.29.0)(@react-native/metro-config@0.85.2(@babel/core@7.29.0))(@types/react@19.2.14)(react@19.2.0))(react@19.2.0)(typescript@5.9.3)
+      expo-av:
+        specifier: ^16.0.8
+        version: 16.0.8(expo@55.0.18)(react-native@0.83.6(patch_hash=4884b5e375a331cf1d6bc06c606472ec4a958852cabe451a423ec392fd7bea3f)(@babel/core@7.29.0)(@react-native/metro-config@0.85.2(@babel/core@7.29.0))(@types/react@19.2.14)(react@19.2.0))(react@19.2.0)
       expo-blur:
         specifier: ~55.0.14
         version: 55.0.14(expo@55.0.18)(react-native@0.83.6(patch_hash=4884b5e375a331cf1d6bc06c606472ec4a958852cabe451a423ec392fd7bea3f)(@babel/core@7.29.0)(@react-native/metro-config@0.85.2(@babel/core@7.29.0))(@types/react@19.2.14)(react@19.2.0))(react@19.2.0)
@@ -1206,6 +1212,9 @@ packages:
       react: '*'
       react-native: '>=0.59'
 
+  '@react-native-community/slider@5.2.0':
+    resolution: {integrity: sha512-484sH8aWEaSjxaZ7HT3YZ8CKDcNes2synko1vdEz5DFEdvKAduxKJTj22L/qBMD7rtIkfbX69DMzWDAGbOAV6w==}
+
   '@react-native/assets-registry@0.83.6':
     resolution: {integrity: sha512-iljb4ue1yWJ3EhySz7EjV6CzSVrI2uNtR8BI2jzP5+QS5E4Cl3fdIJRmVwDEx1pu8uE97PGEusGRHnoaZ9Q3jg==}
     engines: {node: '>= 20.19.4'}
@@ -2045,6 +2054,17 @@ packages:
       expo: '*'
       react: '*'
       react-native: '*'
+
+  expo-av@16.0.8:
+    resolution: {integrity: sha512-cmVPftGR/ca7XBgs7R6ky36lF3OC0/MM/lpgX/yXqfv0jASTsh7AYX9JxHCwFmF+Z6JEB1vne9FDx4GiLcGreQ==}
+    peerDependencies:
+      expo: '*'
+      react: '*'
+      react-native: '*'
+      react-native-web: '*'
+    peerDependenciesMeta:
+      react-native-web:
+        optional: true
 
   expo-blur@55.0.14:
     resolution: {integrity: sha512-NKyCKFWTNpX4CZSsiE1sgkqk/yvR1K0UTukuIbxVKoobB+yALLg1CFav0NqfdQqjhtoj5oEzP0Brlq92Z08Zfg==}
@@ -5234,6 +5254,8 @@ snapshots:
       react: 19.2.0
       react-native: 0.83.6(patch_hash=4884b5e375a331cf1d6bc06c606472ec4a958852cabe451a423ec392fd7bea3f)(@babel/core@7.29.0)(@react-native/metro-config@0.85.2(@babel/core@7.29.0))(@types/react@19.2.14)(react@19.2.0)
 
+  '@react-native-community/slider@5.2.0': {}
+
   '@react-native/assets-registry@0.83.6': {}
 
   '@react-native/babel-plugin-codegen@0.83.6(@babel/core@7.29.0)':
@@ -6197,6 +6219,12 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
       - typescript
+
+  expo-av@16.0.8(expo@55.0.18)(react-native@0.83.6(patch_hash=4884b5e375a331cf1d6bc06c606472ec4a958852cabe451a423ec392fd7bea3f)(@babel/core@7.29.0)(@react-native/metro-config@0.85.2(@babel/core@7.29.0))(@types/react@19.2.14)(react@19.2.0))(react@19.2.0):
+    dependencies:
+      expo: 55.0.18(@babel/core@7.29.0)(@expo/dom-webview@55.0.5)(@expo/metro-runtime@55.0.10)(expo-router@55.0.13)(react-dom@19.2.5(react@19.2.0))(react-native-worklets@0.7.4(patch_hash=45c6e4cc97e4bc7d1ebbd4bc8f7a83f0be8821e1dbcf818d82faa0d2f450a94d)(@babel/core@7.29.0)(react-native@0.83.6(patch_hash=4884b5e375a331cf1d6bc06c606472ec4a958852cabe451a423ec392fd7bea3f)(@babel/core@7.29.0)(@react-native/metro-config@0.85.2(@babel/core@7.29.0))(@types/react@19.2.14)(react@19.2.0))(react@19.2.0))(react-native@0.83.6(patch_hash=4884b5e375a331cf1d6bc06c606472ec4a958852cabe451a423ec392fd7bea3f)(@babel/core@7.29.0)(@react-native/metro-config@0.85.2(@babel/core@7.29.0))(@types/react@19.2.14)(react@19.2.0))(react@19.2.0)(typescript@5.9.3)
+      react: 19.2.0
+      react-native: 0.83.6(patch_hash=4884b5e375a331cf1d6bc06c606472ec4a958852cabe451a423ec392fd7bea3f)(@babel/core@7.29.0)(@react-native/metro-config@0.85.2(@babel/core@7.29.0))(@types/react@19.2.14)(react@19.2.0)
 
   expo-blur@55.0.14(expo@55.0.18)(react-native@0.83.6(patch_hash=4884b5e375a331cf1d6bc06c606472ec4a958852cabe451a423ec392fd7bea3f)(@babel/core@7.29.0)(@react-native/metro-config@0.85.2(@babel/core@7.29.0))(@types/react@19.2.14)(react@19.2.0))(react@19.2.0):
     dependencies:

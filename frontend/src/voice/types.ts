@@ -19,6 +19,13 @@ export type VoiceInputError =
   | { kind: "model_download_failed"; message: string }
   | { kind: "whisper_init_failed"; message: string }
   | { kind: "whisper_runtime_error"; message: string }
+  | { kind: "server_stt_failed"; message: string; status?: number }
+  /**
+   * Emitted when engine="server", the device is offline, and
+   * fallbackOnOffline=false. The user explicitly opted into server-only
+   * transcription so we surface a hard error instead of silently falling back.
+   */
+  | { kind: "server_unavailable_offline"; message: string }
   | { kind: "unknown"; message: string };
 
 // ---------------------------------------------------------------------------
@@ -30,6 +37,7 @@ export type VoiceInputState =
   | { kind: "requesting_permission" }
   | { kind: "recording"; partialTranscript: string }
   | { kind: "stopping" }
+  | { kind: "transcribing" }
   | { kind: "error"; error: VoiceInputError };
 
 // ---------------------------------------------------------------------------
@@ -53,6 +61,11 @@ export interface UseVoiceInputOptions {
    * Not called when cancel() was used to discard the recording.
    */
   onFinalTranscript?: (text: string) => void;
+  /**
+   * Active app session ID. Required by the server engine to POST audio to
+   * `POST /sessions/:id/transcribe`. Ignored by WhisperKit and SFSpeech engines.
+   */
+  sessionId?: string;
 }
 
 export interface UseVoiceInputResult {
@@ -93,4 +106,14 @@ export interface UseVoiceInputResult {
    * No-op for SFSpeech engine (always ready).
    */
   ensureModelReady: () => Promise<void>;
+  /**
+   * Unix timestamp (ms) of when the most recent cap timer fired, or null if
+   * no cap has fired since mount. Resets to null on the next start() call.
+   *
+   * Consumers use this in a useEffect to show a toast:
+   *   useEffect(() => {
+   *     if (capExceededAt !== null) showCapToast(activeEngine);
+   *   }, [capExceededAt]);
+   */
+  capExceededAt: number | null;
 }
