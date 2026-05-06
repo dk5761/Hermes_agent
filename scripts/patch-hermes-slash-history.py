@@ -70,6 +70,35 @@ P_BLOCK = f"""\
 {P_MARK_END}\
 """
 
+# ─── Patch: refresh history before each slash command ───────────────────────
+# The boot-time preload above runs once when the worker subprocess spawns.
+# But Hermes' dashboard spawns the worker EAGERLY at session start, before
+# the user's first turn has been written to the session DB. So the boot
+# preload finds zero messages, and every later /branch / /undo / /save call
+# in the same worker process sees the same stale empty list. Refreshing on
+# every command is cheap (single SQLite read on the local FS) and fixes
+# both the eager-spawn case and any divergence between live transcript and
+# the worker's in-memory copy.
+P2_ANCHOR = "def _run(cli: HermesCLI, command: str) -> str:"
+P2_MARK_START = "    # HERMES_PATCH:slash-worker-refresh-history:start"
+P2_MARK_END = "    # HERMES_PATCH:slash-worker-refresh-history:end"
+P2_BLOCK = f"""\
+{P2_MARK_START}
+    # Re-load the transcript from the session DB on every command so the
+    # worker sees turns that arrived after it spawned. Cheap; idempotent.
+    try:
+        if getattr(cli, "_resumed", False) and getattr(cli, "_session_db", None):
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                cli.conversation_history = []
+                cli._preload_resumed_session()
+    except Exception as _exc:
+        import logging as _logging
+        _logging.getLogger(__name__).warning(
+            "HERMES_PATCH: slash-worker history refresh failed: %s", _exc,
+        )
+{P2_MARK_END}\
+"""
+
 PATCHES = [
     {
         "name": "slash-worker-preload-history",
@@ -78,6 +107,14 @@ PATCHES = [
         "mark_start": P_MARK_START,
         "mark_end": P_MARK_END,
         "block": P_BLOCK,
+    },
+    {
+        "name": "slash-worker-refresh-history",
+        "target": P_TARGET,
+        "anchor": P2_ANCHOR,
+        "mark_start": P2_MARK_START,
+        "mark_end": P2_MARK_END,
+        "block": P2_BLOCK,
     },
 ]
 
