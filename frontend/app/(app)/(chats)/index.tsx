@@ -650,6 +650,18 @@ function SessionRowView({
             {item.pinned ? (
               <Icon name="pin" size={12} color={tokens.accent} />
             ) : null}
+            {item.parentAppSessionId != null ? (
+              // Tiny lineage glyph — visual hint only, no tap behaviour.
+              // Mirrors the "→ Branch of …" chip on the chat detail screen.
+              <Text
+                kind="micro"
+                color={tokens.ink3}
+                style={{ fontSize: 12, lineHeight: 14 }}
+                accessibilityLabel="branch"
+              >
+                ↰
+              </Text>
+            ) : null}
             <Text
               kind="body-lg"
               numberOfLines={1}

@@ -66,7 +66,16 @@ import { useTodosUi } from "@/state/todos";
 import { usePendingAttachments } from "@/state/pending-attachments";
 import { usePendingSends, type PendingFrame } from "@/state/pending-sends";
 import { pickDocument, pickImage, PickerError } from "@/attachments/picker";
-import { getMessages, listSessions, reloadSessionMcp } from "@/api/sessions";
+import {
+  branchSession,
+  getMessages,
+  listSessions,
+  reloadSessionMcp,
+} from "@/api/sessions";
+import { BranchLoader } from "@/chat/BranchLoader";
+import { humanizeError } from "@/util/errors";
+import { ApiError } from "@/api/types";
+import { formatRelative } from "@/util/time";
 import {
   pendingArchiveSession,
   pendingDeleteSession,
@@ -400,6 +409,10 @@ export default function ChatScreen() {
   const tokens = useThemeTokens();
   const queryClient = useQueryClient();
   const sheetRef = useRef<SheetHandle>(null);
+  const branchListSheetRef = useRef<SheetHandle>(null);
+  // Mounted while POST /sessions/:id/branch is in flight. Drives the
+  // full-screen BranchLoader overlay below the message list.
+  const [branching, setBranching] = useState(false);
 
   const flatListRef = useRef<FlashListRef<Row>>(null);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -476,6 +489,22 @@ export default function ChatScreen() {
     () => sessionsQuery.data?.sessions.find((s) => s.id === sessionId),
     [sessionsQuery.data, sessionId],
   );
+
+  // Lineage — derived from the same ["sessions"] cache.
+  //   children: any session whose parentAppSessionId === current sessionId.
+  //   parent  : the row referenced by session.parentAppSessionId, if any.
+  // Cache miss naturally renders nothing (no flicker) — refetch hydrates.
+  const branchChildren: SessionDto[] = useMemo(() => {
+    if (!sessionId || !sessionsQuery.data) return [];
+    return sessionsQuery.data.sessions.filter(
+      (s) => s.parentAppSessionId === sessionId,
+    );
+  }, [sessionId, sessionsQuery.data]);
+  const parentSession: SessionDto | undefined = useMemo(() => {
+    const parentId = session?.parentAppSessionId;
+    if (!parentId || !sessionsQuery.data) return undefined;
+    return sessionsQuery.data.sessions.find((s) => s.id === parentId);
+  }, [session?.parentAppSessionId, sessionsQuery.data]);
 
   // Cold-load history (paginated). "Next page" semantically = "older history",
   // keyed off the earliest loaded id. Newer content arrives via the WS stream
@@ -1377,6 +1406,65 @@ export default function ChatScreen() {
       });
   }, [sessionId]);
 
+  // ─── Fork from here ──────────────────────────────────────────────────────
+  // Prompts for an optional title (empty = backend auto-suffix), shows the
+  // BranchLoader overlay while POST /sessions/:id/branch is in flight, then
+  // navigates via router.replace so back doesn't return to the prompt UI.
+  // Errors are mapped to short toasts; nothing is queued offline (rare op,
+  // parent-orphan risk on retry isn't worth the complexity).
+  const performBranch = useCallback(
+    (title: string) => {
+      if (!sessionId) return;
+      setBranching(true);
+      branchSession(sessionId, title.trim() ? { title: title.trim() } : undefined)
+        .then((res) => {
+          void queryClient.invalidateQueries({ queryKey: ["sessions"] });
+          router.replace({ pathname: "/chat/[id]", params: { id: res.id } });
+        })
+        .catch((err: unknown) => {
+          if (err instanceof ApiError) {
+            if (err.status === 409) {
+              showToast("Send a message before branching", "info");
+            } else if (err.status === 502 || err.status === 503) {
+              showToast("Couldn't create branch — try again", "error");
+            } else {
+              showToast(humanizeError(err), "error");
+            }
+          } else {
+            showToast(humanizeError(err), "error");
+          }
+        })
+        .finally(() => {
+          setBranching(false);
+        });
+    },
+    [sessionId, queryClient, router],
+  );
+
+  const onBranch = useCallback(() => {
+    if (!sessionId || !session) return;
+    if (!online) {
+      showToast("Connect to the internet to fork this chat", "info");
+      return;
+    }
+    const defaultTitle = `${session.title} (branch)`;
+    Alert.prompt?.(
+      "Fork from here",
+      "Title for the new chat (leave empty for auto-suffix)",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Fork",
+          onPress: (text?: string) => {
+            performBranch(text ?? "");
+          },
+        },
+      ],
+      "plain-text",
+      defaultTitle,
+    );
+  }, [sessionId, session, online, performBranch]);
+
   const openSheet = useCallback(() => {
     sheetRef.current?.present();
   }, []);
@@ -1856,6 +1944,97 @@ export default function ChatScreen() {
           </View>
         ) : null}
 
+        {/* Lineage chips — render above the model strip so users see the
+            branch relationship without scrolling. The parent-link is
+            shown first, then the children-list, so a branch's branch
+            stacks naturally (parent up top, children below). */}
+        {sessionId && (parentSession !== undefined ||
+          (session?.parentAppSessionId != null) ||
+          branchChildren.length > 0) ? (
+          <View
+            style={{
+              paddingHorizontal: 12,
+              paddingTop: 4,
+              paddingBottom: 0,
+              backgroundColor: tokens.bg,
+            }}
+          >
+            <Row gap={6} style={{ flexWrap: "wrap" }}>
+              {session?.parentAppSessionId != null ? (
+                <Pressable
+                  onPress={() => {
+                    const pid = session.parentAppSessionId;
+                    if (pid) {
+                      router.push({ pathname: "/chat/[id]", params: { id: pid } });
+                    }
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel={
+                    parentSession
+                      ? `Branch of ${parentSession.title}. Tap to open parent.`
+                      : "Branch of a chat that is no longer available."
+                  }
+                  style={({ pressed }) => ({
+                    flexDirection: "row",
+                    alignItems: "center",
+                    gap: 6,
+                    paddingHorizontal: 10,
+                    paddingVertical: 5,
+                    borderRadius: 999,
+                    backgroundColor: tokens.chip,
+                    opacity: pressed ? 0.6 : 1,
+                  })}
+                >
+                  <Text
+                    kind="micro"
+                    color={tokens.ink2}
+                    numberOfLines={1}
+                    style={{ maxWidth: 220, fontWeight: "500" }}
+                  >
+                    {`→ Branch of ${
+                      parentSession
+                        ? parentSession.archived
+                          ? `${parentSession.title} (archived)`
+                          : parentSession.title
+                        : "(deleted)"
+                    }`}
+                  </Text>
+                </Pressable>
+              ) : null}
+              {branchChildren.length > 0 ? (
+                <Pressable
+                  onPress={() => branchListSheetRef.current?.present()}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Forked into ${branchChildren.length} branch${
+                    branchChildren.length === 1 ? "" : "es"
+                  }. Tap to list.`}
+                  style={({ pressed }) => ({
+                    flexDirection: "row",
+                    alignItems: "center",
+                    gap: 6,
+                    paddingHorizontal: 10,
+                    paddingVertical: 5,
+                    borderRadius: 999,
+                    backgroundColor: tokens.chip,
+                    opacity: pressed ? 0.6 : 1,
+                  })}
+                >
+                  <Text
+                    kind="micro"
+                    color={tokens.ink2}
+                    numberOfLines={1}
+                    style={{ fontWeight: "500" }}
+                  >
+                    {`↰ Forked into ${branchChildren.length} branch${
+                      branchChildren.length === 1 ? "" : "es"
+                    }`}
+                  </Text>
+                </Pressable>
+              ) : null}
+            </Row>
+          </View>
+        ) : null}
+
         {/* Model strip — sits directly above the composer so the active
             model is visible at the most attention-heavy moment (typing
             a message). Tap → picker. Long-press → quick actions. */}
@@ -2162,6 +2341,14 @@ export default function ChatScreen() {
             }}
           />
           <SheetItem
+            label="Fork from here"
+            disabled={!online}
+            onPress={() => {
+              dismissSheet();
+              onBranch();
+            }}
+          />
+          <SheetItem
             label="Export"
             onPress={() => {
               dismissSheet();
@@ -2192,6 +2379,54 @@ export default function ChatScreen() {
           />
         </Stack>
       </Sheet>
+
+      {/* Children-list sheet — opened from the "Forked into N branches"
+          chip. Shows each child with title + relative time + an Open
+          action that navigates via push (not replace) so back returns to
+          the parent. */}
+      <Sheet ref={branchListSheetRef} snapPoints={["45%"]}>
+        <Stack gap={2} style={{ paddingVertical: 8 }}>
+          <Stack
+            gap={2}
+            style={{ paddingHorizontal: 20, paddingTop: 4, paddingBottom: 8 }}
+          >
+            <Text kind="h3">Branches</Text>
+            <Text kind="caption" color={tokens.ink3}>
+              {`${branchChildren.length} fork${branchChildren.length === 1 ? "" : "s"} of this chat`}
+            </Text>
+          </Stack>
+          {branchChildren.map((child) => (
+            <Pressable
+              key={child.id}
+              onPress={() => {
+                branchListSheetRef.current?.dismiss();
+                router.push({ pathname: "/chat/[id]", params: { id: child.id } });
+              }}
+              style={({ pressed }) => ({
+                paddingHorizontal: 20,
+                paddingVertical: 12,
+                opacity: pressed ? 0.7 : 1,
+              })}
+            >
+              <Row gap={8} align="center" justify="space-between">
+                <Text
+                  kind="body-lg"
+                  numberOfLines={1}
+                  style={{ flex: 1, minWidth: 0 }}
+                >
+                  {child.archived ? "[archived] " : ""}
+                  {child.title}
+                </Text>
+                <Text kind="caption" color={tokens.ink3} style={{ flexShrink: 0 }}>
+                  {formatRelative(child.updatedAt)}
+                </Text>
+              </Row>
+            </Pressable>
+          ))}
+        </Stack>
+      </Sheet>
+
+      {branching ? <BranchLoader /> : null}
     </PhoneSafeArea>
   );
 }
@@ -2201,10 +2436,17 @@ export default function ChatScreen() {
 function SheetItem({
   label,
   danger,
+  disabled,
   onPress,
 }: {
   label: string;
   danger?: boolean;
+  /**
+   * Visually dim + still tappable. The handler is responsible for surfacing
+   * a toast explaining why — matches the pattern used by the FAB on
+   * (chats)/index.tsx so users aren't left with a silent no-op.
+   */
+  disabled?: boolean;
   onPress: () => void;
 }) {
   const tokens = useThemeTokens();
@@ -2214,7 +2456,7 @@ function SheetItem({
       style={({ pressed }) => ({
         paddingHorizontal: 20,
         paddingVertical: 14,
-        opacity: pressed ? 0.7 : 1,
+        opacity: disabled ? 0.4 : pressed ? 0.7 : 1,
       })}
     >
       <Text

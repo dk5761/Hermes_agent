@@ -1,5 +1,6 @@
 import { apiFetch } from "./client";
 import type {
+  BranchSessionResponse,
   CreateSessionResponse,
   MessagesPage,
   SessionsListResponse,
@@ -106,6 +107,24 @@ export interface ReloadMcpResponse {
 export async function reloadSessionMcp(id: string): Promise<ReloadMcpResponse> {
   return apiFetch<ReloadMcpResponse>(`/sessions/${id}/reload-mcp`, {
     method: "POST",
+  });
+}
+
+/**
+ * Fork a session — creates a new app-session whose Hermes-side history is a
+ * copy of the parent's at branch time. Body is optional; an empty title lets
+ * the backend auto-suffix `<parent> (branch)`. Errors:
+ *   409 no_hermes_session   — parent has zero turns yet, nothing to copy.
+ *   502 branch_parse_failed — Hermes returned output we couldn't parse.
+ *   503 slash_failed        — Hermes /branch slash failed or DB write failed.
+ */
+export async function branchSession(
+  id: string,
+  opts?: { title?: string },
+): Promise<BranchSessionResponse> {
+  return apiFetch<BranchSessionResponse>(`/sessions/${id}/branch`, {
+    method: "POST",
+    body: opts?.title ? { title: opts.title } : {},
   });
 }
 

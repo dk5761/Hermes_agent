@@ -29,6 +29,22 @@ export interface SessionDto {
   // Per-session model override. Both null = use the global default.
   modelOverride: string | null;
   providerOverride: string | null;
+  // Lineage: app-session id of the parent if this row was created via
+  // POST /sessions/:id/branch. null for organically-created sessions.
+  parentAppSessionId: string | null;
+}
+
+/**
+ * Response shape for POST /sessions/:id/branch. The new session inherits the
+ * parent's chat history via Hermes' /branch slash command. `hermesSessionId`
+ * may be null briefly between the slash-command parse and the DB write —
+ * callers should treat it as eventually consistent.
+ */
+export interface BranchSessionResponse {
+  id: string;
+  title: string;
+  hermesSessionId: string | null;
+  parentId: string;
 }
 
 export interface SessionsListResponse {
