@@ -475,11 +475,17 @@ export async function registerSessionsRoutes(
         });
       }
 
-      // Parse the new Hermes session id out of the markdown response. Hermes
-      // returns the line `Branch: \`<id>\``; the regex anchors on that exact
-      // label so an unrelated backticked id (e.g. Original) won't match.
+      // Parse the new Hermes session id out of the markdown response. Two
+      // different Hermes implementations emit slightly different outputs:
+      //   - gateway/run.py:  `Branch: \`<id>\`` (backticked, agent context)
+      //   - cli.py:          `Branch session:   <id>` (plain, slash-worker)
+      // The slash.exec path goes through the slash-worker (cli.py), so the
+      // un-backticked variant is what we hit in practice. The alternation
+      // handles both for forward compatibility.
       const output = typeof result.output === "string" ? result.output : "";
-      const m = /Branch:\s*`([^`]+)`/.exec(output);
+      const m =
+        /Branch session:\s+([A-Za-z0-9_]+)/.exec(output) ??
+        /Branch:\s*`([^`]+)`/.exec(output);
       if (!m || !m[1]) {
         logger.error(
           { appSessionId: parent.id, output },
