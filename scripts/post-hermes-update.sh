@@ -109,7 +109,11 @@ step "Step 2bb/5: patch-hermes-slash-history.py (preload transcript in slash wor
 python3 "${REPO_ROOT}/scripts/patch-hermes-slash-history.py"
 python3 "${REPO_ROOT}/scripts/patch-hermes-slash-history.py" --check
 
-step "Step 2c/5: deploy custom skills"
+step "Step 2c/5: patch-hermes-stt-rpc.py (server-side STT RPC)"
+python3 "${REPO_ROOT}/scripts/patch-hermes-stt-rpc.py"
+python3 "${REPO_ROOT}/scripts/patch-hermes-stt-rpc.py" --check
+
+step "Step 2d/5: deploy custom skills"
 if [[ -d "${REPO_ROOT}/scripts/skills" ]]; then
   for src in "${REPO_ROOT}"/scripts/skills/*/SKILL.md; do
     [[ -f "$src" ]] || continue

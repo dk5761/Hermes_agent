@@ -27,6 +27,7 @@ import { registerIosToolsWsRoute } from "./ws/ios-tools-ws.js";
 import { registerInternalIosToolsRoutes } from "./routes/internal-ios-tools.js";
 import { registerLiveActivityRoutes } from "./routes/live-activity.js";
 import { registerPrefsRoutes } from "./routes/prefs.js";
+import { registerTranscribeRoutes } from "./routes/transcribe.js";
 import { LiveActivityPusher } from "./push/apns-live-activity.js";
 import { ChatCompleteNotifier } from "./push/chat-complete.js";
 import type { ExpoClient } from "./push/expo-client.js";
@@ -255,6 +256,13 @@ export async function buildServer(deps: BuildServerDeps): Promise<FastifyInstanc
   await registerPrefsRoutes(app, {
     db: deps.dbHandle.db,
     requireAuth,
+  });
+
+  await registerTranscribeRoutes(app, {
+    db: deps.dbHandle.db,
+    requireAuth,
+    wsPool: deps.wsPool,
+    logger: deps.logger,
   });
 
   const liveActivityPusher = new LiveActivityPusher({
