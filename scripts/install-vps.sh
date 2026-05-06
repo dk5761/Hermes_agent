@@ -368,6 +368,7 @@ step "Step 10/11: patch-hermes-config.py + patch-hermes-reload-mcp.py + skills"
 
 python3 "${REPO_ROOT}/scripts/patch-hermes-config.py" --config "${HERMES_HOME}/config.yaml"
 python3 "${REPO_ROOT}/scripts/patch-hermes-reload-mcp.py" || c_yellow "  reload-mcp source patch skipped (anchor may have moved — non-fatal)"
+python3 "${REPO_ROOT}/scripts/patch-hermes-slash-history.py" || c_yellow "  slash-history source patch skipped (anchor may have moved — non-fatal)"
 
 # Deploy custom skills to ~/.hermes/skills/. Currently: manage-mcp (teaches
 # the agent to add/remove MCP servers end-to-end when the user asks).

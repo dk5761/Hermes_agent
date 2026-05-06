@@ -105,6 +105,10 @@ step "Step 2b/5: patch-hermes-reload-mcp.py (Python source — clear caches on /
 python3 "${REPO_ROOT}/scripts/patch-hermes-reload-mcp.py"
 python3 "${REPO_ROOT}/scripts/patch-hermes-reload-mcp.py" --check
 
+step "Step 2bb/5: patch-hermes-slash-history.py (preload transcript in slash worker)"
+python3 "${REPO_ROOT}/scripts/patch-hermes-slash-history.py"
+python3 "${REPO_ROOT}/scripts/patch-hermes-slash-history.py" --check
+
 step "Step 2c/5: deploy custom skills"
 if [[ -d "${REPO_ROOT}/scripts/skills" ]]; then
   for src in "${REPO_ROOT}"/scripts/skills/*/SKILL.md; do
