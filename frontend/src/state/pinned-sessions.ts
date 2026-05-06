@@ -3,7 +3,7 @@
  * of the chat list. Persisted to AsyncStorage.
  */
 import { create } from "zustand";
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import { sqliteKv } from "@/state/sqlite-kv";
 
 const KEY = "sessions.pinned.v1";
 
@@ -31,7 +31,7 @@ function parse(raw: string | null): Record<string, boolean> {
 }
 
 function persist(value: Record<string, boolean>): void {
-  void AsyncStorage.setItem(KEY, JSON.stringify(value)).catch(() => undefined);
+  void sqliteKv.setItem(KEY, JSON.stringify(value)).catch(() => undefined);
 }
 
 export const usePinnedSessions = create<PinnedSessionsState>((set, get) => ({
@@ -40,7 +40,7 @@ export const usePinnedSessions = create<PinnedSessionsState>((set, get) => ({
 
   async hydrate() {
     if (get().hydrated) return;
-    const raw = await AsyncStorage.getItem(KEY);
+    const raw = await sqliteKv.getItem(KEY);
     set({ pinned: parse(raw), hydrated: true });
   },
 

@@ -7,7 +7,17 @@
  *     (Diagnostics screen lists failed entries with Retry / Discard).
  *   - Persistence shape is the same disciplined `parse + persist` pattern
  *     used by pending-sends.ts so the same defensive guarantees apply: any
- *     malformed persisted blob falls back to an empty queue silently.
+ *     malformed persisted row falls back to being skipped silently.
+ *
+ * Persistence model (write-through):
+ *   - `hydrate()` SELECTs all rows from `pending_mutations` and populates the
+ *     in-memory `queue` array. Called once from _layout.tsx before render.
+ *   - Every mutating method (enqueue / remove / bumpRetry / clearAll /
+ *     resetForRetry) updates the in-memory array first, then fire-and-forgets
+ *     the matching SQL statement. DB failures are logged but never surface to
+ *     the caller — the in-memory queue is the source of truth for the UI.
+ *   - The mutation-drainer reads `getState().queue` synchronously; it never
+ *     needs to await a DB read on each poll tick.
  *
  * Lifecycle:
  *   1. Caller (chat list / chat detail) invokes a `pending*Session` wrapper.
@@ -26,17 +36,16 @@
  * unbounded if the user keeps interacting after losing connectivity.
  */
 import { create } from "zustand";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import type { QueryClient } from "@tanstack/react-query";
 
+import { getDb } from "../db/sqlite";
+import { TABLES } from "../db/schema";
 import {
   archiveSession,
   deleteSession,
   renameSession,
   setSessionModel,
 } from "../api/sessions";
-
-const KEY = "chat.pending-mutations.v1";
 
 /** Hard cap on retries before marking the entry `failed`. Mirrors the
  *  pending-sends drainer: 1s / 5s / 30s backoff schedule, then give up. */
@@ -136,42 +145,28 @@ function isPendingMutation(v: unknown): v is PendingMutation {
   }
 }
 
-function parse(raw: string | null): PendingMutationEntry[] {
-  if (!raw) return [];
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    const out: PendingMutationEntry[] = [];
-    for (const v of parsed) {
-      if (!v || typeof v !== "object") continue;
-      const r = v as Record<string, unknown>;
-      const id = typeof r["id"] === "string" ? r["id"] : null;
-      const enqueuedAt =
-        typeof r["enqueuedAt"] === "number" ? r["enqueuedAt"] : null;
-      const retries = typeof r["retries"] === "number" ? r["retries"] : 0;
-      const failed = typeof r["failed"] === "boolean" ? r["failed"] : false;
-      const lastError =
-        typeof r["lastError"] === "string" ? r["lastError"] : undefined;
-      const mutation = r["mutation"];
-      if (!id || enqueuedAt === null) continue;
-      if (!isPendingMutation(mutation)) continue;
-      out.push({
-        id,
-        enqueuedAt,
-        retries,
-        failed,
-        mutation,
-        ...(lastError ? { lastError } : {}),
-      });
-    }
-    return out;
-  } catch {
-    return [];
-  }
-}
-
-function persist(value: PendingMutationEntry[]): void {
-  void AsyncStorage.setItem(KEY, JSON.stringify(value)).catch(() => undefined);
+/**
+ * Upsert a single entry to `pending_mutations`.
+ * Uses INSERT … ON CONFLICT so both new inserts and retries/updates work.
+ * Fire-and-forget at all call sites — never throws to the caller.
+ */
+async function flush(entry: PendingMutationEntry): Promise<void> {
+  const db = await getDb();
+  const { kind, payload } = entry.mutation;
+  await db.runAsync(
+    `INSERT INTO ${TABLES.pendingMutations}
+       (id, enqueued_at, retries, last_error, kind, payload)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET
+       retries    = excluded.retries,
+       last_error = excluded.last_error`,
+    entry.id,
+    entry.enqueuedAt,
+    entry.retries,
+    entry.lastError ?? null,
+    kind,
+    JSON.stringify(payload),
+  );
 }
 
 export const usePendingMutations = create<PendingMutationsState>((set, get) => ({
@@ -180,8 +175,41 @@ export const usePendingMutations = create<PendingMutationsState>((set, get) => (
 
   async hydrate() {
     if (get().hydrated) return;
-    const raw = await AsyncStorage.getItem(KEY);
-    set({ queue: parse(raw), hydrated: true });
+    const db = await getDb();
+    type Row = {
+      id: string;
+      enqueued_at: number;
+      retries: number;
+      last_error: string | null;
+      kind: string;
+      payload: string;
+    };
+    const rows = await db.getAllAsync<Row>(
+      `SELECT id, enqueued_at, retries, last_error, kind, payload
+         FROM ${TABLES.pendingMutations}
+        ORDER BY enqueued_at ASC`,
+    );
+    const queue: PendingMutationEntry[] = [];
+    for (const row of rows) {
+      let parsedPayload: unknown;
+      try {
+        parsedPayload = JSON.parse(row.payload);
+      } catch {
+        continue; // skip malformed rows
+      }
+      const mutation: unknown = { kind: row.kind, payload: parsedPayload };
+      if (!isPendingMutation(mutation)) continue;
+      const entry: PendingMutationEntry = {
+        id: row.id,
+        enqueuedAt: row.enqueued_at,
+        retries: row.retries,
+        failed: row.retries >= MAX_RETRIES,
+        mutation,
+        ...(row.last_error != null ? { lastError: row.last_error } : {}),
+      };
+      queue.push(entry);
+    }
+    set({ queue, hydrated: true });
   },
 
   enqueue(mutation) {
@@ -205,11 +233,22 @@ export const usePendingMutations = create<PendingMutationsState>((set, get) => (
             MAX_QUEUE_SIZE,
           );
         }
+        const dropped = s.queue[0];
+        if (dropped) {
+          getDb()
+            .then((db) =>
+              db.runAsync(
+                `DELETE FROM ${TABLES.pendingMutations} WHERE id = ?`,
+                dropped.id,
+              ),
+            )
+            .catch(console.warn);
+        }
         next = [...s.queue.slice(1), entry];
       } else {
         next = [...s.queue, entry];
       }
-      persist(next);
+      flush(entry).catch(console.warn);
       return { queue: next };
     });
     return id;
@@ -220,7 +259,14 @@ export const usePendingMutations = create<PendingMutationsState>((set, get) => (
       const idx = s.queue.findIndex((e) => e.id === id);
       if (idx === -1) return s;
       const next = [...s.queue.slice(0, idx), ...s.queue.slice(idx + 1)];
-      persist(next);
+      getDb()
+        .then((db) =>
+          db.runAsync(
+            `DELETE FROM ${TABLES.pendingMutations} WHERE id = ?`,
+            id,
+          ),
+        )
+        .catch(console.warn);
       return { queue: next };
     });
   },
@@ -241,7 +287,7 @@ export const usePendingMutations = create<PendingMutationsState>((set, get) => (
       };
       const next = [...s.queue];
       next[idx] = updated;
-      persist(next);
+      flush(updated).catch(console.warn);
       return { queue: next };
     });
   },
@@ -256,9 +302,10 @@ export const usePendingMutations = create<PendingMutationsState>((set, get) => (
       // after the user has explicitly asked the drainer to try again.
       const { lastError: _drop, ...rest } = cur;
       void _drop;
+      const updated: PendingMutationEntry = { ...rest, retries: 0, failed: false };
       const next = [...s.queue];
-      next[idx] = { ...rest, retries: 0, failed: false };
-      persist(next);
+      next[idx] = updated;
+      flush(updated).catch(console.warn);
       return { queue: next };
     });
   },
@@ -277,9 +324,12 @@ export const usePendingMutations = create<PendingMutationsState>((set, get) => (
 
   clearAll() {
     set(() => {
-      const next: PendingMutationEntry[] = [];
-      persist(next);
-      return { queue: next };
+      getDb()
+        .then((db) =>
+          db.runAsync(`DELETE FROM ${TABLES.pendingMutations}`),
+        )
+        .catch(console.warn);
+      return { queue: [] };
     });
   },
 }));

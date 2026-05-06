@@ -11,7 +11,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Alert, Linking, Platform, RefreshControl, ScrollView, View } from "react-native";
 import { useRouter } from "expo-router";
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import { sqliteKv } from "@/state/sqlite-kv";
 import * as Notifications from "expo-notifications";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { getUserPrefs, updateUserPrefs, type UserPrefs } from "@/api/prefs";
@@ -69,7 +69,7 @@ async function loadPrefs(): Promise<NotificationPrefs> {
   const result: NotificationPrefs = { ...DEFAULT_PREFS };
   await Promise.all(
     PREF_KEYS.map(async (k) => {
-      const raw = await AsyncStorage.getItem(PREFS_PREFIX + k);
+      const raw = await sqliteKv.getItem(PREFS_PREFIX + k);
       if (raw === null) return;
       if (k === "quietFrom" || k === "quietTo") {
         result[k] = raw;
@@ -86,9 +86,9 @@ async function savePref(
   value: boolean | string,
 ): Promise<void> {
   if (typeof value === "boolean") {
-    await AsyncStorage.setItem(PREFS_PREFIX + key, value ? "1" : "0");
+    await sqliteKv.setItem(PREFS_PREFIX + key, value ? "1" : "0");
   } else {
-    await AsyncStorage.setItem(PREFS_PREFIX + key, value);
+    await sqliteKv.setItem(PREFS_PREFIX + key, value);
   }
 }
 

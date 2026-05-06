@@ -5,7 +5,7 @@
  * pinned per session" by stripping the prefix.
  */
 import { create } from "zustand";
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import { sqliteKv } from "@/state/sqlite-kv";
 
 const KEY_PINNED = "todos.pinned.v1";
 const KEY_COLLAPSED = "todos.collapsed.v1";
@@ -40,7 +40,7 @@ function parseRecord(raw: string | null): Record<string, boolean> {
 
 function persist(key: string, value: Record<string, boolean>): void {
   // Best-effort write; failures don't surface to the UI (state is non-critical).
-  void AsyncStorage.setItem(key, JSON.stringify(value)).catch(() => undefined);
+  void sqliteKv.setItem(key, JSON.stringify(value)).catch(() => undefined);
 }
 
 export const useTodosUi = create<TodosUiState>((set, get) => ({
@@ -51,8 +51,8 @@ export const useTodosUi = create<TodosUiState>((set, get) => ({
   async hydrate() {
     if (get().hydrated) return;
     const [pinnedRaw, collapsedRaw] = await Promise.all([
-      AsyncStorage.getItem(KEY_PINNED),
-      AsyncStorage.getItem(KEY_COLLAPSED),
+      sqliteKv.getItem(KEY_PINNED),
+      sqliteKv.getItem(KEY_COLLAPSED),
     ]);
     set({
       pinnedByCard: parseRecord(pinnedRaw),

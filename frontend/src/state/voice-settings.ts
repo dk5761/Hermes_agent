@@ -15,7 +15,7 @@
  * other stores. Reads against a non-hydrated store return defaults.
  */
 import { create } from "zustand";
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import { sqliteKv } from "@/state/sqlite-kv";
 
 const KEY = "voice.settings.v1";
 
@@ -94,9 +94,7 @@ function parseSettings(raw: string | null): VoiceSettings {
 }
 
 function persistSettings(settings: VoiceSettings): void {
-  void AsyncStorage.setItem(KEY, JSON.stringify(settings)).catch(
-    () => undefined,
-  );
+  void sqliteKv.setItem(KEY, JSON.stringify(settings)).catch(() => undefined);
 }
 
 // ---------------------------------------------------------------------------
@@ -110,7 +108,7 @@ export const useVoiceSettings = create<VoiceSettings & VoiceSettingsActions>(
     async hydrate() {
       // Idempotent — we don't track a separate `hydrated` flag because
       // re-hydrating (e.g. from a settings screen pull-to-refresh) is benign.
-      const raw = await AsyncStorage.getItem(KEY);
+      const raw = await sqliteKv.getItem(KEY);
       set(parseSettings(raw));
     },
 

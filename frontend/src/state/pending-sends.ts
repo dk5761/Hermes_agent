@@ -5,28 +5,34 @@
  *   - chat-store is already large and stream-shaped; pending sends have a
  *     wholly different lifecycle (persisted across reloads, drained on WS
  *     reconnect, retried by the user).
- *   - Persistence is opinionated: every mutation writes to AsyncStorage so a
+ *   - Persistence is write-through to SQLite (`pending_sends` table) so a
  *     hard kill of the app preserves unsent text. chat-store deliberately
  *     stays in-memory.
  *   - The drainer (ws/queue-drainer.ts) subscribes to a focused slice
  *     without re-rendering when unrelated chat state churns.
  *
- * Persistence shape on disk: { frames: Record<string, PendingFrame> } under
- * the key `chat.pending.v1`. Defensive parse — any malformed payload falls
- * back to an empty map silently so a bad write can't brick the chat send.
+ * Persistence model (write-through):
+ *   - `hydrate()` SELECTs all rows from `pending_sends` and populates the
+ *     in-memory `frames` map. Called once from _layout.tsx before render.
+ *   - Every mutating method updates in-memory state first, then
+ *     fire-and-forgets the matching SQL write. DB failures are logged
+ *     (console.warn) but never surface to the caller — the in-memory map is
+ *     the source of truth for the UI.
+ *   - The full ClientFrame is serialised as JSON into the `text` column so
+ *     all frame variants round-trip correctly. The `attachments` column is
+ *     reserved for future use (always NULL in this version).
+ *
+ * Per-session cap of 50 frames is enforced both in-memory (evict oldest on
+ * enqueue) and in SQL (DELETE … NOT IN … LIMIT 50) so the live UI and the DB
+ * stay in sync.
  */
 import { create } from "zustand";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 
 import type { ClientFrame } from "../ws/events";
+import { getDb } from "../db/sqlite";
+import { TABLES } from "../db/schema";
 
-const KEY = "chat.pending.v1";
-
-/**
- * Per-session cap on retained frames. When enqueue would push past this,
- * the OLDEST frame for that session is evicted. Protects against unbounded
- * disk growth during a sustained outage where the user keeps composing.
- */
+/** Per-session cap on retained frames. */
 const MAX_FRAMES_PER_SESSION = 50;
 
 export type PendingStatus = "queued" | "sending" | "failed";
@@ -66,7 +72,6 @@ export interface PendingSendsState {
 }
 
 // Math.random is fine for client-only frame keys; not security-sensitive.
-// Avoids pulling in a uuid dependency for what amounts to a coordination id.
 function uuid(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 11)}-${Math.random().toString(36).slice(2, 11)}`;
 }
@@ -75,50 +80,54 @@ function isClientFrame(v: unknown): v is ClientFrame {
   if (!v || typeof v !== "object") return false;
   const t = (v as Record<string, unknown>)["type"];
   // Cheap structural sanity check — full validation lives at the gateway.
-  // We just need to filter out blatantly-corrupt persisted entries.
   return typeof t === "string";
 }
 
-function parse(raw: string | null): Record<string, PendingFrame> {
-  if (!raw) return {};
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object") return {};
-    const out: Record<string, PendingFrame> = {};
-    for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
-      if (!v || typeof v !== "object") continue;
-      const r = v as Record<string, unknown>;
-      const id = typeof r["id"] === "string" ? r["id"] : null;
-      const sessionId = typeof r["sessionId"] === "string" ? r["sessionId"] : null;
-      const enqueuedAt = typeof r["enqueuedAt"] === "number" ? r["enqueuedAt"] : null;
-      const status = r["status"];
-      const retries = typeof r["retries"] === "number" ? r["retries"] : 0;
-      const frame = r["frame"];
-      if (!id || !sessionId || enqueuedAt === null) continue;
-      if (status !== "queued" && status !== "sending" && status !== "failed") continue;
-      if (!isClientFrame(frame)) continue;
-      // Any frame persisted as `sending` belongs to a process that's already
-      // gone. Reset to `queued` so the drainer picks it up again on reconnect.
-      const restoredStatus: PendingStatus = status === "sending" ? "queued" : status;
-      const lastError = typeof r["lastError"] === "string" ? r["lastError"] : undefined;
-      out[k] = {
-        id,
-        sessionId,
-        frame,
-        enqueuedAt,
-        status: restoredStatus,
-        retries,
-        ...(lastError ? { lastError } : {}),
-      };
-    }
-    return out;
-  } catch {
-    return {};
-  }
+/**
+ * Upsert a single PendingFrame to `pending_sends`.
+ * The full ClientFrame is serialised as JSON into the `text` column.
+ * `attachments` column is reserved; always NULL in this version.
+ * Fire-and-forget at all call sites — never throws to the caller.
+ */
+async function flush(entry: PendingFrame): Promise<void> {
+  const db = await getDb();
+  await db.runAsync(
+    `INSERT INTO ${TABLES.pendingSends}
+       (id, session_id, enqueued_at, text, attachments, status, retries)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET
+       status      = excluded.status,
+       retries     = excluded.retries,
+       attachments = excluded.attachments,
+       text        = excluded.text`,
+    entry.id,
+    entry.sessionId,
+    entry.enqueuedAt,
+    JSON.stringify(entry.frame),
+    null,
+    entry.status,
+    entry.retries,
+  );
 }
 
-function persist(value: Record<string, PendingFrame>): void {
-  void AsyncStorage.setItem(KEY, JSON.stringify(value)).catch(() => undefined);
+/**
+ * Delete excess rows for a session, keeping the 50 most-recent by
+ * enqueued_at. Run after enqueue so the DB stays in sync with the in-memory
+ * eviction performed in the same operation.
+ */
+async function trimSessionInDb(sessionId: string): Promise<void> {
+  const db = await getDb();
+  await db.runAsync(
+    `DELETE FROM ${TABLES.pendingSends}
+     WHERE session_id = ? AND id NOT IN (
+       SELECT id FROM ${TABLES.pendingSends}
+       WHERE session_id = ?
+       ORDER BY enqueued_at DESC
+       LIMIT ${MAX_FRAMES_PER_SESSION}
+     )`,
+    sessionId,
+    sessionId,
+  );
 }
 
 export const usePendingSends = create<PendingSendsState>((set, get) => ({
@@ -127,27 +136,60 @@ export const usePendingSends = create<PendingSendsState>((set, get) => ({
 
   async hydrate() {
     if (get().hydrated) return;
-    const raw = await AsyncStorage.getItem(KEY);
-    set({ frames: parse(raw), hydrated: true });
+    const db = await getDb();
+    type Row = {
+      id: string;
+      session_id: string;
+      enqueued_at: number;
+      text: string;
+      status: string;
+      retries: number;
+    };
+    const rows = await db.getAllAsync<Row>(
+      `SELECT id, session_id, enqueued_at, text, status, retries
+         FROM ${TABLES.pendingSends}
+        ORDER BY enqueued_at ASC`,
+    );
+    const frames: Record<string, PendingFrame> = {};
+    for (const row of rows) {
+      let parsedFrame: unknown;
+      try {
+        parsedFrame = JSON.parse(row.text);
+      } catch {
+        continue; // skip malformed rows
+      }
+      if (!isClientFrame(parsedFrame)) continue;
+      const status = row.status;
+      if (status !== "queued" && status !== "sending" && status !== "failed") continue;
+      // Any frame persisted as `sending` belongs to a process that's already
+      // gone. Reset to `queued` so the drainer picks it up again on reconnect.
+      const restoredStatus: PendingStatus = status === "sending" ? "queued" : status;
+      frames[row.id] = {
+        id: row.id,
+        sessionId: row.session_id,
+        frame: parsedFrame,
+        enqueuedAt: row.enqueued_at,
+        status: restoredStatus,
+        retries: row.retries,
+      };
+    }
+    set({ frames, hydrated: true });
   },
 
   enqueue(sessionId, frame) {
     const id = uuid();
     set((s) => {
-      const next: Record<string, PendingFrame> = {
-        ...s.frames,
-        [id]: {
-          id,
-          sessionId,
-          frame,
-          enqueuedAt: Date.now(),
-          status: "queued",
-          retries: 0,
-        },
+      const entry: PendingFrame = {
+        id,
+        sessionId,
+        frame,
+        enqueuedAt: Date.now(),
+        status: "queued",
+        retries: 0,
       };
-      // Evict oldest frame for this session if we're at the per-session cap
-      // (50). Keeps the cache from growing unbounded during a long outage
-      // where the user keeps composing without sending.
+      const next: Record<string, PendingFrame> = { ...s.frames, [id]: entry };
+
+      // Evict oldest frame(s) for this session if we're at the per-session cap.
       const sessionFrames = Object.values(next).filter(
         (f) => f.sessionId === sessionId,
       );
@@ -159,6 +201,7 @@ export const usePendingSends = create<PendingSendsState>((set, get) => ({
           if (evict) delete next[evict.id];
         }
         if (__DEV__) {
+          // eslint-disable-next-line no-console
           console.warn(
             "[pending-sends] session %s at cap (%d), evicted %d oldest",
             sessionId,
@@ -167,7 +210,11 @@ export const usePendingSends = create<PendingSendsState>((set, get) => ({
           );
         }
       }
-      persist(next);
+
+      // Write new entry to DB, then trim excess rows for this session.
+      flush(entry).catch(console.warn);
+      trimSessionInDb(sessionId).catch(console.warn);
+
       return { frames: next };
     });
     return id;
@@ -177,9 +224,9 @@ export const usePendingSends = create<PendingSendsState>((set, get) => ({
     set((s) => {
       const cur = s.frames[id];
       if (!cur) return s;
-      const next = { ...s.frames, [id]: { ...cur, status: "sending" as const } };
-      persist(next);
-      return { frames: next };
+      const updated: PendingFrame = { ...cur, status: "sending" };
+      flush(updated).catch(console.warn);
+      return { frames: { ...s.frames, [id]: updated } };
     });
   },
 
@@ -188,7 +235,14 @@ export const usePendingSends = create<PendingSendsState>((set, get) => ({
       if (!s.frames[id]) return s;
       const next = { ...s.frames };
       delete next[id];
-      persist(next);
+      getDb()
+        .then((db) =>
+          db.runAsync(
+            `DELETE FROM ${TABLES.pendingSends} WHERE id = ?`,
+            id,
+          ),
+        )
+        .catch(console.warn);
       return { frames: next };
     });
   },
@@ -197,17 +251,14 @@ export const usePendingSends = create<PendingSendsState>((set, get) => ({
     set((s) => {
       const cur = s.frames[id];
       if (!cur) return s;
-      const next = {
-        ...s.frames,
-        [id]: {
-          ...cur,
-          status: "failed" as const,
-          retries: cur.retries + 1,
-          lastError: error,
-        },
+      const updated: PendingFrame = {
+        ...cur,
+        status: "failed",
+        retries: cur.retries + 1,
+        lastError: error,
       };
-      persist(next);
-      return { frames: next };
+      flush(updated).catch(console.warn);
+      return { frames: { ...s.frames, [id]: updated } };
     });
   },
 
@@ -219,9 +270,9 @@ export const usePendingSends = create<PendingSendsState>((set, get) => ({
       // backoff caps don't silently re-trip on subsequent failures).
       const { lastError: _drop, ...rest } = cur;
       void _drop;
-      const next = { ...s.frames, [id]: { ...rest, status: "queued" as const } };
-      persist(next);
-      return { frames: next };
+      const updated: PendingFrame = { ...rest, status: "queued" };
+      flush(updated).catch(console.warn);
+      return { frames: { ...s.frames, [id]: updated } };
     });
   },
 
@@ -230,7 +281,14 @@ export const usePendingSends = create<PendingSendsState>((set, get) => ({
       if (!s.frames[id]) return s;
       const next = { ...s.frames };
       delete next[id];
-      persist(next);
+      getDb()
+        .then((db) =>
+          db.runAsync(
+            `DELETE FROM ${TABLES.pendingSends} WHERE id = ?`,
+            id,
+          ),
+        )
+        .catch(console.warn);
       return { frames: next };
     });
   },
@@ -247,9 +305,10 @@ export const usePendingSends = create<PendingSendsState>((set, get) => ({
 
   clearAll() {
     set(() => {
-      const next: Record<string, PendingFrame> = {};
-      persist(next);
-      return { frames: next };
+      getDb()
+        .then((db) => db.runAsync(`DELETE FROM ${TABLES.pendingSends}`))
+        .catch(console.warn);
+      return { frames: {} };
     });
   },
 }));

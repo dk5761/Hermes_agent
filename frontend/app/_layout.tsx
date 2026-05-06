@@ -3,8 +3,9 @@
 // file's resolved graph at bundle time.
 import "../global.css";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { ActivityIndicator, AppState, StyleSheet, View } from "react-native";
+import { getDb } from "@/db/sqlite";
 import { Slot, useRouter } from "expo-router";
 import { MutationCache, QueryClient } from "@tanstack/react-query";
 import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client";
@@ -202,6 +203,57 @@ function FontGate({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+/**
+ * Blocks render until the SQLite DB is open and migrations have run.
+ * Shows a minimal splash only if open takes longer than 300ms — on warm boots
+ * the cached handle resolves synchronously after the first microtask, so
+ * most users never see the spinner.
+ */
+function DbGate({ children }: { children: React.ReactNode }) {
+  // null = waiting; false = timed out (show splash); true = ready
+  const [dbReady, setDbReady] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    let mounted = true;
+
+    // Show spinner only if DB hasn't resolved within 300ms.
+    const splashTimer = setTimeout(() => {
+      if (mounted && dbReady === null) setDbReady(false);
+    }, 300);
+
+    getDb()
+      .then(() => {
+        if (mounted) setDbReady(true);
+      })
+      .catch((err: unknown) => {
+        // DB failure is fatal — log prominently and keep showing splash.
+        // The Diagnostics screen handles recovery.
+        console.error("[db] failed to open:", err);
+      })
+      .finally(() => clearTimeout(splashTimer));
+
+    return () => {
+      mounted = false;
+      clearTimeout(splashTimer);
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Still within the 300ms grace window — render nothing (screen is blank,
+  // FontGate is already painted above us).
+  if (dbReady === null) return null;
+
+  // DB took longer than 300ms — show a spinner until it resolves.
+  if (!dbReady) {
+    return (
+      <View style={styles.splash}>
+        <ActivityIndicator color={MUTED} />
+      </View>
+    );
+  }
+
+  return <>{children}</>;
+}
+
 export default function RootLayout() {
   // GestureHandlerRootView is required for react-native-gesture-handler;
   // BottomSheetModalProvider is required so any descendant can ref a modal sheet.
@@ -210,6 +262,7 @@ export default function RootLayout() {
       <SafeAreaProvider>
         <ThemeProvider>
           <FontGate>
+            <DbGate>
             <PersistQueryClientProvider
               client={queryClient}
               persistOptions={{
@@ -239,6 +292,7 @@ export default function RootLayout() {
                 </ToastProvider>
               </BottomSheetModalProvider>
             </PersistQueryClientProvider>
+            </DbGate>
           </FontGate>
         </ThemeProvider>
       </SafeAreaProvider>

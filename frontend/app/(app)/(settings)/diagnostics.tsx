@@ -24,7 +24,14 @@ import { useRouter } from "expo-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import { sqliteKv } from "@/state/sqlite-kv";
+import {
+  getDbStats,
+  vacuumDb,
+  clearRqCache,
+  wipeEverything,
+  type DbStats,
+} from "@/db/diagnostics";
 
 import {
   Button,
@@ -294,6 +301,7 @@ export default function DiagnosticsScreen() {
         onBack={() => router.back()}
         trailing={headerRight}
       />
+      <StorageCard />
       <SyncDiagnostics />
       <Stack gap={10} style={{ paddingHorizontal: 16, paddingBottom: 10 }}>
         <SegControl
@@ -389,6 +397,197 @@ export default function DiagnosticsScreen() {
   );
 }
 
+// ─── storage card ────────────────────────────────────────────────────────────
+
+/** Formats raw bytes to a human-readable KB / MB string. */
+function formatBytes(bytes: number): string {
+  if (bytes < 0) return "—";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+}
+
+function StorageCard() {
+  const toast = useToast();
+  const queryClient = useQueryClient();
+  const [stats, setStats] = useState<DbStats | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [vacuuming, setVacuuming] = useState(false);
+
+  const fetchStats = useCallback(() => {
+    setLoading(true);
+    getDbStats()
+      .then(setStats)
+      .catch(() => undefined)
+      .finally(() => setLoading(false));
+  }, []);
+
+  // Fetch once on mount.
+  useEffect(() => {
+    fetchStats();
+  }, [fetchStats]);
+
+  const onVacuum = useCallback(() => {
+    setVacuuming(true);
+    vacuumDb()
+      .then(() => {
+        toast.show("Vacuum complete", "success");
+        fetchStats();
+      })
+      .catch(() => toast.show("Vacuum failed", "error"))
+      .finally(() => setVacuuming(false));
+  }, [fetchStats, toast]);
+
+  const onClearCache = useCallback(() => {
+    Alert.alert(
+      "Clear query cache?",
+      "Removes persisted query data (sessions list, chat history). Queues and preferences stay.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Clear",
+          style: "destructive",
+          onPress: () => {
+            clearRqCache()
+              .then(() => queryClient.clear())
+              .then(() => {
+                toast.show("Cache cleared", "info");
+                fetchStats();
+              })
+              .catch(() => toast.show("Clear failed", "error"));
+          },
+        },
+      ],
+    );
+  }, [fetchStats, queryClient, toast]);
+
+  const onResetQueues = useCallback(() => {
+    Alert.alert(
+      "Reset all queues?",
+      "Drops every queued send and mutation, including failed ones. This cannot be undone.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Reset",
+          style: "destructive",
+          onPress: () => {
+            // Clear via store APIs so in-memory snapshots stay in sync with DB.
+            usePendingSends.getState().clearAll();
+            usePendingMutations.getState().clearAll();
+            toast.show("Queues reset", "info");
+            fetchStats();
+          },
+        },
+      ],
+    );
+  }, [fetchStats, toast]);
+
+  const onWipeEverything = useCallback(() => {
+    Alert.alert(
+      "Wipe everything?",
+      "Deletes the entire SQLite database and re-creates it from scratch. Auth survives. All other cached data, queues and preferences will be lost.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Continue",
+          style: "destructive",
+          onPress: () => {
+            // Second confirmation — extra friction for the nuclear action.
+            Alert.alert(
+              "Are you absolutely sure?",
+              "This cannot be undone. The app will need a restart after wiping.",
+              [
+                { text: "Cancel", style: "cancel" },
+                {
+                  text: "Wipe",
+                  style: "destructive",
+                  onPress: () => {
+                    wipeEverything()
+                      .then(() => {
+                        toast.show(
+                          "Database wiped. Please restart the app.",
+                          "info",
+                        );
+                        fetchStats();
+                      })
+                      .catch(() => toast.show("Wipe failed", "error"));
+                  },
+                },
+              ],
+            );
+          },
+        },
+      ],
+    );
+  }, [fetchStats, toast]);
+
+  return (
+    <Stack gap={6} style={{ paddingHorizontal: 16, paddingTop: 12, paddingBottom: 4 }}>
+      <Row align="center" justify="space-between" style={{ paddingLeft: 4 }}>
+        <Text kind="micro" className="text-ink-3 uppercase">
+          Storage
+        </Text>
+        <Pressable onPress={fetchStats} hitSlop={8}>
+          <Text kind="micro" className="text-ink-3">
+            {loading ? "…" : "↻"}
+          </Text>
+        </Pressable>
+      </Row>
+      <ListGroup>
+        <ListRow
+          title="DB file size"
+          detail={stats ? formatBytes(stats.fileBytes) : "—"}
+          icon="database"
+        />
+        <ListRow
+          title="rq_cache"
+          detail={stats ? String(stats.rqCache) : "—"}
+          icon="archive"
+        />
+        <ListRow
+          title="kv"
+          detail={stats ? String(stats.kv) : "—"}
+          icon="hash"
+        />
+        <ListRow
+          title="pending_mutations"
+          detail={stats ? String(stats.pendingMutations) : "—"}
+          icon="refresh"
+        />
+        <ListRow
+          title="pending_sends"
+          detail={stats ? String(stats.pendingSends) : "—"}
+          icon="send"
+        />
+        <ListRow
+          title="meta"
+          detail={stats ? String(stats.meta) : "—"}
+          icon="more"
+        />
+      </ListGroup>
+      <Stack gap={8} style={{ paddingTop: 4 }}>
+        <Button
+          kind="secondary"
+          full
+          disabled={vacuuming}
+          onClick={onVacuum}
+        >
+          {vacuuming ? "Vacuuming…" : "Vacuum"}
+        </Button>
+        <Button kind="secondary" full onClick={onClearCache}>
+          Clear cache
+        </Button>
+        <Button kind="danger" full onClick={onResetQueues}>
+          Reset all queues
+        </Button>
+        <Button kind="danger" full onClick={onWipeEverything}>
+          Wipe everything
+        </Button>
+      </Stack>
+    </Stack>
+  );
+}
+
 // ─── sync diagnostics ───────────────────────────────────────────────────────
 
 const RQ_CACHE_KEY = "hermes.rq.cache.v1";
@@ -453,7 +652,7 @@ function SyncDiagnostics() {
           text: "Clear",
           style: "destructive",
           onPress: () => {
-            void AsyncStorage.removeItem(RQ_CACHE_KEY)
+            void sqliteKv.removeItem(RQ_CACHE_KEY)
               .then(() => queryClient.clear())
               .then(() => {
                 showToast("Cache cleared", "info");

@@ -11,7 +11,7 @@
  * other persisted stores. Reads against a non-hydrated store return [].
  */
 import { create } from "zustand";
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import { sqliteKv } from "@/state/sqlite-kv";
 
 const KEY = "notifications.inbox.v1";
 const MAX_ITEMS = 200;
@@ -76,7 +76,7 @@ function parse(raw: string | null): InboxItem[] {
 }
 
 function persist(items: InboxItem[]): void {
-  void AsyncStorage.setItem(KEY, JSON.stringify(items)).catch(() => undefined);
+  void sqliteKv.setItem(KEY, JSON.stringify(items)).catch(() => undefined);
 }
 
 export const useNotificationsInbox = create<NotificationsInboxState>(
@@ -86,7 +86,7 @@ export const useNotificationsInbox = create<NotificationsInboxState>(
 
     async hydrate() {
       if (get().hydrated) return;
-      const raw = await AsyncStorage.getItem(KEY);
+      const raw = await sqliteKv.getItem(KEY);
       set({ items: parse(raw), hydrated: true });
     },
 

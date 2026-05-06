@@ -12,7 +12,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Alert, RefreshControl, ScrollView, View } from "react-native";
 import { useRouter } from "expo-router";
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import { sqliteKv } from "@/state/sqlite-kv";
 import { useQuery } from "@tanstack/react-query";
 
 import {
@@ -37,15 +37,16 @@ interface PrefsMap {
 }
 
 async function loadPrefs(ids: string[]): Promise<PrefsMap> {
-  const keys = ids.map((id) => STORAGE_PREFIX + id);
-  if (!keys.length) return {};
+  if (!ids.length) return {};
   try {
-    const pairs = await AsyncStorage.multiGet(keys);
+    const values = await Promise.all(
+      ids.map((id) => sqliteKv.getItem(STORAGE_PREFIX + id)),
+    );
     const out: PrefsMap = {};
-    for (const [k, v] of pairs) {
+    for (let i = 0; i < ids.length; i++) {
+      const v = values[i];
       if (v === null) continue;
-      const id = k.slice(STORAGE_PREFIX.length);
-      out[id] = v === "1";
+      out[ids[i]!] = v === "1";
     }
     return out;
   } catch {
@@ -55,7 +56,7 @@ async function loadPrefs(ids: string[]): Promise<PrefsMap> {
 
 async function setPref(id: string, on: boolean): Promise<void> {
   try {
-    await AsyncStorage.setItem(STORAGE_PREFIX + id, on ? "1" : "0");
+    await sqliteKv.setItem(STORAGE_PREFIX + id, on ? "1" : "0");
   } catch {
     // Persistence is best-effort; UI already reflects the new value.
   }

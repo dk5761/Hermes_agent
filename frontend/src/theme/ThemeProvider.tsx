@@ -37,7 +37,7 @@ import Animated, {
   withSequence,
   withTiming,
 } from "react-native-reanimated";
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import { sqliteKv } from "@/state/sqlite-kv";
 import { Uniwind, type ThemeName } from "uniwind";
 
 export type Variant = "paper" | "graphite" | "plot";
@@ -116,11 +116,11 @@ export function ThemeProvider({
     let cancelled = false;
     (async () => {
       try {
-        const [[, v], [, m], [, d], [, f]] = await AsyncStorage.multiGet([
-          STORAGE_VARIANT,
-          STORAGE_MODE,
-          STORAGE_DENSITY,
-          STORAGE_FONT_OVERRIDE,
+        const [v, m, d, f] = await Promise.all([
+          sqliteKv.getItem(STORAGE_VARIANT),
+          sqliteKv.getItem(STORAGE_MODE),
+          sqliteKv.getItem(STORAGE_DENSITY),
+          sqliteKv.getItem(STORAGE_FONT_OVERRIDE),
         ]);
         if (cancelled) return;
         if (isVariant(v)) setVariantState(v);
@@ -181,25 +181,25 @@ export function ThemeProvider({
 
   const setVariant = useCallback((v: Variant) => {
     setVariantState(v);
-    void AsyncStorage.setItem(STORAGE_VARIANT, v);
+    void sqliteKv.setItem(STORAGE_VARIANT, v);
   }, []);
 
   const setMode = useCallback((m: Mode) => {
     setModeState(m);
-    void AsyncStorage.setItem(STORAGE_MODE, m);
+    void sqliteKv.setItem(STORAGE_MODE, m);
   }, []);
 
   const setDensity = useCallback((d: Density) => {
     setDensityState(d);
-    void AsyncStorage.setItem(STORAGE_DENSITY, d);
+    void sqliteKv.setItem(STORAGE_DENSITY, d);
   }, []);
 
   const setFontOverride = useCallback((f: Variant | null) => {
     setFontOverrideState(f);
     if (f === null) {
-      void AsyncStorage.removeItem(STORAGE_FONT_OVERRIDE);
+      void sqliteKv.removeItem(STORAGE_FONT_OVERRIDE);
     } else {
-      void AsyncStorage.setItem(STORAGE_FONT_OVERRIDE, f);
+      void sqliteKv.setItem(STORAGE_FONT_OVERRIDE, f);
     }
   }, []);
 
@@ -209,7 +209,7 @@ export function ThemeProvider({
     setModeState((prev) => {
       const next: Mode =
         prev === "light" ? "dark" : prev === "dark" ? "light" : "light";
-      void AsyncStorage.setItem(STORAGE_MODE, next);
+      void sqliteKv.setItem(STORAGE_MODE, next);
       return next;
     });
   }, []);

@@ -14,7 +14,7 @@
  * Tags are normalized to lowercase + trimmed so "Work" and "work " merge.
  */
 import { create } from "zustand";
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import { sqliteKv } from "@/state/sqlite-kv";
 
 const KEY = "sessions.tags.v1";
 
@@ -56,7 +56,7 @@ function parse(raw: string | null): Record<string, string[]> {
 }
 
 function persist(value: Record<string, string[]>): void {
-  void AsyncStorage.setItem(KEY, JSON.stringify(value)).catch(() => undefined);
+  void sqliteKv.setItem(KEY, JSON.stringify(value)).catch(() => undefined);
 }
 
 export const useSessionTags = create<SessionTagsState>((set, get) => ({
@@ -65,7 +65,7 @@ export const useSessionTags = create<SessionTagsState>((set, get) => ({
 
   async hydrate() {
     if (get().hydrated) return;
-    const raw = await AsyncStorage.getItem(KEY);
+    const raw = await sqliteKv.getItem(KEY);
     set({ tagsBySession: parse(raw), hydrated: true });
   },
 

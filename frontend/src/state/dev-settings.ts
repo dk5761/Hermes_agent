@@ -13,7 +13,7 @@
  * Storage key: `dev.settings.v1`
  */
 import { create } from "zustand";
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import { sqliteKv } from "@/state/sqlite-kv";
 
 const KEY = "dev.settings.v1";
 
@@ -41,7 +41,7 @@ function parse(raw: string | null): PersistedShape {
 }
 
 function persist(value: PersistedShape): void {
-  void AsyncStorage.setItem(KEY, JSON.stringify(value)).catch(() => undefined);
+  void sqliteKv.setItem(KEY, JSON.stringify(value)).catch(() => undefined);
 }
 
 export const useDevSettings = create<DevSettingsState>((set, get) => ({
@@ -50,7 +50,7 @@ export const useDevSettings = create<DevSettingsState>((set, get) => ({
 
   async hydrate() {
     if (get().hydrated) return;
-    const raw = await AsyncStorage.getItem(KEY);
+    const raw = await sqliteKv.getItem(KEY);
     const v = parse(raw);
     set({ mockOffline: !!v.mockOffline, hydrated: true });
   },

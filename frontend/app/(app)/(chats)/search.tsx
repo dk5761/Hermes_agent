@@ -15,7 +15,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { ActivityIndicator, Pressable, View } from "react-native";
 import { FlashList } from "@shopify/flash-list";
 import { router } from "expo-router";
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import { sqliteKv } from "@/state/sqlite-kv";
 import {
   Chip,
   EmptyState,
@@ -265,7 +265,7 @@ export default function SearchScreen() {
     let cancelled = false;
     void (async () => {
       try {
-        const raw = await AsyncStorage.getItem(RECENT_KEY);
+        const raw = await sqliteKv.getItem(RECENT_KEY);
         if (cancelled || !raw) return;
         const parsed: unknown = JSON.parse(raw);
         if (Array.isArray(parsed)) {
@@ -292,7 +292,7 @@ export default function SearchScreen() {
       if (!q) return;
       setRecent((prev) => {
         const next = [q, ...prev.filter((r) => r !== q)].slice(0, RECENT_MAX);
-        void AsyncStorage.setItem(RECENT_KEY, JSON.stringify(next)).catch(() => {});
+        void sqliteKv.setItem(RECENT_KEY, JSON.stringify(next)).catch(() => {});
         return next;
       });
     },
