@@ -116,6 +116,17 @@ Snapshots of the Hermes side (not gateway DB) are taken via
 
 ## Deploy log
 
+### 2026-05-06 (PM) — slash-worker history refresh + branch retry
+
+- **Source:** `183d293` (latest `main`).
+- **Previous:** `837d31a` (morning deploy).
+- **Migrations applied:** none.
+- **Hermes source patch:** `scripts/patch-hermes-slash-history.py` now installs a SECOND patch entry (`slash-worker-refresh-history`) that re-loads `conversation_history` from the SQLite session DB at the top of every `_run()` call. Boot-time preload alone wasn't enough — Hermes' dashboard spawns the slash worker eagerly when the chat opens, so the boot snapshot finds zero messages and every subsequent `/branch` in that worker sees the same stale empty list. Re-running the patch script reported `[preload-history] already patched, skipping` + `[refresh-history] applied`.
+- **Backend change:** gateway now retries `slash.exec` once on Hermes RPC code 5030 ("slash worker exited") for both `POST /sessions/:id/branch` and `POST /sessions/:id/reload-mcp` — hides the stale-subprocess handshake from the mobile client so the user no longer needs to tap Fork twice after a hot-patch / dashboard restart.
+- **Verified (auth-gated, 401):** `POST /sessions/:id/branch`, `POST /sessions/:id/reload-mcp`. `/health` = 200.
+- **Restarted:** `hermes-dashboard` (so the slash-worker subprocess pool reloads with the patched module), then `hermes-gateway` (rebuilt with the retry helper).
+- **Branch state on VPS after deploy:** `main` tracking `origin/main` at `183d293`.
+
 ### 2026-05-06 — branch + offline support + slash-worker history patch
 
 - **Source:** `837d31a` (latest `main`).
