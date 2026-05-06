@@ -116,6 +116,17 @@ Snapshots of the Hermes side (not gateway DB) are taken via
 
 ## Deploy log
 
+### 2026-05-06 — branch + offline support + slash-worker history patch
+
+- **Source:** `837d31a` (latest `main`).
+- **Previous:** `c6fd37b` (offline gate creation flows).
+- **Migrations applied:** `0007_branch_lineage.sql` (`parent_app_session_id` FK + index on `app_sessions`).
+- **Hermes source patch applied:** `scripts/patch-hermes-slash-history.py` injected the `_preload_resumed_session()` call into `tui_gateway/slash_worker.py`. Without it, history-aware slash commands (e.g. `/branch`) bail out with empty `conversation_history` because the slash worker never enters the lazy-loading `cli.run()` path. Patch is idempotent and persists across `hermes update` via `post-hermes-update.sh` step 2bb.
+- **New routes verified (auth-gated, 401):**
+  - `POST /sessions/:id/branch`
+- **Restarted:** `hermes-dashboard` (so the slash-worker subprocess pool reloads with the patched module), then `hermes-gateway` (rebuilt; new branch endpoint).
+- **Branch state on VPS after deploy:** `main` tracking `origin/main` at `837d31a`.
+
 ### 2026-05-05 — search + chat pagination + offline queue + privacy veil
 
 - **Source:** `eb4f3ca` (latest `main`).
