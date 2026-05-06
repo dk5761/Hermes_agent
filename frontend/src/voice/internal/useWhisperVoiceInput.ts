@@ -299,9 +299,21 @@ export function useWhisperVoiceInput(
       isListeningRef.current = false;
 
       void WhisperKit.stop()
-        .then(() => {
+        .then((trailing: string) => {
           if (!cancelledRef.current) {
-            const finalText = transcriptRef.current;
+            // Append the trailing hypothesis returned by the native bridge.
+            // Whisper's stream stop doesn't promote unconfirmed → confirmed,
+            // so this captures the tail of the utterance.
+            const cleanTrailing = trailing.trim();
+            let finalText = transcriptRef.current;
+            if (cleanTrailing.length > 0) {
+              finalText = finalText.length > 0
+                ? `${finalText} ${cleanTrailing}`
+                : cleanTrailing;
+              transcriptRef.current = finalText;
+              setTranscript(finalText);
+            }
+            setPartialTranscript("");
             if (finalText.length > 0) {
               onFinalTranscriptRef.current?.(finalText);
             }

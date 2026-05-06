@@ -66,7 +66,7 @@ interface WhisperKitNativeModule {
    * Stop the stream. Remaining tokens are flushed and emitted as confirmed
    * before the promise resolves.
    */
-  stop(): Promise<void>;
+  stop(): Promise<string>;
 
   /** Free the WhisperKit instance and release the audio session. */
   release(): Promise<void>;
@@ -140,10 +140,14 @@ export const WhisperKit = {
   start: (): Promise<void> => NativeModule.start(),
 
   /**
-   * Stop the stream. Flushes remaining tokens as confirmed events before
-   * resolving.
+   * Stop the stream. Resolves with the trailing hypothesis text — append
+   * this to your accumulated transcript before firing your final-text
+   * callback. Empty string if there was no pending hypothesis at stop.
+   *
+   * Returning this synchronously avoids a race where the bridged
+   * `onConfirmed` flush event arrives AFTER stop() resolves on the JS side.
    */
-  stop: (): Promise<void> => NativeModule.stop(),
+  stop: (): Promise<string> => NativeModule.stop(),
 
   /** Free the WhisperKit instance and release the audio session. */
   release: (): Promise<void> => NativeModule.release(),

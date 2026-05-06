@@ -134,10 +134,13 @@ public class WhisperKitModule: Module {
       )
     }
 
-    /// Stop the stream; remaining tokens are flushed as confirmed before resolving.
-    AsyncFunction("stop") { [weak self] () async throws in
-      guard let self else { return }
-      try await self.backend.stop()
+    /// Stop the stream and return the trailing hypothesis text (if any) so
+    /// JS can append it to its accumulated transcript synchronously.  This
+    /// avoids a race where the bridged `onConfirmed` flush event arrives
+    /// AFTER `stop()` resolves on the JS side, leaving the tail orphaned.
+    AsyncFunction("stop") { [weak self] () async throws -> String in
+      guard let self else { return "" }
+      return try await self.backend.stop()
     }
 
     /// Free the WhisperKit instance and release the audio session.
@@ -150,6 +153,23 @@ public class WhisperKitModule: Module {
 
 // MARK: - Backend actor
 
+/// Strips Whisper special tokens (`<|startoftranscript|>`, `<|0.00|>`,
+/// `<|en|>`, `<|transcribe|>`, `<|notimestamps|>`, `<|endoftext|>`, etc.)
+/// from a raw segment string. WhisperKit's AudioStreamTranscriber emits
+/// segment.text as the literal model output which sometimes leaks these
+/// control tokens — they must never reach the JS layer.
+private func stripWhisperSpecialTokens(_ raw: String) -> String {
+  let pattern = #"<\|[^|]*\|>"#
+  guard let regex = try? NSRegularExpression(pattern: pattern) else { return raw }
+  let range = NSRange(raw.startIndex..., in: raw)
+  let cleaned = regex.stringByReplacingMatches(
+    in: raw, options: [], range: range, withTemplate: ""
+  )
+  return cleaned
+    .replacingOccurrences(of: "  ", with: " ")
+    .trimmingCharacters(in: .whitespaces)
+}
+
 /// Serialises all mutable WhisperKit state via Swift structured concurrency.
 private actor WhisperKitBackend {
   private var whisperKit: WhisperKit?
@@ -159,6 +179,13 @@ private actor WhisperKitBackend {
   // Tracks how many confirmed segments have been emitted across this stream.
   private var emittedConfirmedCount: Int = 0
   private var nextSegmentId: Int = 0
+
+  // Last unconfirmed (hypothesis) text observed during streaming.  On stop()
+  // we flush this through onConfirmed so the user doesn't lose the tail of
+  // their utterance — WhisperKit's stream stop does not promote pending
+  // hypothesis to confirmed automatically.
+  private var lastPartialText: String = ""
+  private var onConfirmedFlush: (@Sendable (String, Int) -> Void)?
 
   // MARK: Cache directory
 
@@ -446,6 +473,12 @@ private actor WhisperKitBackend {
 
     let emittedBox = EmittedCountBox()
 
+    // Stash the onConfirmed closure so stop() can flush any pending
+    // hypothesis text as a final confirmed segment.
+    self.onConfirmedFlush = onConfirmed
+    self.lastPartialText = ""
+    let actor = self
+
     let transcriber = AudioStreamTranscriber(
       audioEncoder: kit.audioEncoder,
       featureExtractor: kit.featureExtractor,
@@ -455,10 +488,11 @@ private actor WhisperKitBackend {
       audioProcessor: kit.audioProcessor,
       decodingOptions: DecodingOptions(),
       stateChangeCallback: { _, newState in
-        let partialText = newState.unconfirmedSegments
+        let rawPartial = newState.unconfirmedSegments
           .map(\.text)
           .joined(separator: " ")
-          .trimmingCharacters(in: .whitespaces)
+        let partialText = stripWhisperSpecialTokens(rawPartial)
+        Task { await actor.setLastPartial(partialText) }
         if !partialText.isEmpty {
           onPartial(partialText, emittedBox.count)
         }
@@ -466,7 +500,7 @@ private actor WhisperKitBackend {
         let allConfirmed = newState.confirmedSegments
         let newConfirmed = allConfirmed.dropFirst(emittedBox.count)
         for segment in newConfirmed {
-          let text = segment.text.trimmingCharacters(in: .whitespaces)
+          let text = stripWhisperSpecialTokens(segment.text)
           guard !text.isEmpty else { continue }
           onConfirmed(text, emittedBox.count)
           emittedBox.increment()
@@ -488,12 +522,32 @@ private actor WhisperKitBackend {
 
   // MARK: stop
 
-  func stop() async throws {
-    guard let transcriber = streamTranscriber else { return }
+  /// Stops the stream and returns the trailing hypothesis text so JS can
+  /// append it synchronously when the stop promise resolves.  Also fires
+  /// `onConfirmed` for the flush text in case any consumer is still
+  /// listening — but JS should treat the return value as authoritative.
+  func stop() async throws -> String {
+    guard let transcriber = streamTranscriber else { return "" }
     await transcriber.stopStreamTranscription()
     try? await Task.sleep(nanoseconds: 300_000_000)
+
+    let trailing = lastPartialText
+    if !trailing.isEmpty, let flush = onConfirmedFlush {
+      flush(trailing, emittedConfirmedCount)
+      emittedConfirmedCount += 1
+    }
+    lastPartialText = ""
+    onConfirmedFlush = nil
+
     clearTranscriber()
     deactivateAudioSession()
+    return trailing
+  }
+
+  /// Setter used by the streaming callback to record the latest hypothesis
+  /// text on the actor — read by `stop()` for the final flush.
+  func setLastPartial(_ text: String) {
+    self.lastPartialText = text
   }
 
   // MARK: release
@@ -505,6 +559,8 @@ private actor WhisperKitBackend {
     loadedModelName = nil
     emittedConfirmedCount = 0
     nextSegmentId = 0
+    lastPartialText = ""
+    onConfirmedFlush = nil
     deactivateAudioSession()
   }
 
@@ -513,6 +569,8 @@ private actor WhisperKitBackend {
   private func clearTranscriber() {
     streamTranscriber = nil
     emittedConfirmedCount = 0
+    lastPartialText = ""
+    onConfirmedFlush = nil
   }
 
   private func deactivateAudioSession() {
