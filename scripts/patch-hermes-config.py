@@ -83,6 +83,13 @@ DESIRED_CONFIG_VALUES: dict[str, object] = {
     # for a tap that never comes and the gateway times out at 30-90s. Disable
     # the gate so reload-mcp runs immediately.
     "approvals.mcp_reload_confirm": False,
+    # TTS provider — Kokoro local CPU model wired in via patch-hermes-tts-kokoro
+    # + patch-hermes-tts-warmup. Multilingual, ~310 MB ONNX, ~0.3 RTF on KVM2,
+    # no API key. Voice/lang/speed knobs live under tts.kokoro below.
+    "tts.provider": "kokoro",
+    "tts.kokoro.voice": "am_michael",
+    "tts.kokoro.speed": 1.0,
+    "tts.kokoro.lang": "en-us",
 }
 
 # Per-platform list of toolsets the agent should enable. We merge — anything

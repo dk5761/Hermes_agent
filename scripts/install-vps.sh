@@ -372,6 +372,30 @@ python3 "${REPO_ROOT}/scripts/patch-hermes-slash-history.py" || c_yellow "  slas
 python3 "${REPO_ROOT}/scripts/patch-hermes-stt-rpc.py" || c_yellow "  stt-rpc source patch skipped (anchor may have moved — non-fatal)"
 python3 "${REPO_ROOT}/scripts/patch-hermes-stt-warmup.py" || c_yellow "  stt-warmup source patch skipped (anchor may have moved — non-fatal)"
 python3 "${REPO_ROOT}/scripts/patch-hermes-stt-introspect.py" || c_yellow "  stt-introspect source patch skipped (anchor may have moved — non-fatal)"
+python3 "${REPO_ROOT}/scripts/patch-hermes-tts-kokoro.py" || c_yellow "  tts-kokoro source patch skipped (anchor may have moved — non-fatal)"
+python3 "${REPO_ROOT}/scripts/patch-hermes-tts-warmup.py" || c_yellow "  tts-warmup source patch skipped (anchor may have moved — non-fatal)"
+
+# Install kokoro-onnx + soundfile into Hermes' venv (one-shot — pip is
+# idempotent; re-running is fast). Required by the TTS patches above.
+HERMES_PY="/usr/local/lib/hermes-agent/venv/bin/python"
+if [[ -x "${HERMES_PY}" ]]; then
+  "${HERMES_PY}" -m pip install -q kokoro-onnx soundfile || \
+    c_yellow "  kokoro-onnx pip install failed — TTS will fall back to edge until resolved"
+fi
+
+# Pre-download kokoro model files to ${HERMES_HOME}/tts/kokoro/. The warmup
+# at dashboard startup will use these if present. Skip if already cached.
+if [[ -x "${HERMES_PY}" ]]; then
+  KOKORO_DIR="${HERMES_HOME}/tts/kokoro"
+  mkdir -p "${KOKORO_DIR}"
+  for f in kokoro-v1.0.onnx voices-v1.0.bin; do
+    if [[ ! -f "${KOKORO_DIR}/${f}" ]]; then
+      "${HERMES_PY}" -c "import urllib.request; urllib.request.urlretrieve('https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/${f}', '${KOKORO_DIR}/${f}')" \
+        && ok "downloaded ${f}" \
+        || c_yellow "  ${f} download failed — first synth call will retry"
+    fi
+  done
+fi
 
 # Deploy custom skills to ~/.hermes/skills/. Currently: manage-mcp (teaches
 # the agent to add/remove MCP servers end-to-end when the user asks).

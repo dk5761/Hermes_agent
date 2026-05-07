@@ -121,6 +121,14 @@ step "Step 2cd/5: patch-hermes-stt-introspect.py (stt_status agent tool)"
 python3 "${REPO_ROOT}/scripts/patch-hermes-stt-introspect.py"
 python3 "${REPO_ROOT}/scripts/patch-hermes-stt-introspect.py" --check
 
+step "Step 2ce/5: patch-hermes-tts-kokoro.py (kokoro local TTS provider)"
+python3 "${REPO_ROOT}/scripts/patch-hermes-tts-kokoro.py"
+python3 "${REPO_ROOT}/scripts/patch-hermes-tts-kokoro.py" --check
+
+step "Step 2cf/5: patch-hermes-tts-warmup.py (pre-load kokoro at startup)"
+python3 "${REPO_ROOT}/scripts/patch-hermes-tts-warmup.py"
+python3 "${REPO_ROOT}/scripts/patch-hermes-tts-warmup.py" --check
+
 step "Step 2d/5: deploy custom skills"
 if [[ -d "${REPO_ROOT}/scripts/skills" ]]; then
   for src in "${REPO_ROOT}"/scripts/skills/*/SKILL.md; do
