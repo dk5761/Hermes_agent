@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { WS_URL } from "../config";
 import { getAuthSnapshot } from "../auth/store";
+import { attemptRefresh } from "../api/client";
 import { useChatStore } from "../state/chat-store";
 import { GatewayWsClient, type ConnectionStatus } from "./client";
 import { attachQueueDrainer } from "./queue-drainer";
@@ -64,6 +65,9 @@ export function useChatStream(appSessionId: string | null): ChatStreamApi {
       wsUrl: WS_URL,
       appSessionId,
       getToken: () => getAuthSnapshot().accessToken,
+      // Reuse the HTTP client's refresh path so concurrent HTTP 401s + WS 4401
+      // share a single in-flight /auth/refresh call.
+      onAuthRequired: () => attemptRefresh(),
       initialLastEventId,
     });
     clientRef.current = client;

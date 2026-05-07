@@ -16,6 +16,12 @@ export interface LoginResponse {
 
 export interface RefreshResponse {
   accessToken: string;
+  // Rotation: gateway returns a fresh refresh token on every successful
+  // /auth/refresh, with a brand-new TTL window. Old token is revoked
+  // server-side. Both fields are present on every successful refresh
+  // response from this gateway version forward.
+  refreshToken: string;
+  refreshTokenExpiresAt: number;
 }
 
 export interface SessionDto {

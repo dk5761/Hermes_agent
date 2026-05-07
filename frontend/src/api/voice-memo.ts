@@ -21,6 +21,7 @@
 
 import { API_URL } from "../config";
 import { getAuthSnapshot, useAuthStore } from "../auth/store";
+import { attemptRefresh } from "./client";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -76,25 +77,6 @@ export class VoiceMemoError extends Error {
 
 /** 35 s client-side timeout (server STT deadline is ~30 s). */
 const UPLOAD_TIMEOUT_MS = 35_000;
-
-async function attemptRefresh(): Promise<string | null> {
-  const { refreshToken } = getAuthSnapshot();
-  if (!refreshToken) return null;
-  try {
-    const res = await fetch(`${API_URL}/auth/refresh`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ refreshToken }),
-    });
-    if (!res.ok) return null;
-    const data = (await res.json()) as { accessToken?: string };
-    if (!data.accessToken) return null;
-    await useAuthStore.getState().setAccessToken(data.accessToken);
-    return data.accessToken;
-  } catch {
-    return null;
-  }
-}
 
 async function parseErrorMessage(res: Response): Promise<string> {
   try {

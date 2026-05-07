@@ -19,7 +19,10 @@ interface RequestInit_ {
 
 let inflightRefresh: Promise<string | null> | null = null;
 
-async function attemptRefresh(): Promise<string | null> {
+// Exported for non-HTTP paths that also need refresh (notably the WS client
+// on a 4401 close). Coalesces concurrent callers via inflightRefresh so a
+// burst of failing requests + a 4401 socket close share a single network call.
+export async function attemptRefresh(): Promise<string | null> {
   if (inflightRefresh) return inflightRefresh;
   inflightRefresh = (async () => {
     const { refreshToken } = getAuthSnapshot();
@@ -31,9 +34,24 @@ async function attemptRefresh(): Promise<string | null> {
         body: JSON.stringify({ refreshToken }),
       });
       if (!res.ok) return null;
-      const data = (await res.json()) as { accessToken?: string };
+      const data = (await res.json()) as {
+        accessToken?: string;
+        refreshToken?: string;
+      };
       if (!data.accessToken) return null;
-      await useAuthStore.getState().setAccessToken(data.accessToken);
+      // Rotation: gateway returns a fresh refresh token alongside the access
+      // token. Persist both atomically so the next refresh uses the new one
+      // (the old one is revoked server-side). Older gateway versions that
+      // don't rotate just return accessToken — fall back to setAccessToken
+      // so we don't blow away a still-valid refresh token.
+      if (data.refreshToken) {
+        await useAuthStore.getState().setTokens({
+          accessToken: data.accessToken,
+          refreshToken: data.refreshToken,
+        });
+      } else {
+        await useAuthStore.getState().setAccessToken(data.accessToken);
+      }
       return data.accessToken;
     } catch {
       return null;

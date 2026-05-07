@@ -5,7 +5,7 @@ import type { Db } from "../db/client.js";
 import { users } from "../db/schema.js";
 import { verifyPassword } from "../auth/password.js";
 import { signAccessToken, type JwtConfig } from "../auth/jwt.js";
-import { issueRefreshToken, revokeRefreshToken, validateRefreshToken } from "../auth/refresh.js";
+import { issueRefreshToken, revokeRefreshToken, rotateRefreshToken } from "../auth/refresh.js";
 
 export interface AuthRoutesDeps {
   db: Db;
@@ -78,18 +78,29 @@ export async function registerAuthRoutes(app: FastifyInstance, deps: AuthRoutesD
     if (!parsed.success) {
       return reply.code(400).send({ error: "invalid_body" });
     }
-    const valid = await validateRefreshToken(deps.db, parsed.data.refreshToken);
-    if (!valid) {
+    // Rotation: every successful refresh revokes the old token and issues a
+    // new one. Active users effectively never lose their session — the 30-day
+    // window restarts on each refresh. A null result means the token was
+    // invalid / expired / already revoked (concurrent-rotation race).
+    const rotated = await rotateRefreshToken(
+      deps.db,
+      parsed.data.refreshToken,
+      deps.refreshTtlDays,
+    );
+    if (!rotated) {
       return reply.code(401).send({ error: "invalid_refresh" });
     }
-    const rows = await deps.db.select().from(users).where(eq(users.id, valid.userId)).limit(1);
+    const rows = await deps.db.select().from(users).where(eq(users.id, rotated.userId)).limit(1);
     const user = rows[0];
     if (!user) {
       return reply.code(401).send({ error: "user_not_found" });
     }
-    // TODO: Phase >1 — implement refresh token rotation (revoke old, issue new).
     const accessToken = signAccessToken({ sub: user.id, username: user.username }, deps.jwt);
-    return reply.send({ accessToken });
+    return reply.send({
+      accessToken,
+      refreshToken: rotated.refresh.token,
+      refreshTokenExpiresAt: rotated.refresh.expiresAt,
+    });
   });
 
   app.post("/auth/logout", async (request, reply) => {

@@ -1,39 +1,14 @@
 import { API_URL } from "../config";
 import { getAuthSnapshot, useAuthStore } from "../auth/store";
+import { attemptRefresh } from "./client";
 import { ApiError } from "./types";
 import type { AttachmentDTO, AttachmentKind } from "./types";
 import type { LocalFileInput } from "../attachments/types";
 
 // Multipart upload to /uploads. The shared apiFetch wrapper JSON-encodes the
-// body, which is incompatible with FormData; this file mirrors its 401-refresh
-// behavior locally so the rest of the app sees consistent auth handling.
-
-let inflightRefresh: Promise<string | null> | null = null;
-
-async function attemptRefresh(): Promise<string | null> {
-  if (inflightRefresh) return inflightRefresh;
-  inflightRefresh = (async () => {
-    const { refreshToken } = getAuthSnapshot();
-    if (!refreshToken) return null;
-    try {
-      const res = await fetch(`${API_URL}/auth/refresh`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ refreshToken }),
-      });
-      if (!res.ok) return null;
-      const data = (await res.json()) as { accessToken?: string };
-      if (!data.accessToken) return null;
-      await useAuthStore.getState().setAccessToken(data.accessToken);
-      return data.accessToken;
-    } catch {
-      return null;
-    } finally {
-      inflightRefresh = null;
-    }
-  })();
-  return inflightRefresh;
-}
+// body, which is incompatible with FormData; this file shares the central
+// `attemptRefresh` (with its in-flight coalesce + rotation persistence) so
+// every consumer of /auth/refresh sees the same token-pair behavior.
 
 function isAttachmentDTO(v: unknown): v is AttachmentDTO {
   if (!v || typeof v !== "object") return false;

@@ -32,6 +32,18 @@ export interface GatewayWsConfig {
   appSessionId: string;
   getToken: () => string | null;
   initialLastEventId?: number;
+  /**
+   * Called when the socket lands in an auth-failed state (4401 close or
+   * connect-time missing token). Should return a fresh access token, or null
+   * if the user must re-authenticate. After resolving, the WS client calls
+   * `getToken()` again — implementations are expected to have updated the
+   * token store before returning.
+   *
+   * Coalesce concurrent callers in the implementation; the WS client may
+   * fire this in parallel with HTTP `apiFetch` calls hitting their own
+   * 401-refresh path.
+   */
+  onAuthRequired?: () => Promise<string | null>;
 }
 
 export type EventHandler = (env: GatewayEventEnvelope) => void;
@@ -54,6 +66,10 @@ export class GatewayWsClient {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private explicitlyClosed = false;
   private paused = false; // sync.required latched
+  // Guard against tight refresh loops: if a refresh succeeds but the new token
+  // also produces a 4401, we treat that as terminal auth failure (something is
+  // wrong server-side — re-issuing won't help). Reset to false on any "open".
+  private refreshAttempted = false;
 
   private readonly eventHandlers = new Set<EventHandler>();
   private readonly controlHandlers = new Set<ControlHandler>();
@@ -154,6 +170,34 @@ export class GatewayWsClient {
     this.setStatus("closed");
   }
 
+  // Drives the auth-failure recovery flow. Calls the configured refresh
+  // callback (typically `attemptRefresh` from api/client.ts) and, on success,
+  // re-enters the connect path. Bails to terminal `auth_required` if the
+  // callback isn't configured, refresh fails, or this is the second auth
+  // failure within the current connection lifetime.
+  private async tryRefreshAndReconnect(): Promise<void> {
+    if (this.explicitlyClosed || this.paused) return;
+    if (this.refreshAttempted || !this.cfg.onAuthRequired) {
+      this.setStatus("auth_required");
+      return;
+    }
+    this.refreshAttempted = true;
+    this.setStatus("reconnecting");
+    let fresh: string | null = null;
+    try {
+      fresh = await this.cfg.onAuthRequired();
+    } catch {
+      fresh = null;
+    }
+    if (this.explicitlyClosed) return;
+    if (!fresh) {
+      this.setStatus("auth_required");
+      return;
+    }
+    // Token store is updated by the callback; openSocket re-reads via getToken.
+    this.scheduleReconnect(0);
+  }
+
   private openSocket(): void {
     if (this.paused || this.explicitlyClosed) return;
     // Dev-only mock-offline: refuse to connect; surface as "reconnecting"
@@ -167,7 +211,10 @@ export class GatewayWsClient {
     }
     const token = this.cfg.getToken();
     if (!token) {
-      this.setStatus("auth_required");
+      // No token at connect time: try refresh once before giving up. Common
+      // path on cold-start when an HTTP call hasn't yet triggered the
+      // reactive 401-refresh loop.
+      void this.tryRefreshAndReconnect();
       return;
     }
     this.setStatus(this.lastEventId > 0 ? "reconnecting" : "connecting");
@@ -189,6 +236,7 @@ export class GatewayWsClient {
 
     socket.onopen = (): void => {
       this.backoff.reset();
+      this.refreshAttempted = false;
       this.setStatus("open");
     };
 
@@ -203,9 +251,13 @@ export class GatewayWsClient {
     socket.onclose = (ev: CloseEvent): void => {
       this.socket = null;
       if (this.explicitlyClosed) return;
-      // 4401 = backend signal that auth failed; surface to caller for refresh.
+      // 4401 = backend rejected our access token. First time: try a refresh
+      // and reconnect with the new token. Subsequent failures within the same
+      // connection lifetime mean refresh isn't fixing it (refresh token also
+      // expired / revoked) — surface as terminal `auth_required` so the route
+      // guard can route to login.
       if (ev.code === 4401) {
-        this.setStatus("auth_required");
+        void this.tryRefreshAndReconnect();
         return;
       }
       // 1000 with explicitlyClosed=false shouldn't happen but treat as closed.

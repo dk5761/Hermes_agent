@@ -13,6 +13,12 @@ interface AuthState {
   hydrate: () => Promise<void>;
   setSession: (s: { accessToken: string; refreshToken: string; user: AuthUser }) => Promise<void>;
   setAccessToken: (token: string) => Promise<void>;
+  /**
+   * Persist a rotated token pair from /auth/refresh. The gateway revokes the
+   * old refresh token server-side and issues a new one — clients must adopt
+   * both atomically so a subsequent refresh uses the now-valid token.
+   */
+  setTokens: (tokens: { accessToken: string; refreshToken: string }) => Promise<void>;
   clear: () => Promise<void>;
 }
 
@@ -61,6 +67,14 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   async setAccessToken(token) {
     await secureStorage.set(KEY_ACCESS, token);
     set({ accessToken: token });
+  },
+
+  async setTokens({ accessToken, refreshToken }) {
+    await Promise.all([
+      secureStorage.set(KEY_ACCESS, accessToken),
+      secureStorage.set(KEY_REFRESH, refreshToken),
+    ]);
+    set({ accessToken, refreshToken });
   },
 
   async clear() {
