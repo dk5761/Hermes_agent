@@ -232,6 +232,7 @@ function UserRow({
         transcript={message.text}
         transcriptionStatus={(message.transcriptionStatus ?? "completed") as TranscriptionStatus}
         transcriptionError={message.transcriptionError}
+        audioPeaks={message.audioPeaks ?? null}
       />
     );
   }

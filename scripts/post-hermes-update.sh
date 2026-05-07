@@ -113,6 +113,10 @@ step "Step 2c/5: patch-hermes-stt-rpc.py (server-side STT RPC)"
 python3 "${REPO_ROOT}/scripts/patch-hermes-stt-rpc.py"
 python3 "${REPO_ROOT}/scripts/patch-hermes-stt-rpc.py" --check
 
+step "Step 2cc/5: patch-hermes-stt-warmup.py (pre-load faster-whisper at startup)"
+python3 "${REPO_ROOT}/scripts/patch-hermes-stt-warmup.py"
+python3 "${REPO_ROOT}/scripts/patch-hermes-stt-warmup.py" --check
+
 step "Step 2d/5: deploy custom skills"
 if [[ -d "${REPO_ROOT}/scripts/skills" ]]; then
   for src in "${REPO_ROOT}"/scripts/skills/*/SKILL.md; do

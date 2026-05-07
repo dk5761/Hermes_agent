@@ -14,11 +14,13 @@ RUN corepack enable && corepack prepare pnpm@10.28.1 --activate
 WORKDIR /app
 
 # python3 + build-essential for better-sqlite3's node-gyp fallback when no
-# prebuilt binary is available; sqlite3 cli for the backup script.
+# prebuilt binary is available; sqlite3 cli for the backup script;
+# ffmpeg for voice-memo waveform peak extraction (decodes m4a → PCM float32).
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         python3 build-essential sqlite3 \
         poppler-utils tesseract-ocr tesseract-ocr-eng \
+        ffmpeg \
         ca-certificates curl tini && \
     rm -rf /var/lib/apt/lists/*
 

@@ -418,6 +418,7 @@ export async function registerSessionsRoutes(
           ...(r.audioDurationMs !== null ? { audioDurationMs: r.audioDurationMs } : {}),
           ...(r.transcriptionStatus !== null ? { transcriptionStatus: r.transcriptionStatus } : {}),
           ...(r.transcriptionError !== null ? { transcriptionError: r.transcriptionError } : {}),
+          ...(r.audioPeaks !== null ? { audioPeaks: r.audioPeaks } : {}),
         })),
         hasBefore: result.hasBefore,
         hasAfter: result.hasAfter,

@@ -82,6 +82,17 @@ def _(rid, params: dict) -> dict:
     import os
     import tempfile
 
+    # Wait for the warmup-loaded model before dispatching. Without this,
+    # the FIRST request after a fresh boot triggers ITS OWN model download
+    # while the warmup thread is also downloading — concurrent loads race
+    # on the same partial cache file and corrupt it. The Event is set by
+    # patch-hermes-stt-warmup.py when the warmup completes (success or
+    # failure). Defensive lookup so this still works if the warmup patch
+    # isn't applied.
+    _ready = globals().get("_STT_READY")
+    if _ready is not None and not _ready.wait(timeout=120):
+        return _err(rid, 5042, "stt_warming_up")
+
     audio_b64 = params.get("audio_b64", "")
     mime = params.get("mime", "audio/m4a")
     if not audio_b64:

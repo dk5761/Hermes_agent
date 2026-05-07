@@ -51,6 +51,8 @@ export interface VoiceMemoMessage {
   transcriptionError?: string;
   /** Unix timestamp in seconds. */
   createdAt: number;
+  /** Waveform data: 80 normalized floats (0..1). Null for old memos or failed extraction. */
+  audioPeaks?: number[] | null;
 }
 
 // ---------------------------------------------------------------------------

@@ -64,6 +64,13 @@
       "when": 1778128882259,
       "tag": "0008_voice_memo",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1778175145381,
+      "tag": "0009_audio_peaks",
+      "breakpoints": true
     }
   ]
 }

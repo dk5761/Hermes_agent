@@ -11,6 +11,7 @@ import type { AppLogger } from "../logger.js";
 import { HermesRpcError } from "../hermes/types.js";
 import { transcribeWithRetry } from "./transcribe.js";
 import { ensureHermesSession } from "../sessions/ensure-hermes-session.js";
+import { extractAudioPeaks } from "../blobs/audio-peaks.js";
 
 // --------------------------------------------------------------------------
 // Constants
@@ -192,6 +193,7 @@ function buildMessageEnvelope(row: {
   transcriptionStatus: string;
   transcriptionError: string | null;
   createdAt: number;
+  audioPeaks: number[] | null;
 }) {
   return {
     id: row.id,
@@ -202,6 +204,7 @@ function buildMessageEnvelope(row: {
     transcriptionStatus: row.transcriptionStatus,
     transcriptionError: row.transcriptionError,
     createdAt: row.createdAt,
+    audioPeaks: row.audioPeaks,
   };
 }
 
@@ -302,6 +305,16 @@ export async function registerVoiceMemoRoutes(
         return reply.code(500).send({ error: "blob_write_failed" });
       }
 
+      // Extract audio peaks for waveform visualization. Must complete before
+      // the INSERT so the row is never written without its peaks — extraction
+      // failure is non-fatal; null means the frontend falls back to a plain
+      // progress bar.
+      const absolutePath = path.join(blobRoot, relKey);
+      const peaks = await extractAudioPeaks(absolutePath).catch(() => null);
+      if (peaks === null) {
+        logger.warn({ blobPath: absolutePath }, "audio peaks extraction failed; storing null");
+      }
+
       // Insert chat_history row immediately so the blob + row survive STT failure.
       const now = Math.floor(Date.now() / 1000);
       const inserted = await db
@@ -314,6 +327,7 @@ export async function registerVoiceMemoRoutes(
           createdAt: now,
           audioBlobPath: relKey,
           audioDurationMs,
+          audioPeaksJson: peaks !== null ? JSON.stringify(peaks) : null,
           transcriptionStatus: "transcribing",
           transcriptionError: null,
         })
@@ -374,6 +388,7 @@ export async function registerVoiceMemoRoutes(
             transcriptionStatus: "completed",
             transcriptionError: null,
             createdAt: now,
+            audioPeaks: peaks,
           }),
         });
       } else {
@@ -395,6 +410,7 @@ export async function registerVoiceMemoRoutes(
             transcriptionStatus: "failed",
             transcriptionError: sttError,
             createdAt: now,
+            audioPeaks: peaks,
           }),
         });
       }
@@ -435,6 +451,7 @@ export async function registerVoiceMemoRoutes(
           audioDurationMs: chatHistory.audioDurationMs,
           transcriptionStatus: chatHistory.transcriptionStatus,
           createdAt: chatHistory.createdAt,
+          audioPeaksJson: chatHistory.audioPeaksJson,
         })
         .from(chatHistory)
         .where(and(eq(chatHistory.id, msgId), eq(chatHistory.appSessionId, sessionId)))
@@ -493,6 +510,20 @@ export async function registerVoiceMemoRoutes(
         transcript = "";
       }
 
+      // Peaks were stored at original upload time; re-parse from DB for the envelope.
+      let retryPeaks: number[] | null = null;
+      if (msg.audioPeaksJson) {
+        try {
+          const parsed = JSON.parse(msg.audioPeaksJson);
+          if (Array.isArray(parsed) && parsed.every((v) => typeof v === "number" && isFinite(v))) {
+            retryPeaks = parsed as number[];
+          }
+        } catch {
+          // Corrupt peaks — leave null; frontend falls back to plain progress bar.
+          logger.warn({ msgId }, "voice-memo: retry — audioPeaksJson failed to parse");
+        }
+      }
+
       if (sttOk) {
         await db
           .update(chatHistory)
@@ -516,6 +547,7 @@ export async function registerVoiceMemoRoutes(
             transcriptionStatus: "completed",
             transcriptionError: null,
             createdAt: msg.createdAt,
+            audioPeaks: retryPeaks,
           }),
         });
       } else {
@@ -538,6 +570,7 @@ export async function registerVoiceMemoRoutes(
             transcriptionStatus: "failed",
             transcriptionError: sttError,
             createdAt: msg.createdAt,
+            audioPeaks: retryPeaks,
           }),
         });
       }

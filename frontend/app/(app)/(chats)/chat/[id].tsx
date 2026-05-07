@@ -265,7 +265,7 @@ function historyRowToUiRow(
           createdAt: iso,
           ...(attachmentRefs && attachmentRefs.length > 0 ? { attachmentRefs } : {}),
           // Pass audio fields through so Message.tsx can render AudioMessage.
-          // All four are optional on UserMessage — text-only rows won't set them.
+          // All five are optional on UserMessage — text-only rows won't set them.
           ...(r.audioBlobUrl ? { audioBlobUrl: r.audioBlobUrl } : {}),
           ...(r.audioDurationMs != null ? { audioDurationMs: r.audioDurationMs } : {}),
           ...(r.transcriptionStatus
@@ -277,6 +277,7 @@ function historyRowToUiRow(
               }
             : {}),
           ...(r.transcriptionError != null ? { transcriptionError: r.transcriptionError } : {}),
+          ...(r.audioPeaks != null ? { audioPeaks: r.audioPeaks } : {}),
         },
       };
     }
@@ -1955,7 +1956,11 @@ export default function ChatScreen() {
             style={{
               position: "absolute",
               alignSelf: "center",
-              bottom: 96,
+              // Clears composer (input ~50pt) + model strip (~42pt) + branch
+              // lineage row (~32pt) + a small buffer, so the pill sits above
+              // every piece of composer chrome regardless of which chips are
+              // visible. Was 96 (clipped behind the branch chip).
+              bottom: 160,
               paddingHorizontal: 14,
               paddingVertical: 8,
               borderRadius: 999,
@@ -1968,6 +1973,7 @@ export default function ChatScreen() {
               shadowRadius: 6,
               shadowOffset: { width: 0, height: 2 },
               elevation: 4,
+              zIndex: 20,
             }}
           >
             <Icon name="chevD" size={14} color={tokens.surface} />

@@ -27,6 +27,8 @@ export interface HistoryRow {
   audioDurationMs: number | null;
   transcriptionStatus: string | null;
   transcriptionError: string | null;
+  /** Waveform data: 80 normalized floats (0..1). Null for old rows or failed extraction. */
+  audioPeaks: number[] | null;
 }
 
 export async function appendHistory(
@@ -62,6 +64,7 @@ export async function appendHistory(
     audioDurationMs: null,
     transcriptionStatus: null,
     transcriptionError: null,
+    audioPeaks: null,
   };
 }
 
@@ -97,6 +100,25 @@ interface RawRow {
   audioDurationMs: number | null;
   transcriptionStatus: string | null;
   transcriptionError: string | null;
+  audioPeaksJson: string | null;
+}
+
+function parseAudioPeaks(raw: string | null): number[] | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (
+      Array.isArray(parsed) &&
+      parsed.every((v) => typeof v === "number" && isFinite(v))
+    ) {
+      return parsed as number[];
+    }
+    console.warn("chat-history: audioPeaksJson parsed but is not a number[]; returning null");
+    return null;
+  } catch {
+    console.warn("chat-history: audioPeaksJson failed to parse; returning null");
+    return null;
+  }
 }
 
 function toHistoryRow(r: RawRow): HistoryRow {
@@ -118,6 +140,7 @@ function toHistoryRow(r: RawRow): HistoryRow {
     audioDurationMs: r.audioDurationMs,
     transcriptionStatus: r.transcriptionStatus,
     transcriptionError: r.transcriptionError,
+    audioPeaks: parseAudioPeaks(r.audioPeaksJson),
   };
 }
 
@@ -130,6 +153,7 @@ const HISTORY_COLUMNS = {
   audioDurationMs: chatHistory.audioDurationMs,
   transcriptionStatus: chatHistory.transcriptionStatus,
   transcriptionError: chatHistory.transcriptionError,
+  audioPeaksJson: chatHistory.audioPeaksJson,
 } as const;
 
 export async function loadHistory(

@@ -1,0 +1,1 @@
+ALTER TABLE `chat_history` ADD `audio_peaks_json` text;

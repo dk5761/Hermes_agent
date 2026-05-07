@@ -35,6 +35,8 @@ export interface UserMessage {
   audioDurationMs?: number;
   transcriptionStatus?: "transcribing" | "completed" | "failed";
   transcriptionError?: string | null;
+  /** Waveform data: 80 normalized floats (0..1). Null for old memos or failed extraction. */
+  audioPeaks?: number[] | null;
 }
 
 export interface AssistantMessage {
@@ -630,6 +632,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         audioDurationMs: msg.audioDurationMs,
         transcriptionStatus: msg.transcriptionStatus,
         ...(msg.transcriptionError ? { transcriptionError: msg.transcriptionError } : {}),
+        ...(msg.audioPeaks != null ? { audioPeaks: msg.audioPeaks } : {}),
       };
       return {
         byId: {

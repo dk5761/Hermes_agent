@@ -90,6 +90,8 @@ export interface HistoryRow {
   transcriptionStatus?: string;
   /** Error detail when transcriptionStatus === "failed". */
   transcriptionError?: string | null;
+  /** Waveform data: 80 normalized floats (0..1). Null for old rows or failed extraction. */
+  audioPeaks?: number[] | null;
 }
 
 /**

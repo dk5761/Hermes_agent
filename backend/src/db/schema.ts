@@ -184,6 +184,10 @@ export const chatHistory = sqliteTable(
     audioDurationMs: integer("audio_duration_ms"),
     transcriptionStatus: text("transcription_status"),
     transcriptionError: text("transcription_error"),
+    // JSON-encoded array of 80 floats (0..1) extracted by ffmpeg at upload time.
+    // NULL for all pre-Phase-0 rows and for memos where extraction failed.
+    // Mobile falls back to plain progress bar when NULL.
+    audioPeaksJson: text("audio_peaks_json"),
   },
   (t) => ({
     sessionIdIdx: index("chat_history_session_id_idx").on(t.appSessionId, t.id),
