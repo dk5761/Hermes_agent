@@ -83,6 +83,7 @@ import { BranchLoader } from "@/chat/BranchLoader";
 import { humanizeError } from "@/util/errors";
 import { ApiError } from "@/api/types";
 import { formatRelative } from "@/util/time";
+import { stripMediaTag } from "@/util/strip-media-tag";
 import {
   pendingArchiveSession,
   pendingDeleteSession,
@@ -151,10 +152,15 @@ function buildRows(state: ChatSessionState | undefined): Row[] {
       rows.push({ rowKind: "stream-tool", data: tc });
     }
     // Show streaming bubble even before any text arrives so user sees activity.
+    // Strip MEDIA:<path> markers from the live buffer — they're emitted as
+    // ordinary tokens by Hermes' text_to_speech tool and would briefly show as
+    // raw text before message.complete arrives and the gateway swaps in the
+    // audio bubble. After stripping, the existing "..." fallback renders for
+    // the brief gap, which reads as a generic loader.
     const streamMsg: AssistantMessage = {
       kind: "assistant",
       id: "__streaming__",
-      text: state.streaming.textBuffer,
+      text: stripMediaTag(state.streaming.textBuffer),
       reasoning:
         state.streaming.reasoningBuffer.length > 0
           ? state.streaming.reasoningBuffer
