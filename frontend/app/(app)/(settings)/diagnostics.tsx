@@ -32,6 +32,10 @@ import {
   wipeEverything,
   type DbStats,
 } from "@/db/diagnostics";
+import {
+  clearAudioCache,
+  getAudioCacheBytes,
+} from "@/audio/playback-controller";
 
 import {
   Button,
@@ -413,9 +417,12 @@ function StorageCard() {
   const [stats, setStats] = useState<DbStats | null>(null);
   const [loading, setLoading] = useState(false);
   const [vacuuming, setVacuuming] = useState(false);
+  const [audioCacheBytes, setAudioCacheBytes] = useState<number>(-1);
+  const [clearingAudioCache, setClearingAudioCache] = useState(false);
 
   const fetchStats = useCallback(() => {
     setLoading(true);
+    setAudioCacheBytes(getAudioCacheBytes());
     getDbStats()
       .then(setStats)
       .catch(() => undefined)
@@ -521,6 +528,30 @@ function StorageCard() {
     );
   }, [fetchStats, toast]);
 
+  const onClearAudioCache = useCallback(() => {
+    Alert.alert(
+      "Clear voice cache?",
+      `Removes downloaded audio files (${formatBytes(audioCacheBytes)}). They will re-download on next playback.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Clear",
+          style: "destructive",
+          onPress: () => {
+            setClearingAudioCache(true);
+            clearAudioCache()
+              .then(() => {
+                toast.show("Voice cache cleared", "info");
+                setAudioCacheBytes(0);
+              })
+              .catch(() => toast.show("Clear failed", "error"))
+              .finally(() => setClearingAudioCache(false));
+          },
+        },
+      ],
+    );
+  }, [audioCacheBytes, toast]);
+
   return (
     <Stack gap={6} style={{ paddingHorizontal: 16, paddingTop: 12, paddingBottom: 4 }}>
       <Row align="center" justify="space-between" style={{ paddingLeft: 4 }}>
@@ -564,6 +595,11 @@ function StorageCard() {
           detail={stats ? String(stats.meta) : "—"}
           icon="more"
         />
+        <ListRow
+          title="voice cache"
+          detail={audioCacheBytes >= 0 ? formatBytes(audioCacheBytes) : "—"}
+          icon="mic"
+        />
       </ListGroup>
       <Stack gap={8} style={{ paddingTop: 4 }}>
         <Button
@@ -576,6 +612,14 @@ function StorageCard() {
         </Button>
         <Button kind="secondary" full onClick={onClearCache}>
           Clear cache
+        </Button>
+        <Button
+          kind="secondary"
+          full
+          disabled={clearingAudioCache || audioCacheBytes === 0}
+          onClick={onClearAudioCache}
+        >
+          {clearingAudioCache ? "Clearing…" : "Clear voice cache"}
         </Button>
         <Button kind="danger" full onClick={onResetQueues}>
           Reset all queues

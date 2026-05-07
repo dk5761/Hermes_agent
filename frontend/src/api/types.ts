@@ -78,6 +78,18 @@ export interface HistoryRow {
   kind: HistoryKind;
   createdAt: number;
   payload: Record<string, unknown>;
+  /**
+   * Relative URL path like `/voice-blobs/voice/<sha>.m4a`. Present only on
+   * `user.message` rows that carry a voice memo. Absent (undefined) for
+   * text-only messages — treat as null for rendering purposes.
+   */
+  audioBlobUrl?: string;
+  /** Total voice memo duration in milliseconds. Present when audioBlobUrl is set. */
+  audioDurationMs?: number;
+  /** "transcribing" | "completed" | "failed". Present when audioBlobUrl is set. */
+  transcriptionStatus?: string;
+  /** Error detail when transcriptionStatus === "failed". */
+  transcriptionError?: string | null;
 }
 
 /**

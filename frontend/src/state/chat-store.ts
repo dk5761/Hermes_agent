@@ -27,6 +27,13 @@ export interface UserMessage {
   // history-loaded rows and any user message that came back from the
   // server's chat_history feed.
   clientId?: string;
+  // Voice memo fields — present only when the message carries audio.
+  // Text-only messages omit all four. `audioBlobUrl` is the relative path
+  // (prefixed with API_URL by the renderer / playback controller).
+  audioBlobUrl?: string;
+  audioDurationMs?: number;
+  transcriptionStatus?: "transcribing" | "completed" | "failed";
+  transcriptionError?: string | null;
 }
 
 export interface AssistantMessage {

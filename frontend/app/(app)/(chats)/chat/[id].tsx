@@ -253,7 +253,9 @@ function historyRowToUiRow(
       const attachmentRefs = Array.isArray(attachmentIdsRaw)
         ? attachmentIdsRaw.filter((v): v is string => typeof v === "string")
         : undefined;
-      if (!text && (!attachmentRefs || attachmentRefs.length === 0)) return null;
+      const hasAudio = !!r.audioBlobUrl;
+      // Allow audio-only rows (text === "" is valid when audio is present).
+      if (!text && !hasAudio && (!attachmentRefs || attachmentRefs.length === 0)) return null;
       return {
         rowKind: "msg",
         data: {
@@ -262,6 +264,19 @@ function historyRowToUiRow(
           text,
           createdAt: iso,
           ...(attachmentRefs && attachmentRefs.length > 0 ? { attachmentRefs } : {}),
+          // Pass audio fields through so Message.tsx can render AudioMessage.
+          // All four are optional on UserMessage — text-only rows won't set them.
+          ...(r.audioBlobUrl ? { audioBlobUrl: r.audioBlobUrl } : {}),
+          ...(r.audioDurationMs != null ? { audioDurationMs: r.audioDurationMs } : {}),
+          ...(r.transcriptionStatus
+            ? {
+                transcriptionStatus: r.transcriptionStatus as
+                  | "transcribing"
+                  | "completed"
+                  | "failed",
+              }
+            : {}),
+          ...(r.transcriptionError != null ? { transcriptionError: r.transcriptionError } : {}),
         },
       };
     }

@@ -54,6 +54,8 @@ import { TodoPlanCard } from "./TodoPlanCard";
 import type { TodoItem, TodoStatus } from "./TodoStepRow";
 import { CitationCardRow, isWebTool } from "./CitationCard";
 import { useThemeTokens } from "./tokens";
+import { AudioMessage } from "@/components/chat/AudioMessage";
+import type { TranscriptionStatus } from "@/api/voice-memo";
 
 // Map a pending-sends state to a StatusDot variant. queued → idle (greyed),
 // sending → connecting (warning), failed → offline (danger).
@@ -198,6 +200,7 @@ function UserRow({
   message,
   isActiveMatch,
   pendingStatus,
+  sessionId,
 }: {
   message: UserMessage;
   isActiveMatch?: boolean;
@@ -207,8 +210,32 @@ function UserRow({
   // clientId once a real user.message echoes back; until then the bubble
   // carries its pending-sends id and the chat screen looks the status up).
   pendingStatus?: PendingBubbleStatus;
+  // Required for AudioMessage (sessionId for retry-transcription).
+  sessionId?: string | null;
 }) {
   const tokens = useThemeTokens();
+
+  // Voice memo branch: render AudioMessage instead of the text bubble when
+  // the history row carries an audio blob. `messageId` is the DB row id
+  // encoded in the chat-store id string as "hist-u-<id>".
+  if (message.audioBlobUrl) {
+    // Extract the numeric row id from the stable chat-store id "hist-u-<n>".
+    // Fall back to the full id string if parsing fails (e.g. live-optimistic
+    // rows that don't yet have a DB id).
+    const rawId = message.id.startsWith("hist-u-") ? message.id.slice(7) : message.id;
+    return (
+      <AudioMessage
+        messageId={rawId}
+        sessionId={sessionId ?? ""}
+        audioBlobUrl={message.audioBlobUrl}
+        audioDurationMs={message.audioDurationMs ?? 0}
+        transcript={message.text}
+        transcriptionStatus={(message.transcriptionStatus ?? "completed") as TranscriptionStatus}
+        transcriptionError={message.transcriptionError}
+      />
+    );
+  }
+
   const hasText = message.text.length > 0;
   const hasAttachments =
     (message.attachments && message.attachments.length > 0) ||
@@ -1012,6 +1039,7 @@ function MessageInner({
           message={message}
           isActiveMatch={activeFlash}
           pendingStatus={pendingStatus}
+          sessionId={sessionId}
         />
       );
       break;
@@ -1256,7 +1284,9 @@ export const Message = memo(MessageInner, (prev, next) => {
       a.text === b.text &&
       a.attachments === b.attachments &&
       a.attachmentRefs === b.attachmentRefs &&
-      a.clientId === b.clientId
+      a.clientId === b.clientId &&
+      a.audioBlobUrl === b.audioBlobUrl &&
+      a.transcriptionStatus === b.transcriptionStatus
     );
   }
   if (a.kind === "assistant" && b.kind === "assistant") {
