@@ -116,6 +116,18 @@ Snapshots of the Hermes side (not gateway DB) are taken via
 
 ## Deploy log
 
+### 2026-05-08 — install-vps.sh idempotency fixes (Steps 5 + 6)
+
+- **Source:** `cd8e146` (latest `main`).
+- **Previous:** `5bbefbc` (Kokoro TTS + assistant audio bubble + auth rotation, same day).
+- **Migrations applied:** none.
+- **No service restart required** — only script changes.
+- **Fixes:**
+  - **Step 5 (auth.json check, `478a10e`):** `grep -q '"credential_pool":\s*{[^}]'` was line-oriented, so on a pretty-printed `auth.json` (where `{` sits at end-of-line), `[^}]` had nothing to match against and the check always failed. Replaced with a `have_creds()` python helper that parses the JSON and verifies at least one provider list under `credential_pool` is non-empty. Tested against populated pool (pass), missing key (reject), `{"credential_pool":{}}` (reject).
+  - **Step 6 (.env placeholder check, `cd8e146`):** `EXPO_ACCESS_TOKEN` was in the regex that flags empty/placeholder values, but `backend/src/config.ts` marks the variable `.optional()` (only required for high-volume push throughput) — empty is a legitimate state. Removed from the check; `JWT_SECRET` / `BOOTSTRAP_PASSWORD` / `APNS_KEY_P8` remain.
+- **Verified on VPS:** `install-vps.sh` now passes Steps 1–6 cleanly (`✓ credential pool populated`, `✓ .env present, no obvious placeholders`) and continues through build + migrate + systemd writeout.
+- **Branch state on VPS after deploy:** `main` tracking `origin/main` at `cd8e146`.
+
 ### 2026-05-08 — Kokoro TTS + assistant audio bubble + auth rotation
 
 - **Source:** `5bbefbc` (latest `main`).
