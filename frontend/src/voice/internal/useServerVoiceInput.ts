@@ -1,7 +1,7 @@
 /**
  * useServerVoiceInput — server-side STT backed voice input.
  *
- * Records a local M4A via expo-av, uploads it to the Hermes gateway
+ * Records a local M4A via expo-audio, uploads it to the Hermes gateway
  * (`POST /sessions/:id/transcribe`), and returns the transcript as a
  * single-shot result. No streaming — state transitions to `transcribing`
  * while the upload + inference round-trip is in flight.
@@ -20,7 +20,12 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Audio } from "expo-av";
+import {
+  RecordingPresets,
+  setAudioModeAsync,
+  useAudioRecorder,
+} from "expo-audio";
+import type { AudioRecorder } from "expo-audio";
 import * as FileSystem from "expo-file-system";
 import { requestIfNeeded } from "../permissions";
 import { postTranscribe, TranscribeError } from "../../api/transcribe";
@@ -58,12 +63,12 @@ const MIME = "audio/m4a";
 
 /**
  * Activate the iOS audio session for recording (playAndRecord so speaker is
- * still usable; playsInSilentModeIOS so recording works on silent switch).
+ * still usable; playsInSilentMode so recording works on silent switch).
  */
 async function activateRecordingMode(): Promise<void> {
-  await Audio.setAudioModeAsync({
-    allowsRecordingIOS: true,
-    playsInSilentModeIOS: true,
+  await setAudioModeAsync({
+    allowsRecording: true,
+    playsInSilentMode: true,
   });
 }
 
@@ -72,9 +77,9 @@ async function activateRecordingMode(): Promise<void> {
  * after the recording is stopped or cancelled.
  */
 async function deactivateRecordingMode(): Promise<void> {
-  await Audio.setAudioModeAsync({
-    allowsRecordingIOS: false,
-    playsInSilentModeIOS: false,
+  await setAudioModeAsync({
+    allowsRecording: false,
+    playsInSilentMode: false,
   });
 }
 
@@ -118,8 +123,12 @@ export function useServerVoiceInput(
   // (mirrors the ref+state dual pattern used by the other two engines).
   const transcriptRef = useRef<string>("");
 
-  // Current active Recording object — null when idle.
-  const recordingRef = useRef<Audio.Recording | null>(null);
+  // Long-lived recorder instance — managed by useAudioRecorder. Same object
+  // across record/stop cycles; we just call .record() / .stop() on it.
+  const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+
+  // Tracks whether a recording is currently in progress (mirrors recorder.isRecording).
+  const recordingRef = useRef<AudioRecorder | null>(null);
 
   // True between stop() call and upload completion — prevents double-stop.
   const stoppingRef = useRef<boolean>(false);
@@ -138,10 +147,10 @@ export function useServerVoiceInput(
         cancelledRef.current = true;
         recordingRef.current = null;
         void rec
-          .stopAndUnloadAsync()
+          .stop()
           .catch(() => undefined)
           .then(() => {
-            void deleteFile(rec.getURI());
+            void deleteFile(rec.uri);
             void deactivateRecordingMode().catch(() => undefined);
           });
       }
@@ -153,6 +162,7 @@ export function useServerVoiceInput(
   // -------------------------------------------------------------------------
 
   const start = useCallback(async (): Promise<void> => {
+    // recorder is captured in the closure below; effective dependency is `enabled` only.
     if (!enabled) return;
     if (recordingRef.current || stoppingRef.current) return;
 
@@ -178,12 +188,9 @@ export function useServerVoiceInput(
 
     try {
       await activateRecordingMode();
-      const recording = new Audio.Recording();
-      await recording.prepareToRecordAsync(
-        Audio.RecordingOptionsPresets.HIGH_QUALITY,
-      );
-      await recording.startAsync();
-      recordingRef.current = recording;
+      await recorder.prepareToRecordAsync();
+      recorder.record();
+      recordingRef.current = recorder;
       setIsListening(true);
       setState({ kind: "recording", partialTranscript: "" });
     } catch (err: unknown) {
@@ -194,7 +201,7 @@ export function useServerVoiceInput(
       setError(audioError);
       setState({ kind: "error", error: audioError });
     }
-  }, [enabled]);
+  }, [enabled, recorder]);
 
   // -------------------------------------------------------------------------
   // stop — uploads and awaits transcript
@@ -211,8 +218,8 @@ export function useServerVoiceInput(
     let fileUri: string | null = null;
 
     try {
-      await recording.stopAndUnloadAsync();
-      fileUri = recording.getURI();
+      await recording.stop();
+      fileUri = recording.uri;
       await deactivateRecordingMode().catch(() => undefined);
 
       // Bail if cancelled between stopAndUnloadAsync and here.
@@ -294,11 +301,11 @@ export function useServerVoiceInput(
 
     void (async () => {
       try {
-        await recording.stopAndUnloadAsync();
+        await recording.stop();
       } catch {
         // Ignore — we're discarding.
       }
-      await deleteFile(recording.getURI());
+      await deleteFile(recording.uri);
       await deactivateRecordingMode().catch(() => undefined);
       cancelledRef.current = false;
       stoppingRef.current = false;
