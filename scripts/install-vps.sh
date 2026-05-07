@@ -182,9 +182,11 @@ if [[ ! -f "${ENV_FILE}" ]]; then
 fi
 
 # Detect obvious placeholders. If still present, bail.
-if grep -qE '^(JWT_SECRET|BOOTSTRAP_PASSWORD|APNS_KEY_P8|EXPO_ACCESS_TOKEN)=(\s*$|change[-_]me|placeholder|TODO|XXX)' "${ENV_FILE}"; then
+# EXPO_ACCESS_TOKEN is intentionally NOT checked — config.ts marks it optional
+# (only required for high-volume push throughput), so an empty value is valid.
+if grep -qE '^(JWT_SECRET|BOOTSTRAP_PASSWORD|APNS_KEY_P8)=(\s*$|change[-_]me|placeholder|TODO|XXX)' "${ENV_FILE}"; then
   warn "${ENV_FILE} still contains placeholder values"
-  grep -nE '^(JWT_SECRET|BOOTSTRAP_PASSWORD|APNS_KEY_P8|EXPO_ACCESS_TOKEN)=(\s*$|change[-_]me|placeholder|TODO|XXX)' "${ENV_FILE}" || true
+  grep -nE '^(JWT_SECRET|BOOTSTRAP_PASSWORD|APNS_KEY_P8)=(\s*$|change[-_]me|placeholder|TODO|XXX)' "${ENV_FILE}" || true
   c_yellow "  Edit and re-run."
   exit 6
 fi
