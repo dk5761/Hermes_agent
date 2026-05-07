@@ -184,6 +184,70 @@ async function forwardTranscriptToHermes(
   }
 }
 
+/**
+ * Validate a raw JSON string received from the client as `audioPeaks`.
+ *
+ * Rules:
+ *   - Must parse as JSON array.
+ *   - Length must equal exactly 80.
+ *   - Every element must be a finite number in [0, 1].
+ *
+ * @param raw  Raw JSON string from the multipart field, or null if absent.
+ * @returns Validated peaks array, or null if absent / invalid.
+ */
+function parseClientPeaks(raw: string | null): number[] | null {
+  if (raw === null) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(parsed) || parsed.length !== 80) return null;
+  for (const v of parsed) {
+    if (typeof v !== "number" || !isFinite(v) || v < 0 || v > 1) return null;
+  }
+  return parsed as number[];
+}
+
+/**
+ * Resolve audio peaks, preferring client-supplied values over ffmpeg extraction.
+ *
+ * If `clientPeaksRaw` is a valid 80-element float[0..1] JSON array, it is used
+ * directly and ffmpeg is skipped. Otherwise falls back to `extractAudioPeaks`.
+ *
+ * @param absolutePath   Path to the stored audio blob.
+ * @param clientPeaksRaw Raw `audioPeaks` multipart field value, or null.
+ * @param sessionId      For structured log context.
+ * @param logger         Structured logger.
+ * @returns 80-element peaks array, or null on extraction failure.
+ */
+async function resolveAudioPeaks(
+  absolutePath: string,
+  clientPeaksRaw: string | null,
+  sessionId: string,
+  logger: AppLogger,
+): Promise<number[] | null> {
+  const clientPeaks = parseClientPeaks(clientPeaksRaw);
+
+  if (clientPeaks !== null) {
+    logger.info({ sessionId, source: "client" }, "voice memo peaks from client");
+    return clientPeaks;
+  }
+
+  if (clientPeaksRaw !== null) {
+    // Field was present but failed validation — warn before falling back.
+    logger.warn({ sessionId }, "voice-memo: client audioPeaks invalid, falling back to ffmpeg");
+  }
+
+  logger.info({ sessionId, source: "ffmpeg" }, "voice memo peaks via ffmpeg");
+  const peaks = await extractAudioPeaks(absolutePath).catch(() => null);
+  if (peaks === null) {
+    logger.warn({ blobPath: absolutePath }, "audio peaks extraction failed; storing null");
+  }
+  return peaks;
+}
+
 // Builds the message envelope sent back to the client.
 function buildMessageEnvelope(row: {
   id: number;
@@ -251,11 +315,13 @@ export async function registerVoiceMemoRoutes(
       if (!sessionRows[0]) return reply.code(404).send({ error: "not_found" });
 
       // Parse multipart body with request.parts() so we can read both the
-      // `audio` file part and the optional `audioDurationMs` field part in
-      // one pass. The per-part fileSize limit mirrors the transcribe route.
+      // `audio` file part and the optional `audioDurationMs` / `audioPeaks`
+      // field parts in one pass. The per-part fileSize limit mirrors the
+      // transcribe route.
       let buffer: Buffer | null = null;
       let mime = "audio/m4a";
       let audioDurationMs: number | null = null;
+      let clientPeaksRaw: string | null = null;
       let truncated = false;
 
       try {
@@ -270,6 +336,8 @@ export async function registerVoiceMemoRoutes(
             if (Number.isFinite(parsed) && parsed >= 0) {
               audioDurationMs = Math.min(Math.floor(parsed), MAX_DURATION_MS);
             }
+          } else if (part.type === "field" && part.fieldname === "audioPeaks") {
+            clientPeaksRaw = typeof part.value === "string" ? part.value : null;
           }
         }
       } catch (err) {
@@ -305,15 +373,11 @@ export async function registerVoiceMemoRoutes(
         return reply.code(500).send({ error: "blob_write_failed" });
       }
 
-      // Extract audio peaks for waveform visualization. Must complete before
-      // the INSERT so the row is never written without its peaks — extraction
-      // failure is non-fatal; null means the frontend falls back to a plain
-      // progress bar.
+      // Extract audio peaks for waveform visualization. Client peaks are
+      // preferred (skip expensive ffmpeg call). Falls back to ffmpeg when the
+      // client didn't send peaks or the payload fails validation.
       const absolutePath = path.join(blobRoot, relKey);
-      const peaks = await extractAudioPeaks(absolutePath).catch(() => null);
-      if (peaks === null) {
-        logger.warn({ blobPath: absolutePath }, "audio peaks extraction failed; storing null");
-      }
+      const peaks = await resolveAudioPeaks(absolutePath, clientPeaksRaw, sessionId, logger);
 
       // Insert chat_history row immediately so the blob + row survive STT failure.
       const now = Math.floor(Date.now() / 1000);
