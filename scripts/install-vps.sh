@@ -128,8 +128,24 @@ step "Step 5/11: Hermes API key"
 
 # `hermes setup` is interactive (prompts for provider + API key). We can't
 # automate that without leaking the key. Detect "no provider configured" and
-# bail with instructions.
-if ! [[ -f "${HERMES_HOME}/auth.json" ]] || ! grep -q '"credential_pool":\s*{[^}]' "${HERMES_HOME}/auth.json" 2>/dev/null; then
+# bail with instructions. Use python rather than grep because auth.json is
+# pretty-printed JSON — a regex like `"credential_pool":\s*{[^}]` is line-
+# oriented and fails when `{` sits at end-of-line (the common case).
+have_creds() {
+  [[ -f "${HERMES_HOME}/auth.json" ]] || return 1
+  python3 - "$1" <<'PY' 2>/dev/null
+import json, sys
+try:
+    with open(sys.argv[1]) as f:
+        d = json.load(f)
+except Exception:
+    sys.exit(1)
+pool = d.get("credential_pool") or {}
+sys.exit(0 if any(isinstance(v, list) and v for v in pool.values()) else 1)
+PY
+}
+
+if ! have_creds "${HERMES_HOME}/auth.json"; then
   warn "no provider credentials in ${HERMES_HOME}/auth.json"
   c_yellow ""
   c_yellow "  Run interactively to add an LLM provider:"
