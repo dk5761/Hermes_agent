@@ -308,6 +308,8 @@ export interface MicButtonProps {
   addsPunctuation?: boolean;
   /** Optional size in points. Default 44 (iOS HIG min tap target). */
   size?: number;
+  /** Active session ID forwarded to the server voice engine. */
+  sessionId?: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -327,6 +329,7 @@ export function MicButton({
   language,
   addsPunctuation = true,
   size = DEFAULT_SIZE,
+  sessionId,
 }: MicButtonProps): React.ReactElement {
   const tokens = useThemeTokens();
   const reducedMotion = useReducedMotion();
@@ -339,6 +342,7 @@ export function MicButton({
     language,
     addsPunctuation,
     onFinalTranscript: onTranscript,
+    sessionId: sessionId ?? undefined,
   });
 
   // -------------------------------------------------------------------------

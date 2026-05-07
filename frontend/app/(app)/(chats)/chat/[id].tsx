@@ -2328,6 +2328,7 @@ export default function ChatScreen() {
                 onTranscriptChange={onVoiceTranscriptChange}
                 onTranscript={onVoiceTranscript}
                 onError={onVoiceError}
+                sessionId={sessionId}
                 size={32}
               />
             ) : null}
