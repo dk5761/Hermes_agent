@@ -34,3 +34,4 @@ pnpm-debug.*
 # Temp / scratch
 /tmp/
 *.tmp
+hermes-agent
