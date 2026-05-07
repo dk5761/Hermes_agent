@@ -31,17 +31,29 @@ export interface HistoryRow {
   audioPeaks: number[] | null;
 }
 
+/** Optional audio metadata to persist alongside a history row. */
+export interface AppendHistoryAudio {
+  /** Relative key under the blob root, e.g. `voice/<sha>.mp3`. */
+  blobPath: string;
+  /** Duration of the audio in milliseconds. */
+  durationMs: number;
+  /** 80-element waveform peaks (0..1), or null when unavailable. */
+  peaks: number[] | null;
+}
+
 export async function appendHistory(
   db: Db,
   appSessionId: string,
   kind: HistoryKind,
   payload: unknown,
   createdAt?: number,
+  opts?: { audio?: AppendHistoryAudio },
 ): Promise<HistoryRow> {
   const ts = createdAt ?? Math.floor(Date.now() / 1000);
   // Approach A: populate search_text at write time so the FTS AI trigger
   // mirrors usable content. Backfill indexer covers pre-FTS rows on boot.
   const searchText = extractSearchableText(kind, payload) ?? "";
+  const audio = opts?.audio;
   const inserted = await db
     .insert(chatHistory)
     .values({
@@ -50,6 +62,13 @@ export async function appendHistory(
       payloadJson: JSON.stringify(payload ?? null),
       createdAt: ts,
       searchText,
+      ...(audio
+        ? {
+            audioBlobPath: audio.blobPath,
+            audioDurationMs: audio.durationMs,
+            audioPeaksJson: audio.peaks !== null ? JSON.stringify(audio.peaks) : null,
+          }
+        : {}),
     })
     .returning({ id: chatHistory.id });
   const idRow = inserted[0];
@@ -59,12 +78,11 @@ export async function appendHistory(
     kind,
     payload: (payload ?? {}) as Record<string, unknown>,
     createdAt: ts,
-    // appendHistory only writes text/tool rows — no audio fields.
-    audioBlobUrl: null,
-    audioDurationMs: null,
+    audioBlobUrl: audio ? `/voice-blobs/${audio.blobPath}` : null,
+    audioDurationMs: audio?.durationMs ?? null,
     transcriptionStatus: null,
     transcriptionError: null,
-    audioPeaks: null,
+    audioPeaks: audio?.peaks ?? null,
   };
 }
 

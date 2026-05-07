@@ -15,6 +15,7 @@ import {
   isPersistedEventType,
 } from "./event-log.js";
 import { appendHistory, type HistoryKind } from "./chat-history.js";
+import { extractTtsMedia, translateHermesPath, relocateTtsBlob } from "./tts-bridge.js";
 import { deriveTitleFromTurn } from "../util/auto-title.js";
 import type { HermesWsPool } from "../hermes/ws-pool.js";
 import type { HermesEventParams, JsonValue } from "../hermes/types.js";
@@ -37,6 +38,8 @@ export interface GatewayWsDeps {
   logger: AppLogger;
   wsPool: HermesWsPool;
   attachmentBridge: AttachmentBridge;
+  /** Absolute path to the blob store root (STORAGE_LOCAL_ROOT). Used by the TTS bridge. */
+  blobRoot: string;
   // Phase 7: per-run timing recorder. Optional so tests can omit it.
   chatRunTimer?: ChatRunTimer;
   // ActivityKit push provider — wired by server.ts.
@@ -186,6 +189,7 @@ export async function registerGatewayWsRoute(
       reverse,
       registry,
       log,
+      deps.blobRoot,
       deps.chatRunTimer,
       deps.liveActivityPusher,
       deps.chatCompleteNotifier,
@@ -881,6 +885,7 @@ async function handleUpstreamEvent(
   reverse: ReverseSessionMap,
   registry: SubscriberRegistry,
   log: AppLogger,
+  blobRoot: string,
   chatRunTimer: ChatRunTimer | undefined,
   liveActivityPusher: LiveActivityPusher | undefined,
   chatCompleteNotifier: ChatCompleteNotifier | undefined,
@@ -928,6 +933,66 @@ async function handleUpstreamEvent(
     return;
   }
   try {
+    // TTS bridge: intercept tool.complete for text_to_speech calls. When the
+    // audio blob is successfully relocated, we persist audio metadata on the
+    // chat_history row and inject audio fields into the live envelope payload so
+    // connected clients receive them without a separate reload.
+    if (ev.type === "tool.complete") {
+      const media = extractTtsMedia(ev.payload);
+      if (media) {
+        const hermesHome = process.env["HERMES_HOME"] ?? "/data/hermes-home";
+        const accessible = translateHermesPath(media.absPath, hermesHome);
+        if (accessible) {
+          const relocated = await relocateTtsBlob(accessible, blobRoot, log);
+          if (relocated) {
+            // Mutate the payload object once so both the DB record and the live
+            // envelope carry the audio fields. Clients and replay both read from
+            // the same source.
+            const enriched: Record<string, unknown> =
+              ev.payload && typeof ev.payload === "object"
+                ? { ...(ev.payload as Record<string, unknown>) }
+                : {};
+            enriched["audio_blob_url"] = `/voice-blobs/${relocated.relKey}`;
+            enriched["audio_duration_ms"] = relocated.durationMs;
+            enriched["audio_peaks"] = relocated.peaks;
+
+            const env = await appendEvent(db, {
+              appSessionId,
+              type: ev.type,
+              payload: enriched,
+            });
+            registry.emit(appSessionId, env);
+
+            // Persist chat_history row with audio columns populated.
+            await appendHistory(db, appSessionId, "tool.call", enriched, undefined, {
+              audio: {
+                blobPath: relocated.relKey,
+                durationMs: relocated.durationMs,
+                peaks: relocated.peaks,
+              },
+            });
+
+            // Live Activity push (same as the default path below).
+            if (liveActivityPusher) {
+              void pushLiveActivityForEvent(
+                db,
+                appSessionId,
+                { ...ev, payload: enriched as JsonValue },
+                liveActivityPusher,
+                log,
+              ).catch((err: unknown) =>
+                log.warn({ err }, "live-activity push dispatch failed (tts)"),
+              );
+            }
+            return;
+          }
+        }
+        // Relocation failed — fall through to normal persist path so the
+        // tool.call row is still recorded (without audio fields).
+        log.warn({ absPath: media.absPath }, "tts-bridge: blob relocation failed; persisting without audio");
+      }
+    }
+
     const env = await appendEvent(db, {
       appSessionId,
       type: ev.type,

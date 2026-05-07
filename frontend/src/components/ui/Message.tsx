@@ -1131,6 +1131,37 @@ function MessageInner({
         );
         break;
       }
+      // TTS tool.call rows render as a playable audio bubble rather than the
+      // default tool card. Fall back to the tool card if the audio URL is
+      // absent (e.g. relocate failed on the gateway side).
+      if (
+        message.name === "text_to_speech" &&
+        typeof message.detail?.["audio_blob_url"] === "string" &&
+        message.detail["audio_blob_url"].length > 0
+      ) {
+        const url = message.detail["audio_blob_url"] as string;
+        const durationMs =
+          typeof message.detail?.["audio_duration_ms"] === "number"
+            ? (message.detail["audio_duration_ms"] as number)
+            : 0;
+        const peaks = Array.isArray(message.detail?.["audio_peaks"])
+          ? (message.detail["audio_peaks"] as number[])
+          : null;
+        inner = (
+          <AudioMessage
+            variant="assistant"
+            messageId={message.id}
+            sessionId={sessionId ?? ""}
+            audioBlobUrl={url}
+            audioDurationMs={durationMs}
+            transcript=""
+            transcriptionStatus="completed"
+            transcriptionError={null}
+            audioPeaks={peaks}
+          />
+        );
+        break;
+      }
       inner = <ToolRow data={message} sessionId={sessionId} />;
       break;
     }

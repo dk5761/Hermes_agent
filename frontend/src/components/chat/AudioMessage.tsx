@@ -51,6 +51,15 @@ export interface AudioMessageProps {
   messageId: string;
   sessionId: string;
   /**
+   * Controls visual layout and feature visibility.
+   * - `"user"` (default): right-aligned ink bubble with transcription accordion
+   *   and retry CTA.
+   * - `"assistant"`: left-aligned surface bubble; transcription accordion and
+   *   retry CTA are hidden because the agent's text bubble already carries the
+   *   transcript.
+   */
+  variant?: "user" | "assistant";
+  /**
    * Relative path like `/voice-blobs/voice/<sha>.m4a`. Set ONCE the upload
    * has succeeded and the server has stored the blob. Optimistic memos
    * before upload completes have this undefined; playback falls back to
@@ -342,19 +351,24 @@ function Waveform({
 // ---------------------------------------------------------------------------
 
 /**
- * Audio message bubble for voice memos.
+ * Audio message bubble for voice memos and assistant TTS output.
  *
- * @param messageId         - Unique identifier for the chat_history row.
- * @param sessionId         - Active app session ID (for retry-transcription).
- * @param audioBlobUrl      - Relative blob URL to stream / cache.
- * @param audioDurationMs   - Duration hint shown before the player loads.
- * @param transcript        - STT output text shown as caption.
- * @param transcriptionStatus - "transcribing" | "completed" | "failed".
- * @param transcriptionError  - Error detail shown when status is "failed".
+ * @param messageId           - Unique identifier for the chat_history row.
+ * @param sessionId           - Active app session ID (for retry-transcription).
+ * @param variant             - `"user"` (default) or `"assistant"`. The
+ *                              assistant variant renders left-aligned with a
+ *                              surface background and hides the transcription
+ *                              accordion and retry CTA.
+ * @param audioBlobUrl        - Relative blob URL to stream / cache.
+ * @param audioDurationMs     - Duration hint shown before the player loads.
+ * @param transcript          - STT output text shown as caption (user variant).
+ * @param transcriptionStatus - `"transcribing" | "completed" | "failed"`.
+ * @param transcriptionError  - Error detail shown when status is `"failed"`.
  */
 export function AudioMessage({
   messageId,
   sessionId,
+  variant = "user",
   audioBlobUrl,
   localAudioUri,
   audioDurationMs,
@@ -429,13 +443,19 @@ export function AudioMessage({
 
   // ── Layout ─────────────────────────────────────────────────────────────────
 
+  // Assistant variant: left-aligned surface bubble (mirrors AssistantRow).
+  // User variant: right-aligned ink bubble.
+  const isAssistant = variant === "assistant";
+
   return (
-    <View style={{ paddingHorizontal: 12, paddingVertical: 4, alignItems: "flex-end" }}>
+    <View style={{ paddingHorizontal: 12, paddingVertical: 4, alignItems: isAssistant ? "flex-start" : "flex-end" }}>
       <View
         style={[
           styles.bubble,
           {
-            backgroundColor: tokens.ink,
+            backgroundColor: isAssistant ? tokens.surface : tokens.ink,
+            borderWidth: isAssistant ? 1 : 0,
+            borderColor: isAssistant ? tokens.line : undefined,
             // Fixed width regardless of accordion state. Calc:
             //   bubble pad-x = 24 (12+12)
             //   play button  = 34
@@ -464,7 +484,8 @@ export function AudioMessage({
             style={({ pressed }) => [
               styles.playBtn,
               {
-                backgroundColor: tokens.surface,
+                // Assistant: ink circle on surface bg. User: surface circle on ink bg.
+                backgroundColor: isAssistant ? tokens.chip : tokens.surface,
                 opacity: pressed ? 0.7 : 1,
               },
             ]}
@@ -489,14 +510,15 @@ export function AudioMessage({
                 progress={progress}
                 onSeek={handleSeek}
                 tintColor={tokens.ink3}
-                fillColor={tokens.surface}
+                // User: filled bars are surface (light on dark). Assistant: ink (dark on light).
+                fillColor={isAssistant ? tokens.ink : tokens.surface}
               />
             ) : (
               <Scrubber
                 progress={progress}
                 onSeek={handleSeek}
                 trackColor={tokens.ink3}
-                fillColor={tokens.surface}
+                fillColor={isAssistant ? tokens.ink : tokens.surface}
               />
             )}
             <Text
@@ -510,10 +532,10 @@ export function AudioMessage({
           </View>
         </Row>
 
-        {/* ── Transcription section ── */}
+        {/* ── Transcription section (user variant only) ── */}
 
         {/* In-flight: show spinner row (not an accordion — user can't interact) */}
-        {transcriptionStatus === "transcribing" ? (
+        {!isAssistant && transcriptionStatus === "transcribing" ? (
           <Row
             gap={6}
             align="center"
@@ -531,8 +553,8 @@ export function AudioMessage({
           </Row>
         ) : null}
 
-        {/* Completed: collapsible accordion (collapsed by default) */}
-        {transcriptionStatus === "completed" && transcript.length > 0 ? (
+        {/* Completed: collapsible accordion (user variant only — assistant text bubble carries transcript) */}
+        {!isAssistant && transcriptionStatus === "completed" && transcript.length > 0 ? (
           <View
             style={{
               marginTop: 8,
@@ -600,8 +622,8 @@ export function AudioMessage({
           </View>
         ) : null}
 
-        {/* ── Retry CTA for failed transcriptions (always visible) ── */}
-        {transcriptionStatus === "failed" ? (
+        {/* ── Retry CTA for failed transcriptions (user variant only) ── */}
+        {!isAssistant && transcriptionStatus === "failed" ? (
           <Pressable
             onPress={() => void handleRetry()}
             disabled={retrying}

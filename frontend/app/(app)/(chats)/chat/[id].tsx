@@ -306,6 +306,13 @@ function historyRowToUiRow(
     }
     case "tool.call": {
       const name = pickString(p, "name") || "tool";
+      // Merge audio fields from the HistoryRow columns into detail so the
+      // Message.tsx ToolCard renderer can find them (same keys the live
+      // tool.complete envelope uses, enabling a single read path).
+      const detail: Record<string, unknown> = { ...p };
+      if (r.audioBlobUrl) detail.audio_blob_url = r.audioBlobUrl;
+      if (r.audioDurationMs != null) detail.audio_duration_ms = r.audioDurationMs;
+      if (r.audioPeaks != null) detail.audio_peaks = r.audioPeaks;
       return {
         rowKind: "msg",
         data: {
@@ -313,7 +320,7 @@ function historyRowToUiRow(
           id: `hist-t-${r.id}`,
           name,
           status: "complete",
-          detail: p,
+          detail,
           createdAt: iso,
           ...(subagentsForThisRow && subagentsForThisRow.length > 0
             ? { subagents: subagentsForThisRow }

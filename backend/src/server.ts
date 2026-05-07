@@ -324,6 +324,7 @@ export async function buildServer(deps: BuildServerDeps): Promise<FastifyInstanc
     logger: deps.logger,
     wsPool: deps.wsPool,
     attachmentBridge,
+    blobRoot: deps.config.STORAGE_LOCAL_ROOT,
     liveActivityPusher,
     ...(deps.chatRunTimer ? { chatRunTimer: deps.chatRunTimer } : {}),
     ...(chatCompleteNotifier ? { chatCompleteNotifier } : {}),
