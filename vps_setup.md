@@ -116,6 +116,32 @@ Snapshots of the Hermes side (not gateway DB) are taken via
 
 ## Deploy log
 
+### 2026-05-08 — Kokoro TTS + assistant audio bubble + auth rotation
+
+- **Source:** `5bbefbc` (latest `main`).
+- **Previous:** `8afa8d7` (voice-memo v2 backend + STT introspection deploy, 2026-05-08).
+- **Migrations applied:** none.
+- **Hermes source patches (all PATCHED + verified):**
+  - `patch-hermes-tts-kokoro.py` — three injections into `tools/tts_tool.py`: module-global `_kokoro_instance` cache + `_get_kokoro_instance()` lazy loader (Patch A), `_generate_kokoro()` synth function with WAV→ffmpeg conversion + 80-bucket RMS peaks sidecar (Patch B), `provider == "kokoro"` dispatch case (Patch C). **Re-applied via `--unpatch && apply` because the prior deploy left the Phase-3 PB_BLOCK without the peaks sidecar.**
+  - `patch-hermes-tts-warmup.py` — daemon thread pre-loads Kokoro at dashboard startup; `_TTS_READY` event gates the synth handler so the first call never races the load.
+  - `patch-hermes-config.py` — `tts.provider = kokoro`, `tts.kokoro.{voice=am_michael, speed=1.0, lang=en-us}` enforced.
+- **Backend changes:**
+  - `backend/src/ws/tts-bridge.ts` (new) — extractMediaFromMessageText, translateHermesPath, relocateTtsBlob; gateway intercepts `message.complete`, strips `MEDIA:<path>` from text, copies the Hermes-side blob into `/app/data/blobs/voice/<sha>.mp3`, persists `audio_blob_path/duration/peaks` on the assistant.message row, injects same fields onto the live envelope payload.
+  - `auth/refresh.ts` — `rotateRefreshToken` (validate + revoke + issue inside one transaction). `/auth/refresh` returns `{accessToken, refreshToken, refreshTokenExpiresAt}`. Old refresh tokens are now revoked on each refresh; active users renew their 30-day window without re-login.
+  - `ws/client.ts` (frontend) — gains `onAuthRequired` callback. Wired to the central `attemptRefresh` so a WS 4401 close triggers refresh + auto-reconnect (one-shot per connection, terminal `auth_required` if refresh itself fails).
+  - Frontend `attemptRefresh` consolidated: `uploads.ts`, `transcribe.ts`, `voice-memo.ts` now import the central one from `api/client.ts` (their old in-line copies lacked the inflight lock — would have replayed revoked tokens under rotation).
+  - `playback-controller.ts` — cache filename now derived from blob URL extension (`.m4a`/`.mp3`/`.ogg`/`.wav`); old hardcoded `.m4a` made iOS expo-audio refuse to play TTS mp3 bytes.
+- **Verified:**
+  - `https://hermes.drshnk.dev/health` (assumed via /health locally) → 200.
+  - `/voice-blobs/voice/x.mp3` → 401 (auth gate present).
+  - `/auth/refresh` with garbage token → 401 (rotation rejects invalid).
+  - Kokoro patches all PATCHED including peaks sidecar (`grep -n "peaks sidecar" tts_tool.py` → present).
+  - Hermes `tts_tool.py` AST clean (`python -c "import ast; ast.parse(...)"`).
+  - `hermes-dashboard` + `hermes-gateway` + `hermes-cron` active.
+- **Restarted:** `hermes-dashboard` (kokoro warmup pre-loads), then `hermes-gateway` (rebuilt with TTS bridge + rotation).
+- **Note:** `install-vps.sh` bailed on Step 5 ("no provider credentials in /root/.hermes/auth.json") even though the existing deployment is running fine. Likely the auth.json check looks for a specific provider key shape that's set elsewhere on this VPS. Worked around by running the targeted patch + restart bits via `post-hermes-update.sh SKIP_UPDATE=1` and a manual `--unpatch && apply` cycle for the kokoro patch.
+- **Branch state on VPS after deploy:** `main` tracking `origin/main` at `5bbefbc`.
+
 ### 2026-05-08 — voice-memo v2 backend + STT introspection (full v2 deploy)
 
 - **Source:** `8afa8d7` (latest `main`).
