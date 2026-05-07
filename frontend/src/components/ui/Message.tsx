@@ -450,6 +450,25 @@ function AssistantRow({
           ...
         </Text>
       ) : null}
+      {/* TTS bridge: when Hermes' text_to_speech ran this turn, the gateway
+          attaches an audio blob URL to the assistant message. Render an
+          inline AudioMessage below the text so the user can play the synth
+          alongside the transcript already shown above. */}
+      {message.audioBlobUrl ? (
+        <View style={{ marginTop: 8 }}>
+          <AudioMessage
+            variant="assistant"
+            messageId={message.id}
+            sessionId=""
+            audioBlobUrl={message.audioBlobUrl}
+            audioDurationMs={message.audioDurationMs ?? 0}
+            transcript=""
+            transcriptionStatus="completed"
+            transcriptionError={null}
+            audioPeaks={message.audioPeaks ?? null}
+          />
+        </View>
+      ) : null}
       {message.warning ? (
         <Row
           gap={6}

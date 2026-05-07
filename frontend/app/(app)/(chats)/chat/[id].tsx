@@ -290,7 +290,10 @@ function historyRowToUiRow(
       const warning = pickString(p, "warning");
       const status = pickString(p, "status");
       const interrupted = status === "interrupted";
-      if (!text && !reasoning) return null;
+      const hasAudio = !!r.audioBlobUrl;
+      // Audio-only rows (text fully consisted of the MEDIA: tag) are still
+      // rendered when audio is attached; otherwise require text/reasoning.
+      if (!text && !reasoning && !hasAudio) return null;
       return {
         rowKind: "msg",
         data: {
@@ -300,6 +303,12 @@ function historyRowToUiRow(
           ...(reasoning ? { reasoning } : {}),
           ...(warning ? { warning } : {}),
           ...(interrupted ? { interrupted: true } : {}),
+          // TTS bridge: gateway writes audio_blob_path on assistant.message
+          // rows when text_to_speech runs. Surface to AssistantBubble for
+          // inline AudioMessage rendering below the text.
+          ...(r.audioBlobUrl ? { audioBlobUrl: r.audioBlobUrl } : {}),
+          ...(r.audioDurationMs != null ? { audioDurationMs: r.audioDurationMs } : {}),
+          ...(r.audioPeaks != null ? { audioPeaks: r.audioPeaks } : {}),
           createdAt: iso,
         },
       };

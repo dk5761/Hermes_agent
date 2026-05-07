@@ -63,6 +63,13 @@ export interface AssistantMessage {
   // True when this turn was cancelled mid-flight via session.interrupt.
   // Drives the "Stopped" pill in the assistant bubble.
   interrupted?: boolean;
+  // TTS bridge: when Hermes' text_to_speech tool runs and the gateway
+  // relocates the blob, the assistant.message envelope carries these so the
+  // bubble can render an inline AudioMessage below the text. All optional —
+  // a plain text reply leaves them undefined.
+  audioBlobUrl?: string;
+  audioDurationMs?: number;
+  audioPeaks?: number[] | null;
 }
 
 // Subtask of a parent `delegate_task` tool call. Hermes emits dedicated
@@ -459,6 +466,17 @@ function reduce(state: ChatSessionState, env: GatewayEventEnvelope): ChatSession
         const ms = end - next.streaming.reasoningStartedAt;
         if (ms > 0) reasoningDurationMs = ms;
       }
+      // TTS bridge: gateway injects audio_* keys on the message.complete
+      // payload when Hermes' text_to_speech tool produced a blob this turn.
+      // Pass them straight through to the bubble for AudioMessage rendering.
+      const audioBlobUrl = getString(payload, "audio_blob_url");
+      const audioDurationMsRaw = (payload as Record<string, unknown>)["audio_duration_ms"];
+      const audioDurationMs =
+        typeof audioDurationMsRaw === "number" ? audioDurationMsRaw : undefined;
+      const audioPeaksRaw = (payload as Record<string, unknown>)["audio_peaks"];
+      const audioPeaks = Array.isArray(audioPeaksRaw)
+        ? (audioPeaksRaw.filter((v): v is number => typeof v === "number") as number[])
+        : undefined;
       const msg: AssistantMessage = {
         kind: "assistant",
         id: `assistant-${env.id > 0 ? env.id : genId("a")}`,
@@ -468,6 +486,9 @@ function reduce(state: ChatSessionState, env: GatewayEventEnvelope): ChatSession
         createdAt: env.createdAt,
         ...(reasoningDurationMs !== undefined ? { reasoningDurationMs } : {}),
         ...(isInterrupted ? { interrupted: true } : {}),
+        ...(audioBlobUrl ? { audioBlobUrl } : {}),
+        ...(audioDurationMs !== undefined ? { audioDurationMs } : {}),
+        ...(audioPeaks ? { audioPeaks } : {}),
       };
       next.messages = [...next.messages, msg];
       next.streaming = null;

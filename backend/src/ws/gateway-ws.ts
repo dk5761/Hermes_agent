@@ -15,7 +15,12 @@ import {
   isPersistedEventType,
 } from "./event-log.js";
 import { appendHistory, type HistoryKind } from "./chat-history.js";
-import { extractTtsMedia, translateHermesPath, relocateTtsBlob } from "./tts-bridge.js";
+import {
+  extractTtsMedia,
+  extractMediaFromMessageText,
+  translateHermesPath,
+  relocateTtsBlob,
+} from "./tts-bridge.js";
 import { deriveTitleFromTurn } from "../util/auto-title.js";
 import type { HermesWsPool } from "../hermes/ws-pool.js";
 import type { HermesEventParams, JsonValue } from "../hermes/types.js";
@@ -933,10 +938,96 @@ async function handleUpstreamEvent(
     return;
   }
   try {
-    // TTS bridge: intercept tool.complete for text_to_speech calls. When the
-    // audio blob is successfully relocated, we persist audio metadata on the
-    // chat_history row and inject audio fields into the live envelope payload so
-    // connected clients receive them without a separate reload.
+    // TTS bridge (assistant message path): Hermes' text_to_speech tool emits a
+    // `MEDIA:<path>` line embedded in the assistant message text — that's the
+    // protocol it uses for messaging-platform layers (Telegram, Discord) to
+    // intercept and replace with an audio attachment. We do the same: pull the
+    // path out, strip the line so it doesn't render as raw text, relocate the
+    // blob, and attach audio fields to the assistant.message row + envelope.
+    if (ev.type === "message.complete") {
+      const payloadObj =
+        ev.payload && typeof ev.payload === "object"
+          ? (ev.payload as Record<string, unknown>)
+          : null;
+      if (payloadObj) {
+        const stripped = extractMediaFromMessageText(payloadObj["text"]);
+        if (stripped.absPath) {
+          const hermesHome = process.env["HERMES_HOME"] ?? "/data/hermes-home";
+          const accessible = translateHermesPath(stripped.absPath, hermesHome);
+          let relocated: Awaited<ReturnType<typeof relocateTtsBlob>> = null;
+          if (accessible) {
+            relocated = await relocateTtsBlob(accessible, blobRoot, log);
+            if (!relocated) {
+              log.warn(
+                { absPath: stripped.absPath },
+                "tts-bridge: message.complete blob relocation failed; persisting stripped text only",
+              );
+            }
+          } else {
+            log.warn(
+              { absPath: stripped.absPath },
+              "tts-bridge: message.complete media path not accessible to gateway",
+            );
+          }
+          // Build enriched payload: stripped text always, audio fields when relocated.
+          const enriched: Record<string, unknown> = {
+            ...payloadObj,
+            text: stripped.text,
+          };
+          if (relocated) {
+            enriched["audio_blob_url"] = `/voice-blobs/${relocated.relKey}`;
+            enriched["audio_duration_ms"] = relocated.durationMs;
+            enriched["audio_peaks"] = relocated.peaks;
+          }
+          const env = await appendEvent(db, {
+            appSessionId,
+            type: ev.type,
+            payload: enriched,
+          });
+          registry.emit(appSessionId, env);
+          await appendHistory(
+            db,
+            appSessionId,
+            "assistant.message",
+            enriched,
+            undefined,
+            relocated
+              ? {
+                  audio: {
+                    blobPath: relocated.relKey,
+                    durationMs: relocated.durationMs,
+                    peaks: relocated.peaks,
+                  },
+                }
+              : undefined,
+          );
+          // Auto-title still runs on the first assistant turn — feed it the
+          // enriched payload so the title is derived from the stripped text.
+          void maybeReplaceFirstTurnTitle(
+            db,
+            appSessionId,
+            enriched,
+            log,
+          ).catch((err: unknown) => log.warn({ err }, "auto-title (smart) failed"));
+          if (liveActivityPusher) {
+            void pushLiveActivityForEvent(
+              db,
+              appSessionId,
+              { ...ev, payload: enriched as JsonValue },
+              liveActivityPusher,
+              log,
+            ).catch((err: unknown) =>
+              log.warn({ err }, "live-activity push dispatch failed (tts-message)"),
+            );
+          }
+          return;
+        }
+      }
+    }
+    // TTS bridge (tool.complete path — defensive): some Hermes builds may
+    // surface the tool result in the tool.complete payload directly. Today
+    // the canonical path is via message.complete above, but we keep this
+    // intercept so an upstream change wouldn't silently break audio rendering.
     if (ev.type === "tool.complete") {
       const media = extractTtsMedia(ev.payload);
       if (media) {

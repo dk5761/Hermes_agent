@@ -13,6 +13,51 @@ export interface TtsMedia {
   absPath: string;
 }
 
+/** Result of stripping MEDIA tags from assistant message text. */
+export interface StrippedMessageMedia {
+  /** Text with MEDIA: lines (and any `[[audio_as_voice]]` annotation) removed. */
+  text: string;
+  /** Absolute Hermes-side path, or null if no MEDIA: line was found. */
+  absPath: string | null;
+}
+
+// Matches a single MEDIA: line and an optional `[[audio_as_voice]]` annotation
+// directly above it. Multiline + global so we can find/strip even when the
+// model embeds the line mid-paragraph. The path is `\S+` — TTS file paths are
+// always whitespace-free in practice.
+const MEDIA_LINE_REGEX = /(?:^|\n)\s*(?:\[\[audio_as_voice\]\]\s*\n)?\s*MEDIA:(\S+)\s*(?=\n|$)/g;
+
+/**
+ * Extract a MEDIA:<path> reference from an assistant message body and return
+ * the message with the MEDIA line(s) stripped. We don't attempt to validate
+ * the path here — that's the caller's job via translateHermesPath. Returns
+ * the first matched path; subsequent MEDIA: lines (rare) are still stripped
+ * but their paths are ignored.
+ *
+ * Why this exists: Hermes' text_to_speech tool returns a `MEDIA:<path>` tag
+ * embedded in the assistant text, intended for messaging-platform layers
+ * (Telegram, Discord) to intercept and replace with an audio attachment. Our
+ * mobile gateway is one such layer — we extract the path, relocate the blob,
+ * and attach it to the message envelope, then strip the tag so it doesn't
+ * render as raw text in the chat bubble.
+ */
+export function extractMediaFromMessageText(text: unknown): StrippedMessageMedia {
+  if (typeof text !== "string" || text.length === 0) {
+    return { text: typeof text === "string" ? text : "", absPath: null };
+  }
+  let firstPath: string | null = null;
+  // Reset lastIndex because the regex is /g and we may be called many times.
+  MEDIA_LINE_REGEX.lastIndex = 0;
+  const stripped = text.replace(MEDIA_LINE_REGEX, (_match, captured: string) => {
+    if (firstPath === null) firstPath = captured;
+    return "";
+  });
+  // Collapse the trailing blank lines the strip can leave behind so the bubble
+  // doesn't render with a giant gap at the bottom.
+  const cleaned = stripped.replace(/\n{3,}/g, "\n\n").trim();
+  return { text: cleaned, absPath: firstPath };
+}
+
 /** Blob relocation result. */
 export interface RelocatedBlob {
   relKey: string;
