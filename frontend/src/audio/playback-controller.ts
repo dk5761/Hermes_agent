@@ -82,8 +82,24 @@ function audioCacheDir(): Directory {
   return d;
 }
 
-function cacheFileFor(messageId: string): File {
-  return new File(audioCacheDir(), `${messageId}.m4a`);
+// Derive a file extension from a blob URL so the cached file matches the
+// actual audio container. iOS expo-audio refuses to play files whose
+// extension contradicts the bytes (TTS mp3 cached as .m4a fails silently).
+function extFromBlobUrl(url: string): string {
+  const cleaned = (url.split("?")[0] ?? "").toLowerCase();
+  const dot = cleaned.lastIndexOf(".");
+  if (dot === -1) return ".m4a";
+  const ext = cleaned.slice(dot);
+  // Whitelist common audio formats; fall back to .m4a for anything else
+  // so we don't leak an arbitrary URL-derived extension into the cache dir.
+  if (ext === ".m4a" || ext === ".mp3" || ext === ".ogg" || ext === ".wav") {
+    return ext;
+  }
+  return ".m4a";
+}
+
+function cacheFileFor(messageId: string, ext: string = ".m4a"): File {
+  return new File(audioCacheDir(), `${messageId}${ext}`);
 }
 
 /**
@@ -160,8 +176,9 @@ async function resolveCachedUri(
   messageId: string,
   blobUrl: string,
 ): Promise<string> {
-  const cached = cacheFileFor(messageId);
-  const filename = `${messageId}.m4a`;
+  const ext = extFromBlobUrl(blobUrl);
+  const cached = cacheFileFor(messageId, ext);
+  const filename = `${messageId}${ext}`;
 
   if (cached.exists) {
     // Guard against empty / corrupt cache entries.
