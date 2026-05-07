@@ -224,12 +224,6 @@ export interface MicButtonProps {
    * RecordingOverlay as `livePeaks`.
    */
   onPeaksUpdate?: (peaks: number[]) => void;
-
-  /**
-   * Called once with a commit function. Parent stores the function and calls
-   * it when the RecordingStrip's send button is tapped (tap-toggle / locked-hold).
-   */
-  onExposeCommit?: (commit: () => void) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -246,7 +240,6 @@ export function MicButton({
   onRecordingStateChange,
   onRecordingEnd,
   onPeaksUpdate,
-  onExposeCommit,
 }: MicButtonProps): React.ReactElement {
   const tokens = useThemeTokens();
   const reducedMotion = useReducedMotion();
@@ -480,18 +473,8 @@ export function MicButton({
   commitMemoRecordingRef.current = commitMemoRecording;
 
   // Expose commit function to parent (for RecordingStrip send button).
-  useEffect(() => {
-    if (onExposeCommit) {
-      onExposeCommit(() => void commitMemoRecording());
-    }
-  // onExposeCommit is stable (useCallback in parent); commitMemoRecording
-  // changes when sessionId changes. The ref ensures the exposed fn always
-  // calls the latest version.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [onExposeCommit]);
-
-  // Stable ref so the exposed commit always calls the latest commitMemoRecording.
-  // (commitMemoRecordingRef.current already serves this purpose.)
+  // (commit-exposure removed — RecordingStrip no longer has a send button.
+  // The mic button itself drives the commit via tap or release.)
 
   const cancelMemoRecording = useCallback(async (): Promise<void> => {
     stopTimer();
@@ -648,10 +631,14 @@ export function MicButton({
       case "idle":
         // The recorder started in pressIn (state was idle then). The 500ms
         // hold timer hasn't fired yet — this is the FIRST tap (short press).
-        // Transition to tap-toggle: rec keeps running, next pressOut commits.
-        if (isRecordingRef.current) {
-          setRecordingState({ kind: "tap-toggle", startedAt: pressOriginRef.current.time });
-        }
+        // Transition to tap-toggle unconditionally: startMemoRecording is
+        // async (mic permission + audio session activation) and may not have
+        // flipped isRecordingRef yet when this synchronous pressOut fires.
+        // Without this, the user has to double-tap (first tap arms the
+        // recorder, second tap "wins the race"). The recording strip paints
+        // immediately; if the recorder ultimately fails to start (permission
+        // denied, mic busy), the failure handler resets state.
+        setRecordingState({ kind: "tap-toggle", startedAt: pressOriginRef.current.time });
         return;
 
       case "tap-toggle":

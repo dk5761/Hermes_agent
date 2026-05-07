@@ -550,15 +550,6 @@ export default function ChatScreen() {
     };
   }, []);
 
-  // ─── recording strip send handler ─────────────────────────────────────────
-  // In tap-toggle and locked-hold modes, the RecordingStrip shows a send button.
-  // Tapping it commits the recording via the function MicButton exposed.
-  const micCommitRef = useRef<(() => void) | null>(null);
-
-  const handleStripSend = useCallback(() => {
-    micCommitRef.current?.();
-  }, []);
-
   const pendingList = usePendingAttachments(
     (s) => (sessionId ? (s.bySession[sessionId] ?? EMPTY_PENDING) : EMPTY_PENDING),
   );
@@ -2393,7 +2384,6 @@ export default function ChatScreen() {
               <RecordingStrip
                 state={activeRecordingState.kind}
                 elapsedMs={recordingElapsedMs}
-                onSend={handleStripSend}
               />
             ) : (
               <TextInput
@@ -2431,7 +2421,6 @@ export default function ChatScreen() {
                 onRecordingStateChange={handleRecordingStateChange}
                 onRecordingEnd={handleRecordingEnd}
                 onPeaksUpdate={handlePeaksUpdate}
-                onExposeCommit={(fn) => { micCommitRef.current = fn; }}
               />
             ) : null}
             {/* Send/abort button — hidden during recording (strip has its own). */}
