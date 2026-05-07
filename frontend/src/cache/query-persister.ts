@@ -1,5 +1,6 @@
 import type { Query } from "@tanstack/react-query";
 import { createSQLitePersister } from "./sqlite-persister";
+import { PERSIST_BUSTER, PERSIST_MAX_AGE } from "./persist-constants";
 
 /**
  * Persist the TanStack Query cache to SQLite so the app paints meaningfully
@@ -15,11 +16,9 @@ import { createSQLitePersister } from "./sqlite-persister";
  * next launch via the buster-mismatch check in PersistQueryClientProvider.
  */
 
-/** 7-day disk lifetime. Rows older than this are pruned on each persist call. */
-export const PERSIST_MAX_AGE = 1000 * 60 * 60 * 24 * 7;
-
-/** Bump to force a one-time cache wipe on next app launch. */
-export const PERSIST_BUSTER = "1";
+// Constants live in `./persist-constants` to break the cycle that would
+// otherwise form: db/sqlite.ts → query-persister → sqlite-persister → db/sqlite.
+export { PERSIST_BUSTER, PERSIST_MAX_AGE };
 
 export const persister = createSQLitePersister({
   buster: PERSIST_BUSTER,

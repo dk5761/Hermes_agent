@@ -50,14 +50,25 @@ import { useThemeTokens } from "@/components/ui/tokens";
 export interface AudioMessageProps {
   messageId: string;
   sessionId: string;
-  /** Relative path like `/voice-blobs/voice/<sha>.m4a`. */
-  audioBlobUrl: string;
+  /**
+   * Relative path like `/voice-blobs/voice/<sha>.m4a`. Set ONCE the upload
+   * has succeeded and the server has stored the blob. Optimistic memos
+   * before upload completes have this undefined; playback falls back to
+   * `localAudioUri` until the swap.
+   */
+  audioBlobUrl?: string;
+  /**
+   * `file://` URI on the device for the still-pending memo. Used for
+   * playback while the upload is in flight or has failed. Server-acknowledged
+   * memos may have this undefined (cache fetched on demand).
+   */
+  localAudioUri?: string;
   /** Total duration in milliseconds. */
   audioDurationMs: number;
   transcript: string;
   transcriptionStatus: TranscriptionStatus;
   transcriptionError?: string | null;
-  /** Waveform peaks from server (80 floats 0..1). Null/empty → plain scrubber. */
+  /** Waveform peaks (80 floats 0..1). Null/empty → plain scrubber. */
   audioPeaks?: number[] | null;
 }
 
@@ -345,12 +356,18 @@ export function AudioMessage({
   messageId,
   sessionId,
   audioBlobUrl,
+  localAudioUri,
   audioDurationMs,
   transcript,
   transcriptionStatus,
   transcriptionError,
   audioPeaks,
 }: AudioMessageProps) {
+  // Source-of-truth URI for playback. Prefer the local file (instant +
+  // works offline) — when the upload completes, the chat-store ID swaps
+  // and a server `audioBlobUrl` arrives, but the local path stays valid
+  // for the lifetime of the bubble.
+  const playbackUri = localAudioUri ?? audioBlobUrl;
   const tokens = useThemeTokens();
   const pb = usePlaybackState();
 
@@ -375,12 +392,13 @@ export function AudioMessage({
   const [retryError, setRetryError] = useState<string | null>(null);
 
   const handlePlayPause = useCallback(() => {
+    if (!playbackUri) return; // optimistic row not yet ready (shouldn't happen)
     if (isPlaying) {
       playbackController.pause();
     } else {
-      void playbackController.play(messageId, audioBlobUrl, audioDurationMs);
+      void playbackController.play(messageId, playbackUri, audioDurationMs);
     }
-  }, [isPlaying, messageId, audioBlobUrl, audioDurationMs]);
+  }, [isPlaying, messageId, playbackUri, audioDurationMs]);
 
   const handleSeek = useCallback(
     (fraction: number) => {

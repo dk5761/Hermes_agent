@@ -109,7 +109,7 @@ async function parseErrorMessage(res: Response): Promise<string> {
   }
 }
 
-function buildVoiceForm(fileUri: string, durationMs: number): FormData {
+function buildVoiceForm(fileUri: string, durationMs: number, peaks?: number[]): FormData {
   const fd = new FormData();
   // React Native's FormData accepts {uri,name,type} for streaming file reads.
   // The standard TS typings omit this RN-specific overload, hence the cast.
@@ -119,6 +119,10 @@ function buildVoiceForm(fileUri: string, durationMs: number): FormData {
     type: "audio/m4a",
   } as unknown as Blob);
   fd.append("audioDurationMs", String(durationMs));
+  // Server prefers client peaks over ffmpeg extraction when valid (Phase 3).
+  if (peaks && peaks.length > 0) {
+    fd.append("audioPeaks", JSON.stringify(peaks));
+  }
   return fd;
 }
 
@@ -153,6 +157,8 @@ async function postOnce(
  * @param sessionId - Active app session ID.
  * @param fileUri   - Local file URI from VoiceMemoRecorder.stop().
  * @param durationMs - Client-side recording duration in milliseconds.
+ * @param peaks     - Optional client-captured waveform (80 values, 0..1).
+ *                    When valid, the backend skips ffmpeg extraction.
  * @returns The newly created voice memo message.
  * @throws {VoiceMemoError} on non-2xx responses or timeout.
  */
@@ -160,6 +166,7 @@ export async function postVoiceMemo(
   sessionId: string,
   fileUri: string,
   durationMs: number,
+  peaks?: number[],
 ): Promise<VoiceMemoMessage> {
   const url = `${API_URL}/sessions/${encodeURIComponent(sessionId)}/messages/voice`;
   const controller = new AbortController();
@@ -167,7 +174,7 @@ export async function postVoiceMemo(
 
   try {
     let token = getAuthSnapshot().accessToken;
-    let form = buildVoiceForm(fileUri, durationMs);
+    let form = buildVoiceForm(fileUri, durationMs, peaks);
     let res = await postOnce(url, form, token, controller.signal);
 
     if (res.status === 401) {
@@ -177,7 +184,7 @@ export async function postVoiceMemo(
         throw new VoiceMemoError(401, "Session expired");
       }
       // Rebuild form — some platforms can't re-read a consumed FormData.
-      form = buildVoiceForm(fileUri, durationMs);
+      form = buildVoiceForm(fileUri, durationMs, peaks);
       res = await postOnce(url, form, refreshed, controller.signal);
     }
 

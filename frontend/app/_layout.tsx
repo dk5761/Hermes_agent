@@ -31,8 +31,10 @@ import { useReasoningCollapse } from "@/state/reasoning-collapse";
 import { usePendingSends } from "@/state/pending-sends";
 import { useDevSettings } from "@/state/dev-settings";
 import { usePendingMutations } from "@/state/pending-mutations";
+import { usePendingMemos } from "@/state/pending-memos";
 import { useNetworkStatus } from "@/state/network-status";
 import { attachMutationDrainer } from "@/ws/mutation-drainer";
+import { drainPendingMemos } from "@/voice/voice-memo-uploader";
 import { AppLockOverlay } from "@/components/AppLockOverlay";
 import { PrivacyVeil } from "@/components/PrivacyVeil";
 import { reconcileOnLaunch } from "@/live-activity/bridge";
@@ -111,6 +113,16 @@ function AuthGate() {
     // Hydrate is idempotent and does no network — safe to fire even when
     // unauthenticated. The drainer below is what gates on auth.
     void usePendingMutations.getState().hydrate();
+    // Pending voice memo uploads — hydrate and replay any memos that were
+    // mid-upload when the app was last killed.
+    void usePendingMemos
+      .getState()
+      .hydrate()
+      .then(() => {
+        if (useNetworkStatus.getState().online) {
+          void drainPendingMemos();
+        }
+      });
     // Kill any orphan Live Activities from a previous launch — we can't
     // reliably resync their elapsed-time state across an app restart.
     void reconcileOnLaunch();
@@ -141,6 +153,19 @@ function AuthGate() {
   useEffect(() => {
     if (!isAuthed) return;
     return attachMutationDrainer({ queryClient });
+  }, [isAuthed]);
+
+  // Voice memo drain: replay pending uploads on network reconnect.
+  // The cold-start drain fires in the hydrate().then() above; this effect
+  // covers the offline → online transition that happens mid-session.
+  useEffect(() => {
+    if (!isAuthed) return;
+    const unsub = useNetworkStatus.subscribe((state, prev) => {
+      if (state.online && !prev.online) {
+        void drainPendingMemos();
+      }
+    });
+    return unsub;
   }, [isAuthed]);
 
   // Push token registration. Fires once auth is hydrated and the user is

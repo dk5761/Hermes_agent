@@ -10,31 +10,43 @@
  *      wiring in chat/[id].tsx (search VOICE_TRANSCRIBE_DISABLED there too).
  *   3. Remove the tap-toggle memo path added below.
  *
- * Current gesture model (memo-only):
- *   tap       → toggle memo recording (first tap starts; second tap stops + uploads)
- *   long-hold → PTT memo (record while held, send on release; slide-to-cancel)
- *   Both paths upload via postVoiceMemo and push an audio bubble into the chat.
+ * ## Recording state machine
+ *
+ * ```
+ * idle
+ *   │
+ *   ├── pressIn → recorder starts immediately
+ *   │     │
+ *   │     ├── pressOut (heldMs < 500, no drag) ──────► tap-toggle (rec keeps running)
+ *   │     │         Second pressIn+pressOut in tap-toggle → commit
+ *   │     │
+ *   │     ├── (500ms timer fires, finger still down) ─► hold-active
+ *   │     │         │
+ *   │     │         ├── pressOut (no drag past cancel) ─► commit (classic PTT)
+ *   │     │         ├── drag up > 60pt ─────────────────► locked-hold
+ *   │     │         │         │
+ *   │     │         │         ├── tap mic (stop icon) ──► commit
+ *   │     │         │         └── drag down/left > 80pt ► cancelling → cancel
+ *   │     │         └── drag down/left > 80pt ──────────► cancelling → cancel on release
+ *   │     │
+ *   │     └── drag down/left > 80pt (before 500ms) ──► cancelling → cancel on release
+ * ```
  *
  * Visual states:
- *   idle      → outlined mic icon, neutral (ink3) tint, surface background
- *   recording → filled mic icon, danger tint, expanding pulse ring behind it
- *               (ring is suppressed when OS prefers reduced motion; a static
- *               REC dot is shown instead)
- *   error     → shake animation (~300ms, ±4pt), danger tint, auto-reverts to
- *               idle after 2s
- *   disabled  → 40% opacity, non-interactive
+ *   idle         → outlined mic icon, neutral (ink3) tint, surface background
+ *   tap-toggle   → filled mic icon, danger tint, pulse ring
+ *   hold-active  → filled mic icon, danger tint, pulse ring + LockHint above
+ *   locked-hold  → stop/square icon (mic transforms), danger tint, pulse ring
+ *   cancelling   → filled mic icon, danger tint (strip shows red warning)
+ *   error        → shake animation (~300ms, ±4pt), auto-reverts to idle after 2s
+ *   disabled     → 40% opacity, non-interactive
  *
- * Slide-to-cancel:
- *   We use plain Pressable onPressIn / onPressOut and track the touch position
- *   via onLayout (to get button bounds) plus a pan handler implemented with
- *   the ViewResponder system (onStartShouldSetResponder + onResponderMove) on
- *   an outer View. Memo-path uses MEMO_CANCEL_THRESHOLD_PT.
+ * Slide-to-cancel uses ViewResponder (onStartShouldSetResponder + onResponderMove)
+ * on an outer View. We deliberately avoid react-native-gesture-handler here to
+ * keep MicButton self-contained; see the RNGH note in the original header.
  *
- *   Why this approach rather than react-native-gesture-handler (RNGH)?
- *   RNGH is in package.json but is used as Expo Router's gesture provider, not
- *   imported directly by any UI component in this codebase. The plain Responder
- *   approach keeps MicButton self-contained, avoids wrapping the button in a
- *   GestureDetector, and is sufficient for the single gesture we need.
+ * The RecordingStrip + RecordingOverlay are lifted to the parent chat screen
+ * (chat/[id].tsx) and driven via the onRecordingStateChange callback.
  */
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
@@ -44,7 +56,6 @@ import {
   AppState,
   Keyboard,
   Pressable,
-  Text,
   View,
 } from "react-native";
 import Animated, {
@@ -59,17 +70,16 @@ import Animated, {
 } from "react-native-reanimated";
 import * as Haptics from "expo-haptics";
 import { RecordingPresets, useAudioRecorder } from "expo-audio";
-import Svg, { Circle, Path } from "react-native-svg";
+import Svg, { Path, Rect } from "react-native-svg";
 
 import { useThemeTokens } from "@/components/ui/tokens";
 import { showToast } from "@/components/ui/Toast";
-// VOICE_TRANSCRIBE_DISABLED: useVoiceInput drives the transcribe-to-composer
-// path. Kept intact on disk; callers are commented out here and in chat/[id].tsx.
-// import { useVoiceInput } from "./useVoiceInput";
-// import type { VoiceInputError } from "./useVoiceInput";
+import { Directory, File, Paths } from "expo-file-system";
 import { VoiceMemoRecorder } from "./voice-memo-recorder";
-import { postVoiceMemo } from "../api/voice-memo";
 import { useChatStore } from "../state/chat-store";
+import { usePendingMemos } from "../state/pending-memos";
+import { uploadPendingMemo } from "./voice-memo-uploader";
+import { LockHint } from "./LockHint";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -79,23 +89,23 @@ import { useChatStore } from "../state/chat-store";
 const DEFAULT_SIZE = 44;
 
 /**
- * How far (in points) the finger must travel upward above the button's top
- * edge before the press is treated as a cancel gesture (transcribe/PTT path).
- */
-const CANCEL_THRESHOLD_PT = 20;
-
-/**
  * How many ms between pressIn and pressOut before we treat the gesture as a
- * long-press (memo path) rather than a tap (transcribe path).
+ * hold (PTT path) rather than a tap (tap-toggle path).
  */
-const LONG_PRESS_THRESHOLD_MS = 250;
+const LONG_PRESS_THRESHOLD_MS = 500;
 
 /**
- * Slide-to-cancel threshold for the memo path. If the finger moves more than
- * this many points downward OR leftward from the press origin, the recording
- * is cancelled (Telegram pattern — only the explicit slide cancels).
+ * Slide-to-cancel threshold. If the finger moves more than this many points
+ * downward OR leftward from the press origin, the recording is cancelled.
  */
 const MEMO_CANCEL_THRESHOLD_PT = 80;
+
+/**
+ * Drag-up threshold to engage lock mode. If the finger moves more than this
+ * many points UPWARD from the press origin while in hold-active state, the
+ * recording locks (user can release the screen, recording continues).
+ */
+const LOCK_THRESHOLD_PT = 60;
 
 /** Duration of the error-shake animation in ms (3 oscillations × 100ms each). */
 const SHAKE_DURATION_MS = 100;
@@ -104,38 +114,40 @@ const SHAKE_DURATION_MS = 100;
 const ERROR_DISPLAY_MS = 2000;
 
 // ---------------------------------------------------------------------------
-// SVG icon paths
+// State machine types
 // ---------------------------------------------------------------------------
 
-/** Outlined mic — used in idle state. Matches ICONS.mic from Icon.tsx */
+/**
+ * Tagged-union recording state machine.
+ *
+ * - idle: no recording in progress.
+ * - tap-toggle: user tapped once (release < 500ms, no drag). Recorder is
+ *   running. Second tap-then-release will commit.
+ * - hold-active: user has held the button for > 500ms. Still finger-down.
+ *   Release without drag → commit.
+ * - locked-hold: user dragged up > 60pt while in hold-active. Finger can be
+ *   released; recording continues. Tap on the stop icon → commit.
+ * - cancelling: drag past cancel threshold. Release will cancel.
+ */
+type RecordingState =
+  | { kind: "idle" }
+  | { kind: "tap-toggle"; startedAt: number }
+  | { kind: "hold-active"; startedAt: number }
+  | { kind: "locked-hold"; startedAt: number }
+  | { kind: "cancelling"; startedAt: number };
+
+// ---------------------------------------------------------------------------
+// SVG icon paths + components
+// ---------------------------------------------------------------------------
+
+/** Outlined mic — used in idle state. */
 const MIC_OUTLINE_PATH =
   "M12 2a3 3 0 00-3 3v6a3 3 0 006 0V5a3 3 0 00-3-3zM5 11a7 7 0 0014 0M12 18v3";
 
-/**
- * Filled mic — used in recording state. Same outer shape with a filled body
- * so it reads as "active". We draw a filled rect + the outline strokes.
- * Since the Icon system draws stroke-only paths, we render this inline with
- * react-native-svg so we can mix fill + stroke on separate layers.
- */
-
-// ---------------------------------------------------------------------------
-// Sub-components
-// ---------------------------------------------------------------------------
-
-/** Outlined mic SVG (idle / error states). */
 function MicOutline({ size, color, stroke = 1.6 }: { size: number; color: string; stroke?: number }) {
   const segments = MIC_OUTLINE_PATH.split("M").filter(Boolean);
   return (
-    <Svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke={color}
-      strokeWidth={stroke}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={stroke} strokeLinecap="round" strokeLinejoin="round">
       {segments.map((seg, i) => (
         <Path key={i} d={"M" + seg} />
       ))}
@@ -143,240 +155,21 @@ function MicOutline({ size, color, stroke = 1.6 }: { size: number; color: string
   );
 }
 
-/** Filled mic SVG (recording state). */
 function MicFilled({ size, color }: { size: number; color: string }) {
   return (
-    <Svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      {/* Filled body of the microphone capsule */}
-      <Path
-        d="M12 2a3 3 0 00-3 3v6a3 3 0 006 0V5a3 3 0 00-3-3z"
-        fill={color}
-        stroke={color}
-        strokeWidth={1.6}
-      />
-      {/* Stand arc + stem */}
-      <Path
-        d="M5 11a7 7 0 0014 0M12 18v3"
-        stroke={color}
-        strokeWidth={1.6}
-      />
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" strokeLinecap="round" strokeLinejoin="round">
+      <Path d="M12 2a3 3 0 00-3 3v6a3 3 0 006 0V5a3 3 0 00-3-3z" fill={color} stroke={color} strokeWidth={1.6} />
+      <Path d="M5 11a7 7 0 0014 0M12 18v3" stroke={color} strokeWidth={1.6} />
     </Svg>
   );
 }
 
-/** Small "REC" dot for reduced-motion recording state. */
-function RecDot({ color }: { color: string }) {
+/** Stop/square icon — shown in locked-hold state. Tap to commit. */
+function StopIcon({ size, color }: { size: number; color: string }) {
   return (
-    <Svg
-      width={8}
-      height={8}
-      viewBox="0 0 8 8"
-      style={{ position: "absolute", top: 2, right: 2 }}
-    >
-      <Circle cx="4" cy="4" r="4" fill={color} />
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Rect x="5" y="5" width="14" height="14" rx="3" fill={color} />
     </Svg>
-  );
-}
-
-/**
- * Download-arrow badge (model absent).
- * Small filled down-arrow in the bottom-right corner of the button.
- */
-function DownloadBadge({ color, bg }: { color: string; bg: string }) {
-  return (
-    <View
-      style={{
-        position: "absolute",
-        bottom: -2,
-        right: -2,
-        width: 12,
-        height: 12,
-        borderRadius: 6,
-        backgroundColor: bg,
-        alignItems: "center",
-        justifyContent: "center",
-      }}
-      pointerEvents="none"
-    >
-      <Svg width={8} height={8} viewBox="0 0 24 24" fill="none">
-        <Path
-          d="M12 3v13M5 12l7 7 7-7"
-          stroke={color}
-          strokeWidth={2.5}
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-      </Svg>
-    </View>
-  );
-}
-
-/**
- * Error-X badge (model download failed).
- * Small red filled circle with an X in the bottom-right corner.
- */
-function ErrorBadge({ dangerColor }: { dangerColor: string }) {
-  return (
-    <View
-      style={{
-        position: "absolute",
-        bottom: -2,
-        right: -2,
-        width: 12,
-        height: 12,
-        borderRadius: 6,
-        backgroundColor: dangerColor,
-        alignItems: "center",
-        justifyContent: "center",
-      }}
-      pointerEvents="none"
-    >
-      <Svg width={7} height={7} viewBox="0 0 24 24" fill="none">
-        <Path
-          d="M18 6L6 18M6 6l12 12"
-          stroke="#fff"
-          strokeWidth={3}
-          strokeLinecap="round"
-        />
-      </Svg>
-    </View>
-  );
-}
-
-/**
- * Circular progress ring that wraps the button during model download.
- * Uses SVG stroke-dashoffset technique.
- */
-function ProgressRing({
-  size,
-  progress,
-  color,
-}: {
-  size: number;
-  progress: number;
-  color: string;
-}) {
-  const r = size / 2 - 2;
-  const circumference = 2 * Math.PI * r;
-  const offset = circumference * (1 - Math.min(1, Math.max(0, progress)));
-  return (
-    <Svg
-      width={size}
-      height={size}
-      viewBox={`0 0 ${size} ${size}`}
-      style={{ position: "absolute" }}
-      pointerEvents="none"
-    >
-      {/* Track */}
-      <Circle
-        cx={size / 2}
-        cy={size / 2}
-        r={r}
-        stroke={color}
-        strokeWidth={2}
-        opacity={0.2}
-        fill="none"
-      />
-      {/* Fill arc — rotated so it starts at the top */}
-      <Circle
-        cx={size / 2}
-        cy={size / 2}
-        r={r}
-        stroke={color}
-        strokeWidth={2}
-        fill="none"
-        strokeDasharray={circumference}
-        strokeDashoffset={offset}
-        strokeLinecap="round"
-        transform={`rotate(-90, ${size / 2}, ${size / 2})`}
-      />
-    </Svg>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// RecordingBar — shown while a memo recording is in progress
-// ---------------------------------------------------------------------------
-
-/**
- * Telegram-style recording bar that overlays the composer area during a memo
- * hold. Shows elapsed time, a red pulse dot, and a slide-to-cancel hint.
- * When `willCancel` is true the hint switches to "Release to cancel".
- */
-function RecordingBar({
-  elapsedMs,
-  willCancel,
-  uploading,
-}: {
-  elapsedMs: number;
-  willCancel: boolean;
-  uploading: boolean;
-}) {
-  const tokens = useThemeTokens();
-
-  const totalSeconds = Math.floor(elapsedMs / 1000);
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  const timeStr = `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
-
-  return (
-    <View
-      style={{
-        position: "absolute",
-        bottom: 56, // sit above the composer row
-        left: 0,
-        right: 0,
-        flexDirection: "row",
-        alignItems: "center",
-        paddingHorizontal: 16,
-        paddingVertical: 10,
-        backgroundColor: tokens.surface,
-        borderTopWidth: 1,
-        borderTopColor: willCancel ? tokens.danger : tokens.line,
-      }}
-      pointerEvents="none"
-    >
-      {/* Red pulsing dot */}
-      <View
-        style={{
-          width: 10,
-          height: 10,
-          borderRadius: 5,
-          backgroundColor: tokens.danger,
-          marginRight: 10,
-        }}
-      />
-
-      {/* Timer */}
-      <Text
-        style={{
-          color: tokens.ink,
-          fontSize: 15,
-          fontVariant: ["tabular-nums"],
-          marginRight: 12,
-        }}
-      >
-        {timeStr}
-      </Text>
-
-      {/* Hint text — changes when in cancel zone */}
-      <Text
-        style={{
-          color: willCancel ? tokens.danger : tokens.ink3,
-          fontSize: 13,
-          flex: 1,
-        }}
-      >
-        {uploading ? "Sending…" : willCancel ? "Release to cancel" : "← Slide to cancel"}
-      </Text>
-    </View>
   );
 }
 
@@ -407,145 +200,137 @@ export interface MicButtonProps {
   size?: number;
   /** Active session ID. Required for memo upload. */
   sessionId?: string | null;
+
+  /**
+   * Called when recording starts (any mode). Parent uses this to show the
+   * RecordingStrip and RecordingOverlay.
+   */
+  onRecordingStart?: () => void;
+
+  /**
+   * Called whenever the recording state transitions. Parent drives the
+   * RecordingStrip's visual state from this.
+   */
+  onRecordingStateChange?: (state: Exclude<RecordingState, { kind: "idle" }> | null) => void;
+
+  /**
+   * Called when recording ends (commit or cancel). `committed` is true if the
+   * memo was sent; false if cancelled. Parent hides the strip/overlay.
+   */
+  onRecordingEnd?: (committed: boolean) => void;
+
+  /**
+   * Called on each live waveform snapshot (~10 fps). Parent passes this to
+   * RecordingOverlay as `livePeaks`.
+   */
+  onPeaksUpdate?: (peaks: number[]) => void;
+
+  /**
+   * Called once with a commit function. Parent stores the function and calls
+   * it when the RecordingStrip's send button is tapped (tap-toggle / locked-hold).
+   */
+  onExposeCommit?: (commit: () => void) => void;
 }
 
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
-type VisualState = "idle" | "recording" | "error";
+type VisualState = "idle" | "recording" | "locked" | "error";
 
 export function MicButton({
   disabled = false,
   size = DEFAULT_SIZE,
   sessionId,
+  onRecordingStart,
+  onRecordingStateChange,
+  onRecordingEnd,
+  onPeaksUpdate,
+  onExposeCommit,
 }: MicButtonProps): React.ReactElement {
   const tokens = useThemeTokens();
   const reducedMotion = useReducedMotion();
 
-  /*
-   * VOICE_TRANSCRIBE_DISABLED: useVoiceInput + all transcript-forwarding effects
-   * were here. Removed callers; hook kept intact on disk.
-   *
-   * To restore:
-   *   1. Add back onTranscript, onTranscriptChange, onRecordingStart, onPartial,
-   *      onError, language, addsPunctuation to the prop signature above.
-   *   2. Uncomment the block below.
-   *
-   * const voice = useVoiceInput({
-   *   language,
-   *   addsPunctuation,
-   *   onFinalTranscript: onTranscript,
-   *   sessionId: sessionId ?? undefined,
-   * });
-   *
-   * // Sync recording / error transitions from the hook's state machine.
-   * useEffect(() => {
-   *   const k = voice.state.kind;
-   *   if (k === "recording") {
-   *     setVisualState("recording");
-   *     if (!recordingStartFiredRef.current) {
-   *       recordingStartFiredRef.current = true;
-   *       onRecordingStart?.();
-   *     }
-   *   } else if (k === "error") {
-   *     recordingStartFiredRef.current = false;
-   *     setVisualState("error");
-   *     const t = setTimeout(() => setVisualState("idle"), ERROR_DISPLAY_MS);
-   *     return () => clearTimeout(t);
-   *   } else if (k === "idle" || k === "stopping") {
-   *     if (k === "idle") {
-   *       recordingStartFiredRef.current = false;
-   *       setVisualState("idle");
-   *     }
-   *   }
-   *   return undefined;
-   * }, [voice.state, onRecordingStart]);
-   *
-   * // Surface error to caller.
-   * useEffect(() => {
-   *   if (voice.state.kind === "error") onError?.(voice.state.error);
-   * }, [voice.state, onError]);
-   *
-   * // Forward partials.
-   * useEffect(() => {
-   *   if (voice.state.kind === "recording") onPartial?.(voice.state.partialTranscript);
-   * }, [voice.state, onPartial]);
-   *
-   * // Emit incremental transcript changes.
-   * const prevTranscriptRef = useRef<string>("");
-   * useEffect(() => {
-   *   if (voice.transcript !== prevTranscriptRef.current) {
-   *     prevTranscriptRef.current = voice.transcript;
-   *     if (voice.isListening && voice.transcript.length > 0) {
-   *       onTranscriptChange?.(voice.transcript);
-   *     }
-   *   }
-   * }, [voice.transcript, voice.isListening, onTranscriptChange]);
-   */
-
   // -------------------------------------------------------------------------
-  // Local visual state — driven by memo recording now (no voice.state)
+  // Local visual state
   // -------------------------------------------------------------------------
 
   const [visualState, setVisualState] = useState<VisualState>("idle");
 
   // -------------------------------------------------------------------------
-  // Slide-to-cancel tracking (memo path only)
+  // Native recorder
   // -------------------------------------------------------------------------
 
-  /**
-   * Holds the Y coordinate of the button's top edge in screen coordinates.
-   * Populated by the onLayout callback on the outer wrapper.
-   */
-  const buttonTopRef = useRef<number>(0);
+  const memoNativeRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  const memoRecorderRef = useRef<VoiceMemoRecorder | null>(null);
+  if (memoRecorderRef.current === null) {
+    memoRecorderRef.current = new VoiceMemoRecorder(memoNativeRecorder);
+  }
+  const memoRecorder = memoRecorderRef.current;
 
-  // VOICE_TRANSCRIBE_DISABLED: cancelOnReleaseRef was used to cancel the
-  // transcribe-path when the finger slid upward past CANCEL_THRESHOLD_PT.
-  // Kept as a dead ref so the constant CANCEL_THRESHOLD_PT compiles without
-  // an "unused variable" error — or comment out both if TS complains.
-  // const cancelOnReleaseRef = useRef<boolean>(false);
+  // -------------------------------------------------------------------------
+  // Recording state machine
+  // -------------------------------------------------------------------------
 
-  // Ref-only flag so handleResponderMove can check memo mode without a state
-  // dep (state would be declared later in the hook and cause a TS ordering error).
-  const isMemoRecordingRef = useRef<boolean>(false);
+  const [recState, setRecState] = useState<RecordingState>({ kind: "idle" });
+  const recStateRef = useRef<RecordingState>({ kind: "idle" });
 
-  const handleLayout = useCallback((e: LayoutChangeEvent) => {
-    // Measure to get the screen-absolute Y of the button top. We use the
-    // layout's y and height to calculate where "above the button" begins.
-    const { y } = e.nativeEvent.layout;
-    buttonTopRef.current = y;
+  const setRecordingState = useCallback((next: RecordingState) => {
+    recStateRef.current = next;
+    setRecState(next);
+    if (next.kind === "idle") {
+      onRecordingStateChange?.(null);
+    } else {
+      onRecordingStateChange?.(next);
+    }
+  }, [onRecordingStateChange]);
+
+  // Whether a recording is currently in progress (any non-idle state).
+  const isRecordingRef = useRef(false);
+
+  // -------------------------------------------------------------------------
+  // Elapsed timer
+  // -------------------------------------------------------------------------
+
+  const [elapsedMs, setElapsedMs] = useState(0);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const startTimeRef = useRef<number>(0);
+
+  const startTimer = useCallback(() => {
+    if (timerRef.current !== null) clearInterval(timerRef.current);
+    startTimeRef.current = Date.now();
+    setElapsedMs(0);
+    const MAX_MEMO_MS = 10 * 60 * 1000;
+    timerRef.current = setInterval(() => {
+      const elapsed = Date.now() - startTimeRef.current;
+      setElapsedMs(elapsed);
+      if (elapsed >= MAX_MEMO_MS && timerRef.current !== null) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+        void commitMemoRecordingRef.current();
+      }
+    }, 100);
   }, []);
 
-  const handleResponderMove = useCallback(
-    (e: GestureResponderEvent) => {
-      const touchY = e.nativeEvent.pageY;
-      const touchX = e.nativeEvent.pageX;
+  const stopTimer = useCallback(() => {
+    if (timerRef.current !== null) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+  }, []);
 
-      // VOICE_TRANSCRIBE_DISABLED: transcribe-path upward-slide cancel removed.
-      // Original code:
-      //   if (touchY < buttonTopRef.current - CANCEL_THRESHOLD_PT) {
-      //     cancelOnReleaseRef.current = true;
-      //   }
+  // -------------------------------------------------------------------------
+  // Gesture tracking refs
+  // -------------------------------------------------------------------------
 
-      // Memo-path cancel: slide down or left past MEMO_CANCEL_THRESHOLD_PT.
-      if (isMemoRecordingRef.current) {
-        const dy = touchY - pressOriginRef.current.y; // positive = down
-        const dx = touchX - pressOriginRef.current.x; // negative = left
-        const willCancel = dy > MEMO_CANCEL_THRESHOLD_PT || dx < -MEMO_CANCEL_THRESHOLD_PT;
-        if (willCancel !== memoWillCancelRef.current) {
-          memoWillCancelRef.current = willCancel;
-          setMemoWillCancel(willCancel);
-          if (willCancel) {
-            // Crossing into cancel zone — warning haptic so the user knows the
-            // next release will abort the recording.
-            void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => undefined);
-          }
-        }
-      }
-    },
-    []
-  );
+  const pressOriginRef = useRef<{ x: number; y: number; time: number }>({ x: 0, y: 0, time: 0 });
+  const holdTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cancelThresholdActiveRef = useRef(false);
+
+  const buttonTopRef = useRef<number>(0);
+  const handleLayout = useCallback((e: LayoutChangeEvent) => {
+    buttonTopRef.current = e.nativeEvent.layout.y;
+  }, []);
 
   // -------------------------------------------------------------------------
   // Animations — pulse ring
@@ -555,22 +340,21 @@ export function MicButton({
   const pulseOpacity = useSharedValue(0);
 
   useEffect(() => {
-    if (visualState === "recording" && !reducedMotion) {
+    const isRecording = visualState === "recording" || visualState === "locked";
+    if (isRecording && !reducedMotion) {
       pulseScale.value = withRepeat(
         withSequence(
           withTiming(1, { duration: 0 }),
-          withTiming(1.8, { duration: 1200, easing: Easing.out(Easing.ease) })
+          withTiming(1.8, { duration: 1200, easing: Easing.out(Easing.ease) }),
         ),
-        -1,
-        false
+        -1, false,
       );
       pulseOpacity.value = withRepeat(
         withSequence(
           withTiming(0.5, { duration: 0 }),
-          withTiming(0, { duration: 1200, easing: Easing.out(Easing.ease) })
+          withTiming(0, { duration: 1200, easing: Easing.out(Easing.ease) }),
         ),
-        -1,
-        false
+        -1, false,
       );
     } else {
       cancelAnimation(pulseScale);
@@ -598,7 +382,7 @@ export function MicButton({
         withTiming(-4, { duration: SHAKE_DURATION_MS }),
         withTiming(4, { duration: SHAKE_DURATION_MS }),
         withTiming(-4, { duration: SHAKE_DURATION_MS }),
-        withTiming(0, { duration: SHAKE_DURATION_MS })
+        withTiming(0, { duration: SHAKE_DURATION_MS }),
       );
     }
   }, [visualState, shakeX]);
@@ -608,221 +392,132 @@ export function MicButton({
   }));
 
   // -------------------------------------------------------------------------
-  // Colors derived from visual state + theme tokens
+  // Colors derived from visual state
   // -------------------------------------------------------------------------
 
-  const iconColor =
-    visualState === "idle"
-      ? tokens.ink3
-      : visualState === "recording"
-        ? tokens.danger
-        : tokens.danger;
+  const isActiveRecording =
+    visualState === "recording" || visualState === "locked";
 
-  const borderColor =
-    visualState === "idle"
-      ? tokens.line
-      : visualState === "recording"
-        ? tokens.danger
-        : tokens.danger;
-
-  const bgColor =
-    visualState === "recording" ? tokens.accentBg : tokens.surface;
-
-  /*
-   * VOICE_TRANSCRIBE_DISABLED: model-state derived values (modelStatus,
-   * modelProgress) were read from voice.modelStatus / voice.modelProgress and
-   * used to:
-   *   - Show a ProgressRing around the button during WhisperKit model download.
-   *   - Show DownloadBadge (absent) / ErrorBadge (failed) on the button corner.
-   *   - Disable taps while the model was downloading.
-   *   - Display model-specific accessibility labels.
-   *
-   * To restore: uncomment these two lines and re-wire voice.* reads.
-   *   const modelStatus = voice.modelStatus;
-   *   const modelProgress = voice.modelProgress;
-   */
-
-  // -------------------------------------------------------------------------
-  // Voice memo state — recorder instance + UI state
-  // -------------------------------------------------------------------------
-
-  // Native recorder instance — managed by expo-audio's hook lifecycle.
-  const memoNativeRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
-
-  // Stable class instance wrapping the native recorder.
-  const memoRecorderRef = useRef<VoiceMemoRecorder | null>(null);
-  if (memoRecorderRef.current === null) {
-    memoRecorderRef.current = new VoiceMemoRecorder(memoNativeRecorder);
+  const iconColor = isActiveRecording ? tokens.danger : tokens.ink3;
+  if (visualState === "error") {
+    // error also uses danger — handled inline below
   }
-  const memoRecorder = memoRecorderRef.current;
 
-  // Whether a memo recording is in progress (shows the RecordingBar overlay).
-  // Also kept in isMemoRecordingRef (declared earlier) for use in responder callbacks.
-  const [isMemoRecording, setIsMemoRecordingState] = useState(false);
-  const setIsMemoRecording = useCallback((v: boolean) => {
-    isMemoRecordingRef.current = v;
-    setIsMemoRecordingState(v);
-  }, []);
+  const borderColor = isActiveRecording || visualState === "error"
+    ? tokens.danger
+    : tokens.line;
 
-  // Whether we're in the "uploading" phase after release.
-  const [isMemoUploading, setIsMemoUploading] = useState(false);
+  const bgColor = isActiveRecording ? tokens.accentBg : tokens.surface;
 
-  // Sync visualState with memo recording lifecycle.
-  // isMemoRecording=true → "recording"; false (+ not uploading) → "idle".
-  // This replaces the voice.state-driven effect that was commented out above.
-  useEffect(() => {
-    if (isMemoRecording) {
-      setVisualState("recording");
-    } else if (!isMemoUploading) {
-      setVisualState("idle");
-    }
-  }, [isMemoRecording, isMemoUploading]);
-
-  // Button is disabled only by the parent's disabled flag or while uploading.
-  // VOICE_TRANSCRIBE_DISABLED: was `disabled || modelStatus === "downloading"`.
-  const tapDisabled = disabled || isMemoUploading;
-
-  // Elapsed milliseconds shown in the RecordingBar timer.
-  const [memoElapsedMs, setMemoElapsedMs] = useState(0);
-
-  // True when the finger has drifted past MEMO_CANCEL_THRESHOLD_PT.
-  const [memoWillCancel, setMemoWillCancel] = useState(false);
-
-  // Refs for the long-press timing and finger tracking.
-  const pressInTimeRef = useRef<number>(0);
-  const pressOriginRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
-  const memoWillCancelRef = useRef<boolean>(false);
-  const memoTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const tapDisabled = disabled;
 
   // -------------------------------------------------------------------------
-  // Animations — rec-bar slide-in / slide-out
+  // Core commit/cancel helpers
   // -------------------------------------------------------------------------
 
-  /**
-   * Controls the horizontal slide animation of the RecordingBar. Starts off-
-   * screen to the right (400 pt) and slides to 0 when recording begins, then
-   * slides back out on send/cancel.
-   */
-  const recBarTranslateX = useSharedValue(400);
-
-  useEffect(() => {
-    if (isMemoRecording || isMemoUploading) {
-      // Slide in from the right — 200ms ease-out.
-      recBarTranslateX.value = withTiming(0, {
-        duration: 200,
-        easing: Easing.out(Easing.ease),
-      });
-    } else {
-      // Slide back out to the right — 150ms ease-in.
-      recBarTranslateX.value = withTiming(400, {
-        duration: 150,
-        easing: Easing.in(Easing.ease),
-      });
-    }
-  }, [isMemoRecording, isMemoUploading, recBarTranslateX]);
-
-  const recBarAnimStyle = useAnimatedStyle(() => ({
-    transform: [{ translateX: recBarTranslateX.value }],
-  }));
-
-  // -------------------------------------------------------------------------
-  // AppState handler — cancel memo recording when backgrounded
-  // -------------------------------------------------------------------------
-
-  useEffect(() => {
-    const sub = AppState.addEventListener("change", (nextState) => {
-      if (nextState !== "active" && memoRecorder.isRecording) {
-        void memoRecorder.cancel().catch(() => undefined);
-        if (memoTimerRef.current !== null) {
-          clearInterval(memoTimerRef.current);
-          memoTimerRef.current = null;
-        }
-        setIsMemoRecording(false);
-        setIsMemoUploading(false);
-        setMemoElapsedMs(0);
-        setMemoWillCancel(false);
-        memoWillCancelRef.current = false;
-      }
-    });
-    return () => sub.remove();
-  }, [memoRecorder]);
-
-  // -------------------------------------------------------------------------
-  // Helpers — start/commit/cancel the memo
-  // -------------------------------------------------------------------------
-
-  // Stable ref so startMemoRecording can call commitMemoRecording at cap time
-  // without creating a circular useCallback dependency.
   const commitMemoRecordingRef = useRef<() => Promise<void>>(() => Promise.resolve());
 
   const commitMemoRecording = useCallback(async (): Promise<void> => {
-    if (memoTimerRef.current !== null) {
-      clearInterval(memoTimerRef.current);
-      memoTimerRef.current = null;
+    stopTimer();
+    isRecordingRef.current = false;
+    // Clean up peaks subscription before stopping recorder.
+    if (peaksUnsubRef.current) {
+      peaksUnsubRef.current();
+      peaksUnsubRef.current = null;
     }
+    setRecordingState({ kind: "idle" });
+    setVisualState("idle");
 
-    if (memoWillCancelRef.current) {
-      // User slid past the cancel threshold — discard.
-      await memoRecorder.cancel().catch(() => undefined);
-      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Soft).catch(() => undefined);
-      setIsMemoRecording(false);
-      setIsMemoUploading(false);
-      setMemoElapsedMs(0);
-      setMemoWillCancel(false);
-      memoWillCancelRef.current = false;
-      return;
-    }
-
-    // Normal release — stop and upload. Light impact signals "sent".
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
-    setIsMemoUploading(true);
 
     const result = await memoRecorder.stop().catch(() => null);
     if (!result) {
-      setIsMemoRecording(false);
-      setIsMemoUploading(false);
-      setMemoElapsedMs(0);
+      onRecordingEnd?.(false);
       return;
     }
 
     if (!sessionId) {
-      // Guard: no session — bail gracefully without surfacing an alarming error.
-      setIsMemoRecording(false);
-      setIsMemoUploading(false);
-      setMemoElapsedMs(0);
+      onRecordingEnd?.(false);
       showToast("No active session — memo discarded", "warning");
       return;
     }
 
-    try {
-      const voiceMsg = await postVoiceMemo(sessionId, result.uri, result.durationMs);
-      // Optimistic insert: push the user voice bubble into the live chat-store
-      // immediately so it appears before the assistant streams its response.
-      // The id format mirrors historyRowToUiRow ("hist-u-<dbId>"), so the
-      // dedup filter in the rows useMemo will drop the server-side history
-      // copy when the next paginated refetch arrives, preventing duplication.
-      useChatStore.getState().pushVoiceMemoMessage(sessionId, voiceMsg);
-    } catch {
-      showToast("Failed to send voice memo — please try again", "error");
-    } finally {
-      setIsMemoRecording(false);
-      setIsMemoUploading(false);
-      setMemoElapsedMs(0);
-      setMemoWillCancel(false);
-      memoWillCancelRef.current = false;
-    }
-  }, [memoRecorder, sessionId, setIsMemoRecording]);
+    // Copy temp recording to a permanent path so it survives app restarts.
+    const pendingDir = new Directory(Paths.document, "voice-memo-pending");
+    if (!pendingDir.exists) pendingDir.create({ idempotent: true, intermediates: true });
 
-  // Keep the ref current so cap-timer closures always call the latest version.
+    const permanentFile = new File(pendingDir, `memo-${Date.now()}.m4a`);
+    let localAudioUri = result.uri;
+    try {
+      const tempFile = new File(result.uri);
+      tempFile.copy(permanentFile);
+      localAudioUri = permanentFile.uri;
+    } catch {
+      console.warn("[mic-button] could not copy audio to permanent path");
+    }
+
+    const localId = usePendingMemos.getState().enqueue({
+      sessionId,
+      localAudioUri,
+      durationMs: result.durationMs,
+      peaks: result.peaks,
+    });
+
+    useChatStore.getState().pushVoiceMemoMessage(sessionId, {
+      id: localId,
+      sessionId,
+      audioPeaks: result.peaks,
+      audioDurationMs: result.durationMs,
+      transcriptionStatus: "transcribing",
+      audioBlobUrl: undefined,
+      localAudioUri,
+    });
+
+    onRecordingEnd?.(true);
+    void uploadPendingMemo(localId);
+  }, [memoRecorder, sessionId, stopTimer, setRecordingState, onRecordingEnd]);
+
   commitMemoRecordingRef.current = commitMemoRecording;
 
-  const startMemoRecording = useCallback(async (): Promise<void> => {
-    if (memoRecorder.isRecording) return;
-    memoWillCancelRef.current = false;
-    setMemoWillCancel(false);
-    setMemoElapsedMs(0);
+  // Expose commit function to parent (for RecordingStrip send button).
+  useEffect(() => {
+    if (onExposeCommit) {
+      onExposeCommit(() => void commitMemoRecording());
+    }
+  // onExposeCommit is stable (useCallback in parent); commitMemoRecording
+  // changes when sessionId changes. The ref ensures the exposed fn always
+  // calls the latest version.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onExposeCommit]);
 
-    // Dismiss the keyboard so the rec-bar isn't fighting it for bottom space.
+  // Stable ref so the exposed commit always calls the latest commitMemoRecording.
+  // (commitMemoRecordingRef.current already serves this purpose.)
+
+  const cancelMemoRecording = useCallback(async (): Promise<void> => {
+    stopTimer();
+    isRecordingRef.current = false;
+    // Clean up peaks subscription before stopping recorder.
+    if (peaksUnsubRef.current) {
+      peaksUnsubRef.current();
+      peaksUnsubRef.current = null;
+    }
+    setRecordingState({ kind: "idle" });
+    setVisualState("idle");
+
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Soft).catch(() => undefined);
+    await memoRecorder.cancel().catch(() => undefined);
+    onRecordingEnd?.(false);
+  }, [memoRecorder, stopTimer, setRecordingState, onRecordingEnd]);
+
+  // -------------------------------------------------------------------------
+  // Start recording
+  // -------------------------------------------------------------------------
+
+  // Ref to the live peaks subscription unsub function. Cleaned up on cancel/commit.
+  const peaksUnsubRef = useRef<(() => void) | null>(null);
+
+  const startMemoRecording = useCallback(async (originTime: number): Promise<void> => {
+    if (memoRecorder.isRecording) return;
     Keyboard.dismiss();
 
     try {
@@ -832,120 +527,186 @@ export function MicButton({
       return;
     }
 
-    setIsMemoRecording(true);
-    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => undefined);
+    isRecordingRef.current = true;
+    startTimer();
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
+    onRecordingStart?.();
+    setVisualState("recording");
 
-    // Tick every 500ms to update the duration counter. Stop at 10-min cap.
-    const startTime = Date.now();
-    const MAX_MEMO_MS = 10 * 60 * 1000;
-    memoTimerRef.current = setInterval(() => {
-      const elapsed = Date.now() - startTime;
-      setMemoElapsedMs(elapsed);
-      if (elapsed >= MAX_MEMO_MS && memoTimerRef.current !== null) {
-        clearInterval(memoTimerRef.current);
-        memoTimerRef.current = null;
-        // Cap reached — commit what we have via stable ref (avoids circular dep).
-        void commitMemoRecordingRef.current();
+    // Subscribe to live peaks so parent can render the waveform overlay.
+    if (onPeaksUpdate) {
+      if (peaksUnsubRef.current) peaksUnsubRef.current();
+      peaksUnsubRef.current = memoRecorder.subscribeToPeaks(onPeaksUpdate);
+    }
+
+    // After LONG_PRESS_THRESHOLD_MS of holding, transition to hold-active.
+    const delay = LONG_PRESS_THRESHOLD_MS - (Date.now() - originTime);
+    if (holdTimerRef.current) clearTimeout(holdTimerRef.current);
+    holdTimerRef.current = setTimeout(() => {
+      holdTimerRef.current = null;
+      const current = recStateRef.current;
+      // Only transition if we're still in an "active press" state (not tap-toggle
+      // which means the finger is already up).
+      if (current.kind === "idle" && isRecordingRef.current) {
+        // The finger must still be down (otherwise we would have moved to tap-toggle).
+        // We use a separate isFingerDownRef to track this.
+        if (isFingerDownRef.current) {
+          setRecordingState({ kind: "hold-active", startedAt: originTime });
+          void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => undefined);
+        }
       }
-    }, 500);
-  }, [memoRecorder, setIsMemoRecording]);
+    }, Math.max(0, delay));
+  }, [memoRecorder, startTimer, onRecordingStart, setRecordingState, onPeaksUpdate]);
+
+  // Tracks whether the finger is currently pressed down on the button.
+  const isFingerDownRef = useRef(false);
 
   // -------------------------------------------------------------------------
-  // Press handlers — MEMO-ONLY (tap-toggle + PTT)
-  //
-  // Tap-toggle semantics (pattern B from the spec):
-  //   First tap (isMemoRecording=false, heldMs < threshold):
-  //     → start recording, set isTapToggleRecordingRef = true.
-  //   Second tap (isMemoRecording=true, heldMs < threshold):
-  //     → commitMemoRecording (stop + upload).
-  //
-  // PTT (long-hold, heldMs >= LONG_PRESS_THRESHOLD_MS):
-  //   pressIn starts recording immediately (via handlePressIn if not already
-  //   recording). handleLongPress fires after delayLongPress ms — it's a no-op
-  //   now since recording started in pressIn. pressOut commits the memo.
-  //
-  // isTapToggleRecordingRef arms the second-tap commit path.
-  //
-  // VOICE_TRANSCRIBE_DISABLED: original handlers used voice.start() /
-  // voice.cancel() / voice.stop() here. Kept as commented block below.
+  // Gesture responder: move handler for drag detection
   // -------------------------------------------------------------------------
 
-  /**
-   * True when the user tapped once (not PTT) and the recorder is running.
-   * The second tap detects this flag and commits the recording.
-   */
-  const isTapToggleRecordingRef = useRef<boolean>(false);
+  const handleResponderMove = useCallback((e: GestureResponderEvent) => {
+    const touchY = e.nativeEvent.pageY;
+    const touchX = e.nativeEvent.pageX;
+    const dy = touchY - pressOriginRef.current.y; // positive = finger moved down
+    const dx = touchX - pressOriginRef.current.x; // negative = finger moved left
+
+    const current = recStateRef.current;
+    if (current.kind === "idle") return;
+
+    // Cancel threshold: finger slid DOWN or LEFT past threshold.
+    const willCancel = dy > MEMO_CANCEL_THRESHOLD_PT || dx < -MEMO_CANCEL_THRESHOLD_PT;
+
+    // Lock threshold: finger dragged UP > LOCK_THRESHOLD_PT during hold-active.
+    const willLock = dy < -LOCK_THRESHOLD_PT && current.kind === "hold-active";
+
+    if (willLock) {
+      // Transition to locked-hold. Haptic: notification success.
+      setRecordingState({ kind: "locked-hold", startedAt: current.startedAt });
+      setVisualState("locked");
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
+      cancelThresholdActiveRef.current = false;
+      return;
+    }
+
+    if (willCancel && !cancelThresholdActiveRef.current) {
+      cancelThresholdActiveRef.current = true;
+      setRecordingState({ kind: "cancelling", startedAt: current.startedAt });
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => undefined);
+    } else if (!willCancel && cancelThresholdActiveRef.current) {
+      // Dragged back inside the safe zone — revert to the appropriate mode.
+      cancelThresholdActiveRef.current = false;
+      const heldMs = Date.now() - current.startedAt;
+      if (heldMs >= LONG_PRESS_THRESHOLD_MS || isFingerDownRef.current) {
+        // Still holding long enough → hold-active.
+        setRecordingState({ kind: "hold-active", startedAt: current.startedAt });
+      } else {
+        // Short hold — stay as tap-toggle.
+        setRecordingState({ kind: "tap-toggle", startedAt: current.startedAt });
+      }
+    }
+  }, [setRecordingState]);
+
+  // -------------------------------------------------------------------------
+  // Press handlers
+  // -------------------------------------------------------------------------
 
   const handlePressIn = useCallback((e: GestureResponderEvent) => {
     if (tapDisabled) return;
 
-    pressInTimeRef.current = Date.now();
-    pressOriginRef.current = {
-      x: e.nativeEvent.pageX,
-      y: e.nativeEvent.pageY,
-    };
+    const now = Date.now();
+    pressOriginRef.current = { x: e.nativeEvent.pageX, y: e.nativeEvent.pageY, time: now };
+    isFingerDownRef.current = true;
+    cancelThresholdActiveRef.current = false;
 
-    // Start recording immediately — works for both tap-toggle first-tap and PTT.
-    // If already recording (tap-toggle second-tap path), do nothing here;
-    // handlePressOut will detect isTapToggleRecordingRef and commit.
-    if (!memoRecorder.isRecording) {
-      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
-      void startMemoRecording();
+    const current = recStateRef.current;
+
+    if (current.kind === "idle") {
+      // First press: always start the recorder immediately.
+      void startMemoRecording(now);
     }
-  }, [tapDisabled, memoRecorder, startMemoRecording]);
+    // If current.kind === "tap-toggle", this is the second press (second tap).
+    // We don't start anything — handlePressOut will commit.
+    // locked-hold: tap on the stop icon → handlePressOut will commit.
+  }, [tapDisabled, startMemoRecording]);
 
   const handlePressOut = useCallback(() => {
     if (tapDisabled) return;
 
-    const heldMs = Date.now() - pressInTimeRef.current;
+    isFingerDownRef.current = false;
 
-    if (heldMs >= LONG_PRESS_THRESHOLD_MS) {
-      // PTT path: finger held long enough — release commits the recording.
-      isTapToggleRecordingRef.current = false;
-      void commitMemoRecording();
-    } else {
-      // Tap path (short press).
-      if (isTapToggleRecordingRef.current) {
-        // Second tap — recording is live; commit it.
-        isTapToggleRecordingRef.current = false;
-        void commitMemoRecording();
-      } else {
-        // First tap — recording just started in handlePressIn; arm toggle flag.
-        // The recording bar is now visible; the next tap will commit.
-        isTapToggleRecordingRef.current = true;
-      }
+    // Cancel any pending hold timer (if finger lifts before 500ms fires).
+    if (holdTimerRef.current) {
+      clearTimeout(holdTimerRef.current);
+      holdTimerRef.current = null;
     }
-  }, [tapDisabled, commitMemoRecording]);
+
+    const current = recStateRef.current;
+    const heldMs = Date.now() - pressOriginRef.current.time;
+
+    switch (current.kind) {
+      case "idle":
+        // The recorder started in pressIn (state was idle then). The 500ms
+        // hold timer hasn't fired yet — this is the FIRST tap (short press).
+        // Transition to tap-toggle: rec keeps running, next pressOut commits.
+        if (isRecordingRef.current) {
+          setRecordingState({ kind: "tap-toggle", startedAt: pressOriginRef.current.time });
+        }
+        return;
+
+      case "tap-toggle":
+        // This is the SECOND tap (second pressOut in tap-toggle mode) → commit.
+        void commitMemoRecording();
+        return;
+
+      case "hold-active":
+        // Finger lifted while holding (no cancel, no lock) → commit (classic PTT).
+        void commitMemoRecording();
+        return;
+
+      case "locked-hold":
+        // In locked-hold, the mic icon transforms to a stop button. A tap/pressOut
+        // on the mic button in this state commits the recording.
+        void commitMemoRecording();
+        return;
+
+      case "cancelling":
+        // Finger lifted while in cancel zone → abort.
+        void cancelMemoRecording();
+        return;
+    }
+
+    // Exhaustive: heldMs is used for logging only (tap-toggle already handled).
+    void heldMs;
+  }, [tapDisabled, commitMemoRecording, cancelMemoRecording, setRecordingState]);
 
   // -------------------------------------------------------------------------
-  // Long-press handler — PTT is already started in pressIn; this is a no-op
-  // for the memo path. Kept so delayLongPress fires without side-effects.
+  // AppState handler — cancel recording when backgrounded
   // -------------------------------------------------------------------------
 
-  const handleLongPress = useCallback(() => {
-    // PTT recording was already started in handlePressIn.
-    // isTapToggleRecordingRef stays false — PTT commits on pressOut via the
-    // heldMs >= LONG_PRESS_THRESHOLD_MS branch, not the tap-toggle branch.
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", (nextState) => {
+      if (nextState !== "active" && memoRecorder.isRecording) {
+        void cancelMemoRecording();
+      }
+    });
+    return () => {
+      sub.remove();
+      // Clean up any active peaks subscription on unmount.
+      if (peaksUnsubRef.current) {
+        peaksUnsubRef.current();
+        peaksUnsubRef.current = null;
+      }
+    };
+  }, [memoRecorder, cancelMemoRecording]);
 
-    /*
-     * VOICE_TRANSCRIBE_DISABLED: original long-press triggered model download
-     * when modelStatus was "absent" or "failed". Code:
-     *
-     * if (modelStatus === "downloading") return;
-     * if (modelStatus === "absent" || modelStatus === "failed") {
-     *   void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => undefined);
-     *   void voice.ensureModelReady().catch(() => {});
-     *   return;
-     * }
-     */
-  }, []);
+  // -------------------------------------------------------------------------
+  // Error haptic
+  // -------------------------------------------------------------------------
 
-  // Fire a haptic + error notification whenever an error surfaces.
   useEffect(() => {
     if (visualState === "error") {
-      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(
-        () => undefined
-      );
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => undefined);
     }
   }, [visualState]);
 
@@ -953,38 +714,35 @@ export function MicButton({
   // Accessibility
   // -------------------------------------------------------------------------
 
-  /*
-   * VOICE_TRANSCRIBE_DISABLED: accessibility label previously described model
-   * download state (absent / downloading / failed). Simplified to memo-only.
-   * To restore: reinstate modelStatus / modelProgress branches.
-   */
   const a11yLabel =
-    visualState === "recording"
-      ? "Voice memo. Tap again to send, or slide to cancel."
-      : "Voice memo. Tap to start recording, tap again to stop and send. Hold to record while held.";
+    recState.kind === "locked-hold"
+      ? "Voice memo. Tap to send."
+      : recState.kind !== "idle"
+        ? "Voice memo. Tap again to send, or slide to cancel."
+        : "Voice memo. Tap to start recording, tap again to stop and send. Hold to record while held.";
 
-  // VOICE_TRANSCRIBE_DISABLED: a11yHint previously reflected model download state.
   const a11yHint = "Slide left or down while holding to cancel.";
 
   // -------------------------------------------------------------------------
-  // Render
+  // Derived display flags
   // -------------------------------------------------------------------------
 
+  const showLockHint = recState.kind === "hold-active";
   const iconSize = Math.round(size * 0.5);
   const pulseSize = size * 1.6;
-  // VOICE_TRANSCRIBE_DISABLED: ringSize (size + 8) was used by ProgressRing
-  // during WhisperKit model download. Removed; kept as comment for restoration.
-  // const ringSize = size + 8;
-
-  // Memo recording bar visible state: show when actively recording or uploading.
-  const showMemoBar = isMemoRecording || isMemoUploading;
 
   return (
     <View
       onLayout={handleLayout}
-      onStartShouldSetResponder={() => true}
+      onStartShouldSetResponder={() => isRecordingRef.current}
       onResponderMove={handleResponderMove}
-      style={{ width: size, height: size, alignItems: "center", justifyContent: "center", overflow: "visible" }}
+      style={{
+        width: size,
+        height: size,
+        alignItems: "center",
+        justifyContent: "center",
+        overflow: "visible",
+      }}
     >
       {/* Pulse ring — rendered behind the button (recording state only) */}
       {!reducedMotion && (
@@ -1003,36 +761,31 @@ export function MicButton({
         />
       )}
 
-      {/*
-        * VOICE_TRANSCRIBE_DISABLED: WhisperKit model download progress ring.
-        * Shown while modelStatus === "downloading". Requires modelStatus +
-        * modelProgress from voice.modelStatus / voice.modelProgress.
-        * To restore: uncomment and wire voice.modelStatus / voice.modelProgress.
-        *
-        * {modelStatus === "downloading" ? (
-        *   <View
-        *     pointerEvents="none"
-        *     style={{ position: "absolute", width: ringSize, height: ringSize }}
-        *   >
-        *     <ProgressRing size={ringSize} progress={modelProgress} color={tokens.accent} />
-        *   </View>
-        * ) : null}
-        */}
+      {/* LockHint — floats above the button during hold-active */}
+      <View
+        pointerEvents="none"
+        style={{
+          position: "absolute",
+          bottom: size + 12,
+          alignItems: "center",
+          width: 80,
+        }}
+      >
+        <LockHint visible={showLockHint} />
+      </View>
 
       {/* Button + shake wrapper */}
       <Animated.View style={shakeStyle}>
         <Pressable
           onPressIn={handlePressIn}
           onPressOut={handlePressOut}
-          onLongPress={handleLongPress}
-          delayLongPress={LONG_PRESS_THRESHOLD_MS}
           disabled={tapDisabled}
           accessibilityLabel={a11yLabel}
           accessibilityHint={a11yHint}
           accessibilityRole="button"
           accessibilityState={{
             disabled: tapDisabled,
-            selected: visualState === "recording",
+            selected: recState.kind !== "idle",
           }}
           style={[
             {
@@ -1048,58 +801,21 @@ export function MicButton({
             },
           ]}
         >
-          {/* Reduced-motion REC dot overlaid on the icon when recording */}
-          {reducedMotion && visualState === "recording" ? (
-            <RecDot color={tokens.danger} />
-          ) : null}
-
-          {visualState === "recording" ? (
+          {recState.kind === "locked-hold" ? (
+            <StopIcon size={iconSize} color={iconColor} />
+          ) : recState.kind !== "idle" ? (
             <MicFilled size={iconSize} color={iconColor} />
           ) : (
             <MicOutline size={iconSize} color={iconColor} />
           )}
         </Pressable>
       </Animated.View>
-
-      {/*
-        * VOICE_TRANSCRIBE_DISABLED: WhisperKit model state badges (DownloadBadge
-        * for absent, ErrorBadge for failed). Requires modelStatus.
-        * To restore: uncomment and wire voice.modelStatus.
-        *
-        * {modelStatus === "absent" && visualState !== "recording" ? (
-        *   <DownloadBadge color={tokens.ink} bg={tokens.surface} />
-        * ) : null}
-        * {modelStatus === "failed" ? (
-        *   <ErrorBadge dangerColor={tokens.danger} />
-        * ) : null}
-        */}
-
-      {/* Memo recording bar — floats above the composer row. Rendered outside
-          the button's layout box via a wide absolute-positioned view. Always
-          mounted while showMemoBar is true; the Animated.View handles the
-          slide-in/out so layout is stable during the exit animation. */}
-      {showMemoBar ? (
-        <Animated.View
-          style={[
-            {
-              position: "absolute",
-              // Sit ~56pt above the bottom of this button (above the toolbar row).
-              bottom: size + 8,
-              // Stretch across the typical phone width from the button's centre.
-              left: -200,
-              right: -200,
-            },
-            recBarAnimStyle,
-          ]}
-          pointerEvents="none"
-        >
-          <RecordingBar
-            elapsedMs={memoElapsedMs}
-            willCancel={memoWillCancel}
-            uploading={isMemoUploading}
-          />
-        </Animated.View>
-      ) : null}
     </View>
   );
 }
+
+// ---------------------------------------------------------------------------
+// Re-export elapsed time for parent to subscribe
+// ---------------------------------------------------------------------------
+
+export type { RecordingState };

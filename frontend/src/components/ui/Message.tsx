@@ -216,18 +216,20 @@ function UserRow({
   const tokens = useThemeTokens();
 
   // Voice memo branch: render AudioMessage instead of the text bubble when
-  // the history row carries an audio blob. `messageId` is the DB row id
-  // encoded in the chat-store id string as "hist-u-<id>".
-  if (message.audioBlobUrl) {
+  // the row carries audio — either an already-uploaded server blob URL or
+  // a still-pending local file URI (optimistic insert before upload). Both
+  // paths render the same bubble; AudioMessage prefers the local file for
+  // playback while it's available.
+  if (message.audioBlobUrl || message.localAudioUri) {
     // Extract the numeric row id from the stable chat-store id "hist-u-<n>".
-    // Fall back to the full id string if parsing fails (e.g. live-optimistic
-    // rows that don't yet have a DB id).
+    // For optimistic local-<uuid> rows, the full id is passed through.
     const rawId = message.id.startsWith("hist-u-") ? message.id.slice(7) : message.id;
     return (
       <AudioMessage
         messageId={rawId}
         sessionId={sessionId ?? ""}
         audioBlobUrl={message.audioBlobUrl}
+        localAudioUri={message.localAudioUri}
         audioDurationMs={message.audioDurationMs ?? 0}
         transcript={message.text}
         transcriptionStatus={(message.transcriptionStatus ?? "completed") as TranscriptionStatus}
@@ -1287,6 +1289,7 @@ export const Message = memo(MessageInner, (prev, next) => {
       a.attachmentRefs === b.attachmentRefs &&
       a.clientId === b.clientId &&
       a.audioBlobUrl === b.audioBlobUrl &&
+      a.localAudioUri === b.localAudioUri &&
       a.transcriptionStatus === b.transcriptionStatus
     );
   }

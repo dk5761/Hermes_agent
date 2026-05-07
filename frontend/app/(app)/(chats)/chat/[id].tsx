@@ -32,6 +32,9 @@ import Animated from "react-native-reanimated";
 // transcript preview pill. Removed since the pill is disabled.
 // To restore: re-add `FadeIn, FadeOut` to the Animated import above.
 import { MicButton } from "@/voice";
+import type { RecordingState } from "@/voice/MicButton";
+import { RecordingStrip } from "@/voice/RecordingStrip";
+import { RecordingOverlay } from "@/voice/RecordingOverlay";
 import { useVoiceSettings } from "@/state/voice-settings";
 import { FlashList, type FlashListRef, type ListRenderItem } from "@shopify/flash-list";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
@@ -495,6 +498,67 @@ export default function ChatScreen() {
   // const voiceAddsPunctuation = useVoiceSettings((s) => s.addsPunctuation); // VOICE_TRANSCRIBE_DISABLED
   // const [partialVoice, setPartialVoice] = useState("");               // VOICE_TRANSCRIBE_DISABLED
   // const voiceBaseInputRef = useRef<string>("");                        // VOICE_TRANSCRIBE_DISABLED
+
+  // ─── recording state (Phase 2) ────────────────────────────────────────────
+  // Drives the RecordingStrip + RecordingOverlay visibility.
+  // MicButton pushes state changes upward via callbacks.
+  const [activeRecordingState, setActiveRecordingState] = useState<
+    Exclude<RecordingState, { kind: "idle" }> | null
+  >(null);
+  const [livePeaks, setLivePeaks] = useState<number[]>([]);
+  const [recordingElapsedMs, setRecordingElapsedMs] = useState(0);
+  const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const recordingStartTimeRef = useRef<number>(0);
+
+  const isRecording = activeRecordingState !== null;
+
+  const handleRecordingStart = useCallback(() => {
+    recordingStartTimeRef.current = Date.now();
+    setRecordingElapsedMs(0);
+    setLivePeaks([]);
+    if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
+    recordingTimerRef.current = setInterval(() => {
+      setRecordingElapsedMs(Date.now() - recordingStartTimeRef.current);
+    }, 100);
+  }, []);
+
+  const handleRecordingStateChange = useCallback(
+    (state: Exclude<RecordingState, { kind: "idle" }> | null) => {
+      setActiveRecordingState(state);
+    },
+    [],
+  );
+
+  const handleRecordingEnd = useCallback((_committed: boolean) => {
+    setActiveRecordingState(null);
+    setLivePeaks([]);
+    setRecordingElapsedMs(0);
+    if (recordingTimerRef.current) {
+      clearInterval(recordingTimerRef.current);
+      recordingTimerRef.current = null;
+    }
+  }, []);
+
+  const handlePeaksUpdate = useCallback((peaks: number[]) => {
+    setLivePeaks(peaks);
+  }, []);
+
+  // Clean up the elapsed timer on unmount.
+  useEffect(() => {
+    return () => {
+      if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
+    };
+  }, []);
+
+  // ─── recording strip send handler ─────────────────────────────────────────
+  // In tap-toggle and locked-hold modes, the RecordingStrip shows a send button.
+  // Tapping it commits the recording via the function MicButton exposed.
+  const micCommitRef = useRef<(() => void) | null>(null);
+
+  const handleStripSend = useCallback(() => {
+    micCommitRef.current?.();
+  }, []);
+
   const pendingList = usePendingAttachments(
     (s) => (sessionId ? (s.bySession[sessionId] ?? EMPTY_PENDING) : EMPTY_PENDING),
   );
@@ -2011,13 +2075,18 @@ export default function ChatScreen() {
           </View>
         ) : null}
 
-        {sessionId ? <ComposerAttachments appSessionId={sessionId} /> : null}
-        {sendHint ? (
+        {!isRecording && sessionId ? <ComposerAttachments appSessionId={sessionId} /> : null}
+        {!isRecording && sendHint ? (
           <View style={{ paddingHorizontal: 16, paddingTop: 4 }}>
             <Text kind="caption" color={tokens.ink3}>
               {sendHint}
             </Text>
           </View>
+        ) : null}
+
+        {/* Recording overlay — live waveform above the strip (Phase 2). */}
+        {isRecording ? (
+          <RecordingOverlay livePeaks={livePeaks} />
         ) : null}
 
         {/*
@@ -2301,95 +2370,115 @@ export default function ChatScreen() {
               borderRadius: 22,
             }}
           >
-            <Pressable
-              onPress={onAttachPress}
-              disabled={!sessionId || isStreaming}
-              style={{
-                width: 32,
-                height: 32,
-                borderRadius: 16,
-                alignItems: "center",
-                justifyContent: "center",
-                opacity: !sessionId || isStreaming ? 0.4 : 1,
-              }}
-            >
-              <Icon name="plus" size={18} color={tokens.ink2} />
-            </Pressable>
-            <TextInput
-              ref={inputRef}
-              value={input}
-              onChangeText={setInput}
-              placeholder={isStreaming ? "Streaming…" : "Message Hermes…"}
-              placeholderTextColor={tokens.ink3}
-              multiline
-              editable={!!sessionId}
-              style={{
-                flex: 1,
-                color: tokens.ink,
-                fontFamily: "Inter_400Regular",
-                fontSize: 15,
-                lineHeight: 20,
-                paddingTop: 8,
-                paddingBottom: 8,
-                paddingHorizontal: 4,
-                maxHeight: 120,
-              }}
-            />
-            {/* MicButton — left of the send/stop control, right of the TextInput.
-                VOICE_TRANSCRIBE_DISABLED: transcribe-path props (language,
-                addsPunctuation, onRecordingStart, onPartial, onTranscriptChange,
-                onTranscript, onError) have been removed. MicButton now only
-                needs disabled + sessionId for the memo-only path.
+            {/* Attach button — hidden during recording */}
+            {!isRecording ? (
+              <Pressable
+                onPress={onAttachPress}
+                disabled={!sessionId || isStreaming}
+                style={{
+                  width: 32,
+                  height: 32,
+                  borderRadius: 16,
+                  alignItems: "center",
+                  justifyContent: "center",
+                  opacity: !sessionId || isStreaming ? 0.4 : 1,
+                }}
+              >
+                <Icon name="plus" size={18} color={tokens.ink2} />
+              </Pressable>
+            ) : null}
+
+            {/* Recording strip — replaces text input + send button during recording. */}
+            {isRecording && activeRecordingState ? (
+              <RecordingStrip
+                state={activeRecordingState.kind}
+                elapsedMs={recordingElapsedMs}
+                onSend={handleStripSend}
+              />
+            ) : (
+              <TextInput
+                ref={inputRef}
+                value={input}
+                onChangeText={setInput}
+                placeholder={isStreaming ? "Streaming…" : "Message Hermes…"}
+                placeholderTextColor={tokens.ink3}
+                multiline
+                editable={!!sessionId}
+                style={{
+                  flex: 1,
+                  color: tokens.ink,
+                  fontFamily: "Inter_400Regular",
+                  fontSize: 15,
+                  lineHeight: 20,
+                  paddingTop: 8,
+                  paddingBottom: 8,
+                  paddingHorizontal: 4,
+                  maxHeight: 120,
+                }}
+              />
+            )}
+
+            {/* MicButton — always visible. During recording it transforms its
+                icon based on state (mic → stop in locked-hold).
+                VOICE_TRANSCRIBE_DISABLED: transcribe-path props removed.
                 To restore: re-add those props (see commented block above). */}
             {voiceEnabled ? (
               <MicButton
                 disabled={isStreaming}
                 sessionId={sessionId}
                 size={32}
+                onRecordingStart={handleRecordingStart}
+                onRecordingStateChange={handleRecordingStateChange}
+                onRecordingEnd={handleRecordingEnd}
+                onPeaksUpdate={handlePeaksUpdate}
+                onExposeCommit={(fn) => { micCommitRef.current = fn; }}
               />
             ) : null}
-            {isStreaming ? (
-              <Pressable
-                onPress={onAbort}
-                accessibilityLabel="Stop generating"
-                style={{
-                  width: 32,
-                  height: 32,
-                  borderRadius: 16,
-                  alignItems: "center",
-                  justifyContent: "center",
-                  backgroundColor: tokens.danger,
-                }}
-              >
-                <View
+            {/* Send/abort button — hidden during recording (strip has its own). */}
+            {!isRecording ? (
+              isStreaming ? (
+                <Pressable
+                  onPress={onAbort}
+                  accessibilityLabel="Stop generating"
                   style={{
-                    width: 11,
-                    height: 11,
-                    borderRadius: 2,
-                    backgroundColor: "#FFFFFF",
+                    width: 32,
+                    height: 32,
+                    borderRadius: 16,
+                    alignItems: "center",
+                    justifyContent: "center",
+                    backgroundColor: tokens.danger,
                   }}
-                />
-              </Pressable>
-            ) : (
-              <Pressable
-                onPress={onSend}
-                disabled={sendDisabled}
-                style={{
-                  width: 32,
-                  height: 32,
-                  borderRadius: 16,
-                  alignItems: "center",
-                  justifyContent: "center",
-                  backgroundColor: sendDisabled ? tokens.chip : tokens.ink,
-                }}
-              >
-                <Icon
-                  name="send"
-                  size={16}
-                  color={sendDisabled ? tokens.ink3 : tokens.surface}
-                />
-              </Pressable>
-            )}
+                >
+                  <View
+                    style={{
+                      width: 11,
+                      height: 11,
+                      borderRadius: 2,
+                      backgroundColor: "#FFFFFF",
+                    }}
+                  />
+                </Pressable>
+              ) : (
+                <Pressable
+                  onPress={onSend}
+                  disabled={sendDisabled}
+                  style={{
+                    width: 32,
+                    height: 32,
+                    borderRadius: 16,
+                    alignItems: "center",
+                    justifyContent: "center",
+                    backgroundColor: sendDisabled ? tokens.chip : tokens.ink,
+                  }}
+                >
+                  <Icon
+                    name="send"
+                    size={16}
+                    color={sendDisabled ? tokens.ink3 : tokens.surface}
+                  />
+                </Pressable>
+              )
+            ) : null}
           </Row>
         </View>
       </KeyboardAvoidingView>

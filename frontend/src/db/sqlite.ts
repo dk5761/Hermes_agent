@@ -1,6 +1,6 @@
 import { openDatabaseAsync, type SQLiteDatabase } from "expo-sqlite";
 import { runMigrations } from "./migrations";
-import { PERSIST_MAX_AGE } from "../cache/query-persister";
+import { PERSIST_MAX_AGE } from "../cache/persist-constants";
 
 /**
  * expo-sqlite issues BEGIN/COMMIT against the single shared connection — two

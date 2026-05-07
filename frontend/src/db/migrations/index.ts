@@ -55,6 +55,23 @@ CREATE TABLE meta (
 );
     `.trim(),
   },
+  {
+    version: 2,
+    sql: `
+CREATE TABLE pending_memos (
+  id              TEXT PRIMARY KEY,
+  session_id      TEXT NOT NULL,
+  local_audio_uri TEXT NOT NULL,
+  duration_ms     INTEGER NOT NULL,
+  peaks           TEXT NOT NULL,
+  enqueued_at     INTEGER NOT NULL,
+  retries         INTEGER NOT NULL DEFAULT 0,
+  status          TEXT NOT NULL DEFAULT 'uploading',
+  last_error      TEXT
+);
+CREATE INDEX pending_memos_session ON pending_memos(session_id, enqueued_at);
+    `.trim(),
+  },
 ];
 
 /**

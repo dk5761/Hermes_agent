@@ -8,6 +8,7 @@ export const TABLES = {
   kv: "kv",
   pendingMutations: "pending_mutations",
   pendingSends: "pending_sends",
+  pendingMemos: "pending_memos",
   meta: "meta",
   schemaVersion: "schema_version",
 } as const;

@@ -37,6 +37,16 @@ export interface UserMessage {
   transcriptionError?: string | null;
   /** Waveform data: 80 normalized floats (0..1). Null for old memos or failed extraction. */
   audioPeaks?: number[] | null;
+  /**
+   * Local file URI (file://...) for memos that have not yet been uploaded.
+   * Present only when the message was created optimistically from a local
+   * recording (id starts with "local-"). Cleared once the server row's
+   * audioBlobUrl is available.
+   *
+   * The audio player uses this for playback while the upload is in flight,
+   * falling back to audioBlobUrl when set.
+   */
+  localAudioUri?: string;
 }
 
 export interface AssistantMessage {
@@ -166,8 +176,31 @@ interface ChatStore {
    * as `hist-u-<dbId>` — the same pattern historyRowToUiRow uses — so the
    * dedup filter in the `rows` useMemo can exclude the server-driven history
    * row when the next paginated refetch arrives.
+   *
+   * When `localId` is supplied the bubble is inserted with that id immediately
+   * (pre-upload, optimistic path). The server response later replaces it via
+   * `renameMessage`.
    */
-  pushVoiceMemoMessage: (sessionId: string, msg: VoiceMemoMessage) => void;
+  pushVoiceMemoMessage: (
+    sessionId: string,
+    msg: VoiceMemoMessage | {
+      id: string;
+      sessionId: string;
+      audioPeaks: number[];
+      audioDurationMs: number;
+      transcriptionStatus: "transcribing" | "completed" | "failed";
+      audioBlobUrl: undefined;
+      localAudioUri: string;
+    },
+  ) => void;
+  /**
+   * Rename a message in-place: move the entry from `oldId` to `newId` without
+   * removing and re-inserting (which would cause a FlatList unmount/remount).
+   *
+   * Used after a successful upload to swap the optimistic "local-<uuid>" id
+   * with the server-issued "hist-u-<dbId>" id.
+   */
+  renameMessage: (sessionId: string, oldId: string, newId: string) => void;
   // Remove a user bubble by its pending-sends clientId. Used when the user
   // chooses "Delete" on a failed offline send — the optimistic bubble must
   // disappear alongside the queued frame.
@@ -621,8 +654,30 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   pushVoiceMemoMessage(sessionId, msg) {
     set((s) => {
       const cur = s.byId[sessionId] ?? empty(sessionId);
-      // Use the same id format historyRowToUiRow produces so the dedup filter
-      // in the rows useMemo can strip the history copy when it arrives.
+
+      // Optimistic local-only path: the caller supplies a local-<uuid> id,
+      // no server response yet. audioBlobUrl is undefined; localAudioUri holds
+      // the on-disk file that the audio player can already play.
+      if ("localAudioUri" in msg) {
+        const userMsg: UserMessage = {
+          kind: "user",
+          id: msg.id,
+          text: "",
+          createdAt: new Date().toISOString(),
+          audioDurationMs: msg.audioDurationMs,
+          transcriptionStatus: msg.transcriptionStatus,
+          audioPeaks: msg.audioPeaks,
+          localAudioUri: msg.localAudioUri,
+        };
+        return {
+          byId: {
+            ...s.byId,
+            [sessionId]: { ...cur, messages: [...cur.messages, userMsg] },
+          },
+        };
+      }
+
+      // Server-response path (original): use the real DB id.
       const userMsg: UserMessage = {
         kind: "user",
         id: `hist-u-${msg.id}`,
@@ -638,6 +693,28 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         byId: {
           ...s.byId,
           [sessionId]: { ...cur, messages: [...cur.messages, userMsg] },
+        },
+      };
+    });
+  },
+
+  renameMessage(sessionId, oldId, newId) {
+    set((s) => {
+      const cur = s.byId[sessionId];
+      if (!cur) return s;
+      const idx = cur.messages.findIndex((m) => m.id === oldId);
+      if (idx === -1) return s;
+      // Mutate the entry in-place within a new array so the FlatList row
+      // keeps its React key stable (the key is derived from the object
+      // reference via the messages array index, not the id field directly).
+      const msgs = cur.messages.slice();
+      const existing = msgs[idx];
+      if (!existing) return s;
+      msgs[idx] = { ...existing, id: newId };
+      return {
+        byId: {
+          ...s.byId,
+          [sessionId]: { ...cur, messages: msgs },
         },
       };
     });
