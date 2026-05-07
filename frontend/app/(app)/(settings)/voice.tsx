@@ -167,7 +167,7 @@ const ENGINE_OPTIONS: ReadonlyArray<EngineOption> = [
   {
     value: "auto",
     label: "Auto (recommended)",
-    detail: "On-device when ready, else system. Falls back to system if offline.",
+    detail: "Hermes server when online, on-device WhisperKit when offline (or system if not downloaded).",
   },
   {
     value: "whisper",
@@ -222,7 +222,7 @@ function EnginePicker() {
   return (
     <ListGroup
       header="Speech recognition engine"
-      footer="Auto uses WhisperKit when the model is downloaded and ready, falling back to Apple's built-in recognizer otherwise."
+      footer="Auto picks Hermes server when you're online (best quality, multilingual). Falls back to WhisperKit on-device when offline, or Apple's system recognizer if WhisperKit isn't downloaded."
     >
       {ENGINE_OPTIONS.map((opt) => {
         const isActive = opt.value === engine;

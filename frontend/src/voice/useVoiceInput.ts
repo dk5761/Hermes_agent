@@ -116,8 +116,9 @@ export interface ResolveEngineInput {
  *   5.  engine === "server" + !online + fallback + ready   → "whisper"
  *   6.  engine === "server" + !online + fallback + !ready  → "sfspeech"
  *   7.  engine === "server" + !online + !fallback          → "blocked"
- *   8.  engine === "auto"   + modelStatus === "ready"      → "whisper"
- *   9.  engine === "auto"   + otherwise                    → "sfspeech"
+ *   8.  engine === "auto"   + online                       → "server"
+ *   9.  engine === "auto"   + !online + ready              → "whisper"
+ *  10.  engine === "auto"   + !online + !ready             → "sfspeech"
  *
  * @param opts - Resolution inputs (all explicit, no side-effects).
  * @returns The concrete engine to activate, or "blocked" when the user opted
@@ -144,9 +145,11 @@ export function resolveEngine(opts: ResolveEngineInput): ResolvedEngine {
     return "blocked";                                                     // 7
   }
 
-  // Rules 8-9 — Auto mode: pick by model readiness.
-  // Online state does not affect auto mode — on-device engines work offline.
-  return modelStatus === "ready" ? "whisper" : "sfspeech";               // 8 / 9
+  // Rules 8-10 — Auto mode: prefer the highest-quality engine the network
+  // currently allows. Online → server (best quality). Offline → on-device
+  // (whisper if downloaded, otherwise system SFSpeech).
+  if (online) return "server";                                            // 8
+  return modelStatus === "ready" ? "whisper" : "sfspeech";               // 9 / 10
 }
 
 // ---------------------------------------------------------------------------
