@@ -18,6 +18,7 @@ import { appendHistory, type HistoryKind } from "./chat-history.js";
 import { deriveTitleFromTurn } from "../util/auto-title.js";
 import type { HermesWsPool } from "../hermes/ws-pool.js";
 import type { HermesEventParams, JsonValue } from "../hermes/types.js";
+import { ensureHermesSession } from "../sessions/ensure-hermes-session.js";
 import {
   AttachmentBridge,
   AttachmentUnauthorizedError,
@@ -644,22 +645,16 @@ class GatewayClientHandler {
   // hermes_session_id once `session.create` returns. The contract notes that
   // session.info follows asynchronously — but session.create itself returns
   // the session_id synchronously (per HERMES_CONTRACT.md §"Methods").
+  //
+  // Delegates DB + RPC work to `ensureHermesSession` and then updates the
+  // in-memory reverse map (WS-handler-only concern not needed by route callers).
   private async createHermesSession(appSessionId: string): Promise<string> {
-    const sharedClient = this.deps.wsPool.getOrCreateShared();
-    const result = await sharedClient.request<unknown>("session.create", {});
-    if (!result || typeof result !== "object") {
-      throw new Error("session.create returned non-object");
-    }
-    const r = result as Record<string, unknown>;
-    const hsid = r["session_id"];
-    if (typeof hsid !== "string" || !hsid) {
-      throw new Error("session.create did not include session_id");
-    }
-    const now = Math.floor(Date.now() / 1000);
-    await this.deps.db
-      .update(appSessions)
-      .set({ hermesSessionId: hsid, updatedAt: now })
-      .where(eq(appSessions.id, appSessionId));
+    const hsid = await ensureHermesSession({
+      db: this.deps.db,
+      wsPool: this.deps.wsPool,
+      appSessionId,
+      logger: this.log,
+    });
     this.reverse.set(hsid, appSessionId);
     return hsid;
   }

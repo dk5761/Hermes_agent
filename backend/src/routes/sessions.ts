@@ -8,6 +8,10 @@ import type { HermesHttpClient } from "../hermes/http-client.js";
 import type { HermesWsPool } from "../hermes/ws-pool.js";
 import type { AppLogger } from "../logger.js";
 import { nextBranchTitle } from "../sessions/branch-title.js";
+import {
+  ensureHermesSession,
+  EnsureHermesSessionError,
+} from "../sessions/ensure-hermes-session.js";
 import { loadSessionUsage } from "../usage/session-usage.js";
 import { loadHistoryWindow } from "../ws/chat-history.js";
 import { HermesRpcError } from "../hermes/types.js";
@@ -404,18 +408,26 @@ export async function registerSessionsRoutes(
         .limit(1);
       const row = rows[0];
       if (!row) return reply.code(404).send({ error: "not_found" });
-      if (!row.hermesSessionId) {
-        return reply.code(409).send({
-          error: "no_hermes_session",
-          message: "Send a message first — Hermes session not yet created.",
+
+      let hermesSessionId: string;
+      try {
+        hermesSessionId = await ensureHermesSession({
+          db,
+          wsPool,
+          appSessionId: row.id,
+          logger,
         });
+      } catch (err) {
+        const reason = err instanceof EnsureHermesSessionError ? err.reason : "session_create_failed";
+        logger.warn({ err, appSessionId: row.id }, "reload-mcp: ensureHermesSession failed");
+        return reply.code(503).send({ error: "ensure_session_failed", reason });
       }
 
       const client = wsPool.getOrCreateShared();
       try {
         const result = await slashExecWithRetry(
           client,
-          { session_id: row.hermesSessionId, command: "/reload-mcp" },
+          { session_id: hermesSessionId, command: "/reload-mcp" },
           BRANCH_SLASH_TIMEOUT_MS,
         );
         return reply.send({
@@ -466,11 +478,19 @@ export async function registerSessionsRoutes(
         .limit(1);
       const parent = rows[0];
       if (!parent) return reply.code(404).send({ error: "not_found" });
-      if (!parent.hermesSessionId) {
-        return reply.code(409).send({
-          error: "no_hermes_session",
-          message: "Send a message first — Hermes session not yet created.",
+
+      let parentHermesSessionId: string;
+      try {
+        parentHermesSessionId = await ensureHermesSession({
+          db,
+          wsPool,
+          appSessionId: parent.id,
+          logger,
         });
+      } catch (err) {
+        const reason = err instanceof EnsureHermesSessionError ? err.reason : "session_create_failed";
+        logger.warn({ err, appSessionId: parent.id }, "branch: ensureHermesSession failed");
+        return reply.code(503).send({ error: "ensure_session_failed", reason });
       }
 
       // Resolve final title. Body wins; otherwise auto-suffix against this
@@ -504,7 +524,7 @@ export async function registerSessionsRoutes(
       try {
         result = await slashExecWithRetry(
           client,
-          { session_id: parent.hermesSessionId, command },
+          { session_id: parentHermesSessionId, command },
           BRANCH_SLASH_TIMEOUT_MS,
         );
       } catch (err) {
