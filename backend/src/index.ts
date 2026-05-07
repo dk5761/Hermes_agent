@@ -14,6 +14,7 @@ import { resolveHermesHome } from "./hermes/cron-fs.js";
 import { startCleanupTasks } from "./cleanup/runner.js";
 import { ChatRunTimer } from "./observability/chat-run-timer.js";
 import { backfillSearchIndex } from "./db/searchable-text-indexer.js";
+import { runVoiceOrphanCleanup } from "./blobs/voice-orphan-cleanup.js";
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -186,6 +187,12 @@ async function main(): Promise<void> {
 
   await app.listen({ host: config.HOST, port: config.PORT });
   logger.info({ host: config.HOST, port: config.PORT }, "gateway listening");
+
+  // Voice blob orphan pruning — fire-and-forget after server is listening.
+  // Failures are logged but not fatal.
+  void runVoiceOrphanCleanup(dbHandle.db, config.STORAGE_LOCAL_ROOT, logger).catch(
+    (err) => logger.error({ err }, "voice-orphan-cleanup: unexpected error"),
+  );
 
   if (config.CRON_OUTPUT_WATCH_ENABLED) {
     try {

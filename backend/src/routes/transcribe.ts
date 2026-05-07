@@ -13,7 +13,7 @@ import { HermesRpcError } from "../hermes/types.js";
 // --------------------------------------------------------------------------
 
 /** Strict shape expected from the Hermes `stt.transcribe` RPC result. */
-interface SttTranscribeResult {
+export interface SttTranscribeResult {
   success: boolean;
   transcript: string;
   provider: string;
@@ -66,7 +66,7 @@ const AUDIO_SIZE_LIMIT_BYTES = 10 * 1024 * 1024;
  * @throws  `HermesRpcError` for non-retryable RPC errors.
  * @throws  `Error("upstream_request_timeout:stt.transcribe")` on timeout.
  */
-async function transcribeWithRetry(
+export async function transcribeWithRetry(
   client: HermesWsClient,
   params: { audio_b64: string; mime: string },
   timeoutMs: number,

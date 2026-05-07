@@ -174,6 +174,16 @@ export const chatHistory = sqliteTable(
     // Populated at insert time by extractSearchableText (Approach A).
     // NULL until backfilled for pre-existing rows; indexer fills them on boot.
     searchText: text("search_text"),
+    // Voice memo support. NULL on all three = text-only message (existing rows
+    // are unaffected). audio_blob_path is the relative path under
+    // /app/data/blobs/voice/. transcription_status state machine:
+    //   "transcribing" → "completed" | "failed"
+    // NULL means no audio was attached. transcription_error is populated only
+    // when transcription_status = "failed".
+    audioBlobPath: text("audio_blob_path"),
+    audioDurationMs: integer("audio_duration_ms"),
+    transcriptionStatus: text("transcription_status"),
+    transcriptionError: text("transcription_error"),
   },
   (t) => ({
     sessionIdIdx: index("chat_history_session_id_idx").on(t.appSessionId, t.id),

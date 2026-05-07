@@ -28,6 +28,7 @@ import { registerInternalIosToolsRoutes } from "./routes/internal-ios-tools.js";
 import { registerLiveActivityRoutes } from "./routes/live-activity.js";
 import { registerPrefsRoutes } from "./routes/prefs.js";
 import { registerTranscribeRoutes } from "./routes/transcribe.js";
+import { registerVoiceMemoRoutes } from "./routes/voice-memo.js";
 import { LiveActivityPusher } from "./push/apns-live-activity.js";
 import { ChatCompleteNotifier } from "./push/chat-complete.js";
 import type { ExpoClient } from "./push/expo-client.js";
@@ -162,6 +163,7 @@ export async function buildServer(deps: BuildServerDeps): Promise<FastifyInstanc
     hermesHttp: deps.hermesHttp,
     wsPool: deps.wsPool,
     logger: deps.logger,
+    blobRoot: deps.config.STORAGE_LOCAL_ROOT,
   });
   await registerSearchRoutes(app, {
     dbHandle: deps.dbHandle,
@@ -262,6 +264,14 @@ export async function buildServer(deps: BuildServerDeps): Promise<FastifyInstanc
     db: deps.dbHandle.db,
     requireAuth,
     wsPool: deps.wsPool,
+    logger: deps.logger,
+  });
+
+  await registerVoiceMemoRoutes(app, {
+    db: deps.dbHandle.db,
+    requireAuth,
+    wsPool: deps.wsPool,
+    blobRoot: deps.config.STORAGE_LOCAL_ROOT,
     logger: deps.logger,
   });
 

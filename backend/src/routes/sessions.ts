@@ -1,9 +1,11 @@
 import crypto from "node:crypto";
-import { and, desc, eq, inArray, max, sql } from "drizzle-orm";
+import fsp from "node:fs/promises";
+import path from "node:path";
+import { and, desc, eq, inArray, isNotNull, max, sql } from "drizzle-orm";
 import type { FastifyInstance, preHandlerHookHandler } from "fastify";
 import { z } from "zod";
 import type { Db } from "../db/client.js";
-import { appSessions, wsEvents } from "../db/schema.js";
+import { appSessions, chatHistory, wsEvents } from "../db/schema.js";
 import type { HermesHttpClient } from "../hermes/http-client.js";
 import type { HermesWsPool } from "../hermes/ws-pool.js";
 import type { AppLogger } from "../logger.js";
@@ -70,6 +72,8 @@ export interface SessionsRoutesDeps {
   hermesHttp: HermesHttpClient;
   wsPool: HermesWsPool;
   logger: AppLogger;
+  /** Absolute path to the blob root (STORAGE_LOCAL_ROOT). Used to unlink audio blobs on session delete. */
+  blobRoot: string;
 }
 
 const createBody = z.object({
@@ -117,7 +121,7 @@ export async function registerSessionsRoutes(
   app: FastifyInstance,
   deps: SessionsRoutesDeps,
 ): Promise<void> {
-  const { db, requireAuth, hermesHttp, wsPool, logger } = deps;
+  const { db, requireAuth, hermesHttp, wsPool, logger, blobRoot } = deps;
 
   app.get("/sessions", { preHandler: requireAuth }, async (request, reply) => {
     const user = request.user;
@@ -276,7 +280,35 @@ export async function registerSessionsRoutes(
         logger.warn({ err, hsid: row.hermesSessionId }, "upstream delete failed; continuing");
       }
     }
+
+    // Collect audio blob paths before deleting rows so we can clean up files.
+    // chat_history rows cascade-delete with the app_session row (FK onDelete:
+    // "cascade"), so we SELECT first, delete the session row, then unlink files.
+    const audioRows = await db
+      .select({ audioBlobPath: chatHistory.audioBlobPath })
+      .from(chatHistory)
+      .where(
+        and(
+          eq(chatHistory.appSessionId, row.id),
+          isNotNull(chatHistory.audioBlobPath),
+        ),
+      );
+
     await db.delete(appSessions).where(eq(appSessions.id, row.id));
+
+    // Best-effort unlink — log warnings on failure but don't abort.
+    for (const r of audioRows) {
+      if (!r.audioBlobPath) continue;
+      const filePath = path.join(blobRoot, r.audioBlobPath);
+      try {
+        await fsp.unlink(filePath);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+          logger.warn({ err, filePath }, "session delete: audio blob unlink failed");
+        }
+      }
+    }
+
     return reply.send({ id: row.id, deleted: true });
   });
 
@@ -379,6 +411,13 @@ export async function registerSessionsRoutes(
           kind: r.kind,
           createdAt: r.createdAt,
           payload: r.payload,
+          // Audio fields — null for text-only rows. audioBlobUrl is the
+          // relative path that the mobile client fetches (prefixed with
+          // API_URL on the frontend).
+          ...(r.audioBlobUrl !== null ? { audioBlobUrl: r.audioBlobUrl } : {}),
+          ...(r.audioDurationMs !== null ? { audioDurationMs: r.audioDurationMs } : {}),
+          ...(r.transcriptionStatus !== null ? { transcriptionStatus: r.transcriptionStatus } : {}),
+          ...(r.transcriptionError !== null ? { transcriptionError: r.transcriptionError } : {}),
         })),
         hasBefore: result.hasBefore,
         hasAfter: result.hasAfter,

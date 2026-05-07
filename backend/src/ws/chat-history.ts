@@ -22,6 +22,11 @@ export interface HistoryRow {
   kind: HistoryKind;
   payload: Record<string, unknown>;
   createdAt: number;
+  /** Relative URL path like `/voice-blobs/voice/<sha>.m4a`. Null for text-only rows. */
+  audioBlobUrl: string | null;
+  audioDurationMs: number | null;
+  transcriptionStatus: string | null;
+  transcriptionError: string | null;
 }
 
 export async function appendHistory(
@@ -52,25 +57,12 @@ export async function appendHistory(
     kind,
     payload: (payload ?? {}) as Record<string, unknown>,
     createdAt: ts,
+    // appendHistory only writes text/tool rows — no audio fields.
+    audioBlobUrl: null,
+    audioDurationMs: null,
+    transcriptionStatus: null,
+    transcriptionError: null,
   };
-}
-
-export async function loadHistory(
-  db: Db,
-  appSessionId: string,
-): Promise<HistoryRow[]> {
-  const rows = await db
-    .select({
-      id: chatHistory.id,
-      kind: chatHistory.kind,
-      payloadJson: chatHistory.payloadJson,
-      createdAt: chatHistory.createdAt,
-    })
-    .from(chatHistory)
-    .where(eq(chatHistory.appSessionId, appSessionId))
-    .orderBy(asc(chatHistory.id));
-
-  return rows.map(toHistoryRow);
 }
 
 // ---------- paginated load ----------
@@ -101,6 +93,10 @@ interface RawRow {
   kind: string;
   payloadJson: string;
   createdAt: number;
+  audioBlobPath: string | null;
+  audioDurationMs: number | null;
+  transcriptionStatus: string | null;
+  transcriptionError: string | null;
 }
 
 function toHistoryRow(r: RawRow): HistoryRow {
@@ -116,6 +112,12 @@ function toHistoryRow(r: RawRow): HistoryRow {
     kind: r.kind as HistoryKind,
     payload,
     createdAt: r.createdAt,
+    // Project the disk-relative path to the URL clients use to fetch the blob.
+    // Null on all text-only rows (audio_blob_path is NULL in DB).
+    audioBlobUrl: r.audioBlobPath ? `/voice-blobs/${r.audioBlobPath}` : null,
+    audioDurationMs: r.audioDurationMs,
+    transcriptionStatus: r.transcriptionStatus,
+    transcriptionError: r.transcriptionError,
   };
 }
 
@@ -124,7 +126,24 @@ const HISTORY_COLUMNS = {
   kind: chatHistory.kind,
   payloadJson: chatHistory.payloadJson,
   createdAt: chatHistory.createdAt,
+  audioBlobPath: chatHistory.audioBlobPath,
+  audioDurationMs: chatHistory.audioDurationMs,
+  transcriptionStatus: chatHistory.transcriptionStatus,
+  transcriptionError: chatHistory.transcriptionError,
 } as const;
+
+export async function loadHistory(
+  db: Db,
+  appSessionId: string,
+): Promise<HistoryRow[]> {
+  const rows = await db
+    .select(HISTORY_COLUMNS)
+    .from(chatHistory)
+    .where(eq(chatHistory.appSessionId, appSessionId))
+    .orderBy(asc(chatHistory.id));
+
+  return rows.map(toHistoryRow);
+}
 
 export async function loadHistoryWindow(
   db: Db,
