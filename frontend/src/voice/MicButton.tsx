@@ -1,5 +1,7 @@
 /**
- * MicButton — PTT (default) or tap-to-toggle mic button for the chat composer.
+ * MicButton — mic button for the chat composer with hardcoded gesture routing:
+ *   tap       → toggle (start transcribing; tap again to stop)
+ *   long-hold → voice memo (record while held, send on release; slide-to-cancel)
  *
  * Visual states:
  *   idle      → outlined mic icon, neutral (ink3) tint, surface background
@@ -16,23 +18,19 @@
  *   failed     → red X badge; tap retries ensureModelReady()
  *   ready      → no overlay; normal behaviour
  *
- * Slide-to-cancel (PTT only):
+ * Slide-to-cancel:
  *   We use plain Pressable onPressIn / onPressOut and track the touch position
  *   via onLayout (to get button bounds) plus a pan handler implemented with
- *   Pressable's onMoveCapture prop via RN's Responder system.
- *   Concretely: we capture the initial touch via onPressIn, then use the
- *   ViewResponder callbacks (onStartShouldSetResponder + onResponderMove) on
- *   an outer View to detect when the finger leaves the button area. When the
- *   Y offset moves more than CANCEL_THRESHOLD_PT above the button's top edge
- *   we set a cancelRef flag so onPressOut calls cancel() instead of stop().
+ *   the ViewResponder system (onStartShouldSetResponder + onResponderMove) on
+ *   an outer View. When the Y offset moves more than CANCEL_THRESHOLD_PT above
+ *   the button's top edge we set a cancelRef flag so onPressOut calls cancel()
+ *   instead of stop(). Memo-path uses MEMO_CANCEL_THRESHOLD_PT.
  *
  *   Why this approach rather than react-native-gesture-handler (RNGH)?
  *   RNGH is in package.json but is used as Expo Router's gesture provider, not
- *   imported directly by any UI component in this codebase. Introducing RNGH's
- *   Gesture API in the first component that uses it would be a pattern
- *   divergence. The plain Responder approach keeps MicButton self-contained,
- *   avoids wrapping the button in a GestureDetector, and is sufficient for the
- *   single gesture we need.
+ *   imported directly by any UI component in this codebase. The plain Responder
+ *   approach keeps MicButton self-contained, avoids wrapping the button in a
+ *   GestureDetector, and is sufficient for the single gesture we need.
  */
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
@@ -65,6 +63,7 @@ import { useVoiceInput } from "./useVoiceInput";
 import type { VoiceInputError } from "./useVoiceInput";
 import { VoiceMemoRecorder } from "./voice-memo-recorder";
 import { postVoiceMemo } from "../api/voice-memo";
+import { useChatStore } from "../state/chat-store";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -399,8 +398,6 @@ export interface MicButtonProps {
   onError?: (err: VoiceInputError) => void;
   /** Disable the button (e.g., while agent is streaming). */
   disabled?: boolean;
-  /** Interaction mode. Default "ptt". */
-  mode?: "ptt" | "toggle";
   /** Override the language. Default = device locale. */
   language?: string;
   /** Apple's auto-punctuation. Default true. */
@@ -424,7 +421,6 @@ export function MicButton({
   onPartial,
   onError,
   disabled = false,
-  mode = "ptt",
   language,
   addsPunctuation = true,
   size = DEFAULT_SIZE,
@@ -529,7 +525,6 @@ export function MicButton({
 
   const handleResponderMove = useCallback(
     (e: GestureResponderEvent) => {
-      if (mode !== "ptt") return;
       const touchY = e.nativeEvent.pageY;
       const touchX = e.nativeEvent.pageX;
 
@@ -554,7 +549,7 @@ export function MicButton({
         }
       }
     },
-    [mode]
+    []
   );
 
   // -------------------------------------------------------------------------
@@ -787,9 +782,13 @@ export function MicButton({
     }
 
     try {
-      await postVoiceMemo(sessionId, result.uri, result.durationMs);
-      // Success — the chat refetch triggered by the WS stream picks up the
-      // new user + assistant turns. Nothing else to do here.
+      const voiceMsg = await postVoiceMemo(sessionId, result.uri, result.durationMs);
+      // Optimistic insert: push the user voice bubble into the live chat-store
+      // immediately so it appears before the assistant streams its response.
+      // The id format mirrors historyRowToUiRow ("hist-u-<dbId>"), so the
+      // dedup filter in the rows useMemo will drop the server-side history
+      // copy when the next paginated refetch arrives, preventing duplication.
+      useChatStore.getState().pushVoiceMemoMessage(sessionId, voiceMsg);
     } catch {
       showToast("Failed to send voice memo — please try again", "error");
     } finally {
@@ -839,12 +838,19 @@ export function MicButton({
   }, [memoRecorder, setIsMemoRecording]);
 
   // -------------------------------------------------------------------------
-  // PTT press handlers — tap-vs-long-press routing
+  // Press handlers — tap = toggle transcription, long-hold = memo
+  //
+  // pressIn:  record timestamp + origin; if model ready, start transcription
+  //           so a short tap has zero latency to start.
+  // pressOut: if held < LONG_PRESS_THRESHOLD_MS → tap gesture:
+  //             • if transcription is running → stop it (emit final transcript)
+  //             • if idle/error → start transcription
+  //           if held ≥ threshold → long-hold gesture: cancel transcription
+  //           and commit the memo that handleLongPress already started.
   // -------------------------------------------------------------------------
 
   const handlePressIn = useCallback((e: GestureResponderEvent) => {
     if (tapDisabled) return;
-    if (mode !== "ptt") return;
     if (modelStatus !== "ready" && modelStatus !== "absent") return;
 
     pressInTimeRef.current = Date.now();
@@ -859,66 +865,41 @@ export function MicButton({
     // memo mode instead — handled inside handlePressOut.
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
     void voice.start().catch(() => undefined);
-  }, [tapDisabled, mode, modelStatus, voice]);
+  }, [tapDisabled, modelStatus, voice]);
 
   const handlePressOut = useCallback(() => {
     if (tapDisabled) return;
-    if (mode !== "ptt") return;
 
     const heldMs = Date.now() - pressInTimeRef.current;
 
     if (heldMs >= LONG_PRESS_THRESHOLD_MS) {
-      // Long-press path: cancel the transcription session (which was started
-      // on pressIn but should not emit a transcript) and commit the memo.
+      // Long-hold path: cancel the transcription session (which was started on
+      // pressIn but should not emit a transcript) and commit the memo that
+      // handleLongPress already initiated.
       voice.cancel();
       void commitMemoRecording();
     } else {
-      // Tap path: hand off to the existing transcription stop/cancel logic.
+      // Tap path: toggle transcription on/off.
+      const k = voice.state.kind;
       if (cancelOnReleaseRef.current) {
+        // Finger slid up past cancel zone — abort.
         cancelOnReleaseRef.current = false;
         void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Soft).catch(() => undefined);
         voice.cancel();
-      } else {
+      } else if (k === "recording" || k === "stopping" || k === "requesting_permission") {
+        // Currently recording — stop and emit transcript.
         void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => undefined);
         void voice.stop();
       }
+      // If idle/error: voice.start() was already called on pressIn. Nothing
+      // more to do here; the recording visual will appear via the state sync
+      // effect once voice.state transitions to "recording".
       // Ensure memo UI is clean (shouldn't be visible, but guard).
       setIsMemoRecording(false);
       setIsMemoUploading(false);
       setMemoElapsedMs(0);
     }
-  }, [tapDisabled, mode, voice, commitMemoRecording]);
-
-  // -------------------------------------------------------------------------
-  // Toggle press handler
-  // -------------------------------------------------------------------------
-
-  const handlePress = useCallback(() => {
-    if (mode !== "toggle") return;
-
-    // Model failed — tap retries the download.
-    if (modelStatus === "failed") {
-      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
-      void voice.ensureModelReady().catch(() => {
-        // error forwarded via onError through the effect above
-      });
-      return;
-    }
-
-    // Model absent — tap is not the right affordance; long-press starts download.
-    // Provide a light haptic to signal the model needs downloading.
-    if (modelStatus !== "ready") return;
-
-    if (disabled) return;
-    const k = voice.state.kind;
-    if (k === "idle" || k === "error") {
-      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
-      void voice.start().catch(() => undefined);
-    } else if (k === "recording" || k === "stopping" || k === "requesting_permission") {
-      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => undefined);
-      void voice.stop();
-    }
-  }, [disabled, mode, modelStatus, voice]);
+  }, [tapDisabled, voice, commitMemoRecording]);
 
   // -------------------------------------------------------------------------
   // Long-press handler — memo recording start OR model download
@@ -937,10 +918,10 @@ export function MicButton({
 
     // Model ready — enter memo mode. Voice transcription (started on pressIn)
     // is still running; commitMemoRecording will cancel it on pressOut.
-    if (mode === "ptt" && !tapDisabled) {
+    if (!tapDisabled) {
       void startMemoRecording();
     }
-  }, [modelStatus, mode, tapDisabled, voice, startMemoRecording]);
+  }, [modelStatus, tapDisabled, voice, startMemoRecording]);
 
   // Fire a haptic + error notification whenever an error surfaces.
   useEffect(() => {
@@ -959,14 +940,13 @@ export function MicButton({
     if (modelStatus === "absent") return "Voice input. Hold to download voice model.";
     if (modelStatus === "downloading") return `Voice model downloading, ${Math.round(modelProgress * 100)}%`;
     if (modelStatus === "failed") return "Voice model download failed. Tap to retry.";
-    if (mode === "ptt") return "Voice input. Hold to record.";
     return visualState === "recording"
       ? "Voice input. Tap to stop recording."
-      : "Voice input. Tap to start recording.";
+      : "Voice input. Tap to start, tap again to stop. Hold to record a voice memo.";
   })();
 
   const a11yHint =
-    mode === "ptt" && modelStatus === "ready"
+    modelStatus === "ready"
       ? "Slide finger up while holding to cancel."
       : modelStatus === "absent"
         ? "Hold to download the voice model."
@@ -987,7 +967,7 @@ export function MicButton({
   return (
     <View
       onLayout={handleLayout}
-      onStartShouldSetResponder={() => mode === "ptt"}
+      onStartShouldSetResponder={() => true}
       onResponderMove={handleResponderMove}
       style={{ width: size, height: size, alignItems: "center", justifyContent: "center", overflow: "visible" }}
     >
@@ -1025,9 +1005,8 @@ export function MicButton({
       {/* Button + shake wrapper */}
       <Animated.View style={shakeStyle}>
         <Pressable
-          onPressIn={mode === "ptt" ? handlePressIn : undefined}
-          onPressOut={mode === "ptt" ? handlePressOut : undefined}
-          onPress={mode === "toggle" ? handlePress : undefined}
+          onPressIn={handlePressIn}
+          onPressOut={handlePressOut}
           onLongPress={handleLongPress}
           delayLongPress={400}
           disabled={tapDisabled}

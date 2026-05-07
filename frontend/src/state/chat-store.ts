@@ -1,6 +1,7 @@
 import { create, type StoreApi } from "zustand";
 import type { GatewayEventEnvelope } from "../ws/events";
 import type { AttachmentDTO } from "../api/types";
+import type { VoiceMemoMessage } from "../api/voice-memo";
 
 // Per-session chat state, keyed by app_session_id. Streaming assistant frames
 // accumulate into a transient `streaming` blob; on message.complete we push a
@@ -157,6 +158,14 @@ interface ChatStore {
     // renderer can cross-reference per-bubble send status.
     clientId?: string,
   ) => void;
+  /**
+   * Optimistically insert a voice memo bubble immediately after upload
+   * succeeds, using the real DB id returned by the server. The id is formatted
+   * as `hist-u-<dbId>` — the same pattern historyRowToUiRow uses — so the
+   * dedup filter in the `rows` useMemo can exclude the server-driven history
+   * row when the next paginated refetch arrives.
+   */
+  pushVoiceMemoMessage: (sessionId: string, msg: VoiceMemoMessage) => void;
   // Remove a user bubble by its pending-sends clientId. Used when the user
   // chooses "Delete" on a failed offline send — the optimistic bubble must
   // disappear alongside the queued frame.
@@ -602,6 +611,30 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         byId: {
           ...s.byId,
           [id]: { ...cur, messages: [...cur.messages, msg] },
+        },
+      };
+    });
+  },
+
+  pushVoiceMemoMessage(sessionId, msg) {
+    set((s) => {
+      const cur = s.byId[sessionId] ?? empty(sessionId);
+      // Use the same id format historyRowToUiRow produces so the dedup filter
+      // in the rows useMemo can strip the history copy when it arrives.
+      const userMsg: UserMessage = {
+        kind: "user",
+        id: `hist-u-${msg.id}`,
+        text: msg.content,
+        createdAt: new Date(msg.createdAt * 1000).toISOString(),
+        audioBlobUrl: msg.audioBlobUrl,
+        audioDurationMs: msg.audioDurationMs,
+        transcriptionStatus: msg.transcriptionStatus,
+        ...(msg.transcriptionError ? { transcriptionError: msg.transcriptionError } : {}),
+      };
+      return {
+        byId: {
+          ...s.byId,
+          [sessionId]: { ...cur, messages: [...cur.messages, userMsg] },
         },
       };
     });

@@ -4,16 +4,18 @@
  * Layout:
  *   ┌──────────────────────────────────────────────┐
  *   │  ▶  ▓▓▓▓▓░░░░░░░░░░░░░░  0:14 / 0:32        │
- *   │                                              │
- *   │  <transcription caption, italic>             │
+ *   ├──────────────────────────────────────────────┤
+ *   │  Transcription                          ▼    │  ← collapsed (default)
  *   └──────────────────────────────────────────────┘
+ *
+ * Tap the "Transcription" row to expand and read the text. Tap again to
+ * collapse. While transcription is in flight the spinner row replaces the
+ * accordion (status-based rendering). Failed transcriptions show a retry CTA
+ * inline, always visible (user must act).
  *
  * Single-playback contract: all instances share the `playbackController`
  * Zustand store. Only one message plays at a time — tapping a second bubble
  * stops the first automatically (handled inside the controller).
- *
- * Phase 4 will wire this into `Message.tsx`; for now it is exported as a
- * standalone component and from the `audio` barrel file.
  */
 
 import React, { useCallback, useRef, useState } from "react";
@@ -211,7 +213,10 @@ export function AudioMessage({
   const progress =
     displayDurationMs > 0 ? displayPositionMs / displayDurationMs : 0;
 
-  // Show-more state for long transcripts.
+  // Accordion open/closed state — collapsed by default.
+  const [transcriptOpen, setTranscriptOpen] = useState(false);
+
+  // Show-more state for long transcripts (inside the expanded accordion).
   const [captionExpanded, setCaptionExpanded] = useState(false);
 
   // Retry-transcription state.
@@ -248,25 +253,10 @@ export function AudioMessage({
     }
   }, [sessionId, messageId]);
 
-  // ── Caption rendering ──────────────────────────────────────────────────────
-
-  let captionText: string;
-  let captionItalic = true;
-  let captionColor = tokens.ink2;
-
-  if (transcriptionStatus === "transcribing") {
-    captionText = "Transcribing…";
-    captionColor = tokens.ink3;
-  } else if (transcriptionStatus === "failed") {
-    captionText = transcriptionError ?? "Transcription failed";
-    captionColor = tokens.danger;
-    captionItalic = false;
-  } else {
-    captionText = transcript;
-  }
+  // ── Transcript accordion helpers ───────────────────────────────────────────
 
   const hasLongCaption =
-    transcriptionStatus === "completed" && captionText.length > 160;
+    transcriptionStatus === "completed" && transcript.length > 160;
 
   // ── Layout ─────────────────────────────────────────────────────────────────
 
@@ -277,6 +267,12 @@ export function AudioMessage({
           styles.bubble,
           {
             backgroundColor: tokens.ink,
+            // minWidth keeps the playback row from collapsing when the
+            // transcription accordion is closed (the bubble would otherwise
+            // shrink to wrap-content, stacking the duration onto two lines).
+            // 280pt comfortably fits play button (34) + gap (10) + scrubber
+            // (140) + gap (10) + duration text + 24pt bubble padding.
+            minWidth: 280,
             maxWidth: "82%",
           },
         ]}
@@ -328,45 +324,97 @@ export function AudioMessage({
           </View>
         </Row>
 
-        {/* ── Transcript caption ── */}
-        {captionText.length > 0 ? (
-          <View style={{ marginTop: 8 }}>
-            <Text
-              kind="caption"
-              color={captionColor}
-              numberOfLines={captionExpanded ? undefined : hasLongCaption ? 4 : undefined}
-              style={[{ lineHeight: 16 }, captionItalic ? styles.italic : null]}
-            >
-              {captionText}
+        {/* ── Transcription section ── */}
+
+        {/* In-flight: show spinner row (not an accordion — user can't interact) */}
+        {transcriptionStatus === "transcribing" ? (
+          <Row
+            gap={6}
+            align="center"
+            style={{
+              marginTop: 8,
+              paddingTop: 8,
+              borderTopWidth: StyleSheet.hairlineWidth,
+              borderTopColor: tokens.ink3,
+            }}
+          >
+            <ActivityIndicator size="small" color={tokens.ink3} />
+            <Text kind="caption" color={tokens.ink3} style={styles.italic}>
+              Transcribing…
             </Text>
+          </Row>
+        ) : null}
 
-            {hasLongCaption && !captionExpanded ? (
-              <Pressable
-                onPress={() => setCaptionExpanded(true)}
-                hitSlop={4}
-                style={{ marginTop: 4 }}
-              >
-                <Text kind="caption" color={tokens.accent}>
-                  Show more
-                </Text>
-              </Pressable>
-            ) : null}
+        {/* Completed: collapsible accordion (collapsed by default) */}
+        {transcriptionStatus === "completed" && transcript.length > 0 ? (
+          <View
+            style={{
+              marginTop: 8,
+              borderTopWidth: StyleSheet.hairlineWidth,
+              borderTopColor: tokens.ink3,
+            }}
+          >
+            {/* Accordion header row */}
+            <Pressable
+              onPress={() => setTranscriptOpen((v) => !v)}
+              accessibilityRole="button"
+              accessibilityLabel={transcriptOpen ? "Collapse transcription" : "Expand transcription"}
+              accessibilityState={{ expanded: transcriptOpen }}
+              hitSlop={4}
+              style={({ pressed }) => [
+                styles.accordionHeader,
+                { opacity: pressed ? 0.7 : 1 },
+              ]}
+            >
+              <Text kind="caption" color={tokens.ink3}>
+                Transcription
+              </Text>
+              <Icon
+                name={transcriptOpen ? "chevU" : "chevD"}
+                size={12}
+                color={tokens.ink3}
+              />
+            </Pressable>
 
-            {hasLongCaption && captionExpanded ? (
-              <Pressable
-                onPress={() => setCaptionExpanded(false)}
-                hitSlop={4}
-                style={{ marginTop: 4 }}
-              >
-                <Text kind="caption" color={tokens.accent}>
-                  Show less
+            {/* Expanded body */}
+            {transcriptOpen ? (
+              <View style={{ marginTop: 4, paddingBottom: 4 }}>
+                <Text
+                  kind="caption"
+                  color={tokens.ink2}
+                  numberOfLines={captionExpanded ? undefined : hasLongCaption ? 4 : undefined}
+                  style={styles.italic}
+                >
+                  {transcript}
                 </Text>
-              </Pressable>
+                {hasLongCaption && !captionExpanded ? (
+                  <Pressable
+                    onPress={() => setCaptionExpanded(true)}
+                    hitSlop={4}
+                    style={{ marginTop: 4 }}
+                  >
+                    <Text kind="caption" color={tokens.accent}>
+                      Show more
+                    </Text>
+                  </Pressable>
+                ) : null}
+                {hasLongCaption && captionExpanded ? (
+                  <Pressable
+                    onPress={() => setCaptionExpanded(false)}
+                    hitSlop={4}
+                    style={{ marginTop: 4 }}
+                  >
+                    <Text kind="caption" color={tokens.accent}>
+                      Show less
+                    </Text>
+                  </Pressable>
+                ) : null}
+              </View>
             ) : null}
           </View>
         ) : null}
 
-        {/* ── Retry CTA for failed transcriptions ── */}
+        {/* ── Retry CTA for failed transcriptions (always visible) ── */}
         {transcriptionStatus === "failed" ? (
           <Pressable
             onPress={() => void handleRetry()}
@@ -448,6 +496,13 @@ const styles = StyleSheet.create({
   },
   italic: {
     fontStyle: "italic",
+  },
+  accordionHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingTop: 8,
+    paddingBottom: 2,
   },
   retryPill: {
     marginTop: 8,

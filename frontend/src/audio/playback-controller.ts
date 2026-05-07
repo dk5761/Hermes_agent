@@ -520,11 +520,15 @@ export const playbackController = {
  * ```
  */
 export function usePlaybackState(): PlaybackState {
-  return usePlaybackStore((s) => ({
-    activeMessageId: s.activeMessageId,
-    status: s.status,
-    positionMs: s.positionMs,
-    durationMs: s.durationMs,
-    errorMessage: s.errorMessage,
-  }));
+  // Select each primitive separately so Zustand's default Object.is check
+  // catches no-op updates. Returning a new object literal from a single
+  // selector forces a re-render every store change AND every parent render
+  // (because the returned object reference is fresh each call), which sends
+  // AudioMessage into an infinite loop.
+  const activeMessageId = usePlaybackStore((s) => s.activeMessageId);
+  const status = usePlaybackStore((s) => s.status);
+  const positionMs = usePlaybackStore((s) => s.positionMs);
+  const durationMs = usePlaybackStore((s) => s.durationMs);
+  const errorMessage = usePlaybackStore((s) => s.errorMessage);
+  return { activeMessageId, status, positionMs, durationMs, errorMessage };
 }

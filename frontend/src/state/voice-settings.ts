@@ -1,9 +1,8 @@
 /**
  * Voice settings store — Zustand + SQLite persistence.
  *
- * Persists eight preferences:
+ * Persists seven preferences:
  *   enabled            — whether voice input is surfaced at all
- *   mode               — "ptt" (press-and-hold) or "toggle" (tap on/off)
  *   language           — null means "use device locale"; otherwise a BCP-47 tag
  *   addsPunctuation    — Apple's auto-punctuation (SFSpeechRecognitionRequest).
  *                        Only meaningful when the SFSpeech engine is active.
@@ -15,6 +14,10 @@
  *   serverCapSeconds   — hard-stop for the server engine (default 300, range 60–600).
  *   fallbackOnOffline  — when true and engine="server" + offline, resolve to an on-device
  *                        engine instead of surfacing a blocked error. Default true.
+ *
+ * Gesture behaviour is hardcoded (not persisted):
+ *   tap  → toggle (start transcribing / stop transcribing)
+ *   hold → voice memo (record while held, send on release; slide-to-cancel)
  *
  * Pattern matches the other stores in this directory (notifications-inbox,
  * todos, pinned-sessions): create() with a plain hydrate() that reads from
@@ -37,7 +40,6 @@ export type VoiceEngine = "auto" | "whisper" | "sfspeech" | "server";
 
 export interface VoiceSettings {
   enabled: boolean;
-  mode: "ptt" | "toggle";
   /**
    * null = use device locale (resolved at runtime via Intl API).
    * Otherwise a BCP-47 locale tag e.g. "en-US", "es-ES".
@@ -75,7 +77,6 @@ export interface VoiceSettings {
 
 export interface VoiceSettingsActions {
   setEnabled: (v: boolean) => void;
-  setMode: (m: "ptt" | "toggle") => void;
   setLanguage: (lang: string | null) => void;
   setAddsPunctuation: (v: boolean) => void;
   setEngine: (e: VoiceEngine) => void;
@@ -89,7 +90,7 @@ export interface VoiceSettingsActions {
 }
 
 // ---------------------------------------------------------------------------
-// Defaults (D1: PTT; D4: device locale = null)
+// Defaults
 // ---------------------------------------------------------------------------
 
 /** Valid range for localCapSeconds. */
@@ -99,7 +100,6 @@ export const SERVER_CAP_RANGE = { min: 60, max: 600 } as const;
 
 const DEFAULTS: VoiceSettings = {
   enabled: true,
-  mode: "ptt",
   language: null,
   addsPunctuation: true,
   engine: "auto",
@@ -114,7 +114,6 @@ const DEFAULTS: VoiceSettings = {
 
 interface Serialized {
   enabled?: unknown;
-  mode?: unknown;
   language?: unknown;
   addsPunctuation?: unknown;
   engine?: unknown;
@@ -132,8 +131,6 @@ function parseSettings(raw: string | null): VoiceSettings {
 
     const enabled =
       typeof r.enabled === "boolean" ? r.enabled : DEFAULTS.enabled;
-    const mode =
-      r.mode === "ptt" || r.mode === "toggle" ? r.mode : DEFAULTS.mode;
     const language =
       r.language === null
         ? null
@@ -167,7 +164,7 @@ function parseSettings(raw: string | null): VoiceSettings {
         ? r.fallbackOnOffline
         : DEFAULTS.fallbackOnOffline;
 
-    return { enabled, mode, language, addsPunctuation, engine, localCapSeconds, serverCapSeconds, fallbackOnOffline };
+    return { enabled, language, addsPunctuation, engine, localCapSeconds, serverCapSeconds, fallbackOnOffline };
   } catch {
     return { ...DEFAULTS };
   }
@@ -197,14 +194,6 @@ export const useVoiceSettings = create<VoiceSettings & VoiceSettingsActions>(
         const next = { ...s, enabled: v };
         persistSettings(next);
         return { enabled: v };
-      });
-    },
-
-    setMode(m) {
-      set((s) => {
-        const next = { ...s, mode: m };
-        persistSettings(next);
-        return { mode: m };
       });
     },
 

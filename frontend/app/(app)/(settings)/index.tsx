@@ -103,13 +103,8 @@ export default function SettingsIndexScreen() {
   );
 
   const voiceEnabled = useVoiceSettings((s) => s.enabled);
-  const voiceMode = useVoiceSettings((s) => s.mode);
 
-  const voiceDetail = voiceEnabled
-    ? voiceMode === "ptt"
-      ? "Hold to talk"
-      : "Tap to toggle"
-    : "Off";
+  const voiceDetail = voiceEnabled ? "Tap or hold" : "Off";
 
   const onLogout = useCallback(async () => {
     if (refreshToken) await apiLogout(refreshToken);

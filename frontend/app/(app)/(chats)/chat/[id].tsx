@@ -486,7 +486,6 @@ export default function ChatScreen() {
 
   // ─── voice input ─────────────────────────────────────────────────────────
   const voiceEnabled = useVoiceSettings((s) => s.enabled);
-  const voiceMode = useVoiceSettings((s) => s.mode);
   const voiceLanguage = useVoiceSettings((s) => s.language);
   const voiceAddsPunctuation = useVoiceSettings((s) => s.addsPunctuation);
   // Partial transcript from MicButton's live preview. Cleared when the final
@@ -803,8 +802,17 @@ export default function ChatScreen() {
     const liveApprovalIds = new Set(
       sessionState?.pendingApprovals.map((a) => a.requestId) ?? [],
     );
+    // Collect ids of all live messages so we can exclude any history rows
+    // that were already inserted optimistically (e.g. voice memos). The live
+    // message id matches historyRowToUiRow's "hist-u-<dbId>" format exactly,
+    // so a simple Set lookup is sufficient.
+    const liveMessageIds = new Set(
+      sessionState?.messages.map((m) => m.id) ?? [],
+    );
     const filteredHistory = historyRows.filter(
-      (r) => r.rowKind !== "approval" || !liveApprovalIds.has(r.data.requestId),
+      (r) =>
+        (r.rowKind !== "approval" || !liveApprovalIds.has(r.data.requestId)) &&
+        !liveMessageIds.has(r.rowKind === "msg" ? r.data.id : ""),
     );
     return [...filteredHistory, ...live];
   }, [historyRows, sessionState]);
@@ -2334,7 +2342,6 @@ export default function ChatScreen() {
                 cleanup step on stop. */}
             {voiceEnabled ? (
               <MicButton
-                mode={voiceMode}
                 language={voiceLanguage ?? undefined}
                 addsPunctuation={voiceAddsPunctuation}
                 disabled={isStreaming}

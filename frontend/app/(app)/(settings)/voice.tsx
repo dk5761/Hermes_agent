@@ -8,7 +8,7 @@
  *   (D) Speech recognition engine — four-option engine radio + fallback toggle
  *                                   + addsPunctuation + current effective label
  *   (E) Recording limits — local cap slider + server cap slider
- *   (F) General — voice enabled toggle, interaction mode, language picker
+ *   (F) General — voice enabled toggle, language picker
  *   (G) Permissions — iOS Settings deep-link
  *
  * Layout mirrors notifications.tsx: NavBar + ScrollView + ListGroup sections.
@@ -28,7 +28,6 @@ import {
   PhoneSafeArea,
   ProgressBar,
   Row,
-  SegControl,
   Stack,
   Text,
   Toggle,
@@ -424,15 +423,6 @@ function RecordingLimitsCard() {
 }
 
 // ---------------------------------------------------------------------------
-// Mode segmented control options
-// ---------------------------------------------------------------------------
-
-const MODE_OPTIONS = [
-  { value: "ptt", label: "Hold to talk" },
-  { value: "toggle", label: "Tap to toggle" },
-] as const;
-
-// ---------------------------------------------------------------------------
 // Quality tier indicator
 // ---------------------------------------------------------------------------
 
@@ -711,10 +701,8 @@ export default function VoiceSettingsScreen() {
   const tokens = useThemeTokens();
 
   const enabled = useVoiceSettings((s) => s.enabled);
-  const mode = useVoiceSettings((s) => s.mode);
   const language = useVoiceSettings((s) => s.language);
   const setEnabled = useVoiceSettings((s) => s.setEnabled);
-  const setMode = useVoiceSettings((s) => s.setMode);
   const setLanguage = useVoiceSettings((s) => s.setLanguage);
 
   // Language picker state.
@@ -728,15 +716,6 @@ export default function VoiceSettingsScreen() {
       setLocaleOptions(buildLocaleOptions(locales));
     });
   }, []);
-
-  const onModeChange = useCallback(
-    (next: string) => {
-      if (next === "ptt" || next === "toggle") {
-        setMode(next);
-      }
-    },
-    [setMode],
-  );
 
   const onSelectLocale = useCallback(
     (value: string | null) => {
@@ -804,20 +783,6 @@ export default function VoiceSettingsScreen() {
               subtitle="Show the microphone button in the chat composer"
               right={<Toggle on={enabled} onChange={setEnabled} />}
             />
-          </ListGroup>
-
-          {/* ── Interaction mode ───────────────────────────────────── */}
-          <ListGroup
-            header="Interaction mode"
-            footer="Hold to talk: press and hold the mic button. Tap to toggle: tap once to start, tap again to stop."
-          >
-            <View style={{ paddingHorizontal: 16, paddingVertical: 12 }}>
-              <SegControl
-                options={MODE_OPTIONS as unknown as ReadonlyArray<{ value: string; label: string }>}
-                value={mode}
-                onChange={onModeChange}
-              />
-            </View>
           </ListGroup>
 
           {/* ── Language ───────────────────────────────────────────── */}

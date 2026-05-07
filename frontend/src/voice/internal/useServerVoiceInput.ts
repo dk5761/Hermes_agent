@@ -26,7 +26,7 @@ import {
   useAudioRecorder,
 } from "expo-audio";
 import type { AudioRecorder } from "expo-audio";
-import * as FileSystem from "expo-file-system";
+import { File } from "expo-file-system";
 import { requestIfNeeded } from "../permissions";
 import { postTranscribe, TranscribeError } from "../../api/transcribe";
 import type {
@@ -87,10 +87,11 @@ async function deactivateRecordingMode(): Promise<void> {
 // File cleanup helper
 // ---------------------------------------------------------------------------
 
-async function deleteFile(uri: string | null | undefined): Promise<void> {
+function deleteFile(uri: string | null | undefined): void {
   if (!uri) return;
   try {
-    await FileSystem.deleteAsync(uri, { idempotent: true });
+    const file = new File(uri);
+    if (file.exists) file.delete();
   } catch {
     // Best-effort — don't let cleanup failure surface to the user.
   }
@@ -281,7 +282,7 @@ export function useServerVoiceInput(
       setState({ kind: "error", error: voiceError });
     } finally {
       // Always delete the temp recording file — success, error, or cancelled.
-      await deleteFile(fileUri);
+      deleteFile(fileUri);
       cancelledRef.current = false;
       stoppingRef.current = false;
     }
@@ -305,7 +306,7 @@ export function useServerVoiceInput(
       } catch {
         // Ignore — we're discarding.
       }
-      await deleteFile(recording.uri);
+      deleteFile(recording.uri);
       await deactivateRecordingMode().catch(() => undefined);
       cancelledRef.current = false;
       stoppingRef.current = false;

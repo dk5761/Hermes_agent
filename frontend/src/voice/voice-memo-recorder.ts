@@ -23,7 +23,7 @@ import {
   setAudioModeAsync,
   useAudioRecorder,
 } from "expo-audio";
-import * as FileSystem from "expo-file-system";
+import { File } from "expo-file-system";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -61,10 +61,11 @@ async function deactivateRecordingMode(): Promise<void> {
 // File cleanup helper
 // ---------------------------------------------------------------------------
 
-async function deleteFile(uri: string | null | undefined): Promise<void> {
+function deleteFile(uri: string | null | undefined): void {
   if (!uri) return;
   try {
-    await FileSystem.deleteAsync(uri, { idempotent: true });
+    const file = new File(uri);
+    if (file.exists) file.delete();
   } catch {
     // Best-effort.
   }
@@ -131,7 +132,7 @@ export class VoiceMemoRecorder {
     await deactivateRecordingMode().catch(() => undefined);
 
     if (this.cancelledFlag) {
-      await deleteFile(this.nativeRecorder.uri);
+      deleteFile(this.nativeRecorder.uri);
       return null;
     }
 
@@ -140,11 +141,8 @@ export class VoiceMemoRecorder {
 
     let sizeBytes = 0;
     try {
-      const info = await FileSystem.getInfoAsync(uri);
-      // FileInfo includes `size` when the file exists; no special option needed.
-      if (info.exists && "size" in info) {
-        sizeBytes = (info as { exists: true; size?: number }).size ?? 0;
-      }
+      const file = new File(uri);
+      if (file.exists) sizeBytes = file.size ?? 0;
     } catch {
       // Non-fatal — send without size metadata.
     }
@@ -169,7 +167,7 @@ export class VoiceMemoRecorder {
     } catch {
       // Ignore — we're discarding anyway.
     }
-    await deleteFile(this.nativeRecorder.uri);
+    deleteFile(this.nativeRecorder.uri);
     await deactivateRecordingMode().catch(() => undefined);
   }
 }

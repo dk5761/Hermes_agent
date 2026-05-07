@@ -17,7 +17,7 @@
  *   const { status, progress } = useWhisperModelState();
  */
 import { Platform } from "react-native";
-import * as FileSystem from "expo-file-system";
+import { Directory } from "expo-file-system";
 import { create } from "zustand";
 import {
   WhisperKit,
@@ -260,10 +260,8 @@ async function deleteModelDir(modelName: WhisperModelName): Promise<void> {
   try {
     const path = await WhisperKit.modelLocationOnDisk(modelName);
     if (!path) return;
-    const info = await FileSystem.getInfoAsync(path);
-    if (info.exists) {
-      await FileSystem.deleteAsync(path, { idempotent: true });
-    }
+    const dir = new Directory(path);
+    if (dir.exists) dir.delete();
   } catch {
     // Best-effort — ignore failures (e.g. file already gone).
   }
