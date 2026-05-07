@@ -6,9 +6,10 @@
  * cannot list it as a Pod dependency. This plugin:
  *
  *   1. Injects a `post_install` block into the generated Podfile.
- *   2. The block runs after `pod install` and registers WhisperKit as an
- *      XCRemoteSwiftPackageReference on the Pods project, then links it
- *      into the ExpoWhisperKit Pod target's frameworks build phase.
+ *   2. The plugin registers WhisperKit as an XCRemoteSwiftPackageReference on
+ *      the app project, then links it into the Hermes target's frameworks phase.
+ *   3. The block makes the app scheme explicitly build the CocoaPods aggregate
+ *      target. Without that, Xcode can compile AppDelegate before Expo exists.
  *
  * Idempotent at every level:
  *   - Plugin: skips injection if marker comment already present in Podfile.
@@ -19,6 +20,7 @@
  */
 
 const { withDangerousMod } = require("@expo/config-plugins");
+const { execFileSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 
@@ -26,40 +28,11 @@ const MARKER = "# whisperkit-spm-hook:v2";
 
 const HOOK = `
     ${MARKER}
-    # Wire WhisperKit SPM dependency into the ExpoWhisperKit Pod target.
+    # Wire WhisperKit build settings into the ExpoWhisperKit Pod target.
     # Injected by plugins/with-whisperkit-spm.js — survives expo prebuild.
     pods_project = installer.pods_project
     whisper_target = pods_project.targets.find { |t| t.name == 'ExpoWhisperKit' }
     if whisper_target
-      pkg_ref = pods_project.root_object.package_references.find do |r|
-        r.respond_to?(:repositoryURL) && r.repositoryURL == 'https://github.com/argmaxinc/argmax-oss-swift'
-      end
-      unless pkg_ref
-        pkg_ref = pods_project.new(Xcodeproj::Project::Object::XCRemoteSwiftPackageReference)
-        pkg_ref.repositoryURL = 'https://github.com/argmaxinc/argmax-oss-swift'
-        pkg_ref.requirement = { 'kind' => 'exactVersion', 'version' => '1.0.0' }
-        pods_project.root_object.package_references << pkg_ref
-      end
-      product = whisper_target.package_product_dependencies.find { |d| d.product_name == 'WhisperKit' }
-      unless product
-        product = pods_project.new(Xcodeproj::Project::Object::XCSwiftPackageProductDependency)
-        product.package = pkg_ref
-        product.product_name = 'WhisperKit'
-        whisper_target.package_product_dependencies << product
-      end
-
-      already_linked = whisper_target.frameworks_build_phase.files.any? do |file|
-        file.respond_to?(:product_ref) &&
-          file.product_ref &&
-          file.product_ref.respond_to?(:product_name) &&
-          file.product_ref.product_name == 'WhisperKit'
-      end
-      unless already_linked
-        build_file = pods_project.new(Xcodeproj::Project::Object::PBXBuildFile)
-        build_file.product_ref = product
-        whisper_target.frameworks_build_phase.files << build_file
-      end
-
       # Xcode does not automatically add the SwiftPM product module location to
       # this CocoaPods target's Swift import search paths. The package emits
       # WhisperKit.swiftmodule into the root products directory, so expose that
@@ -73,6 +46,48 @@ const HOOK = `
       end
       pods_project.save
     end
+
+    # Xcode 26 does not infer the CocoaPods aggregate target from the app's
+    # linked libPods-Hermes.a in this generated workspace. Make the scheme
+    # explicit so Expo pods are compiled before AppDelegate imports Expo.
+    require 'rexml/document'
+
+    pods_aggregate_target = pods_project.targets.find { |t| t.name == 'Pods-Hermes' }
+    scheme_path = File.join(__dir__, 'Hermes.xcodeproj', 'xcshareddata', 'xcschemes', 'Hermes.xcscheme')
+
+    if pods_aggregate_target && File.exist?(scheme_path)
+      scheme = REXML::Document.new(File.read(scheme_path))
+      build_action_entries = REXML::XPath.first(scheme, '/Scheme/BuildAction/BuildActionEntries')
+
+      unless REXML::XPath.first(scheme, "//*[@BlueprintIdentifier='#{pods_aggregate_target.uuid}']")
+        entry = REXML::Element.new('BuildActionEntry')
+        entry.add_attributes({
+          'buildForTesting' => 'YES',
+          'buildForRunning' => 'YES',
+          'buildForProfiling' => 'YES',
+          'buildForArchiving' => 'YES',
+          'buildForAnalyzing' => 'YES',
+        })
+
+        reference = REXML::Element.new('BuildableReference')
+        reference.add_attributes({
+          'BuildableIdentifier' => 'primary',
+          'BlueprintIdentifier' => pods_aggregate_target.uuid,
+          'BuildableName' => 'Pods_Hermes.framework',
+          'BlueprintName' => 'Pods-Hermes',
+          'ReferencedContainer' => 'container:Pods/Pods.xcodeproj',
+        })
+
+        entry.add_element(reference)
+        build_action_entries.insert_before(build_action_entries.elements[1], entry)
+
+        formatter = REXML::Formatters::Pretty.new(3)
+        formatter.compact = true
+        output = +''
+        formatter.write(scheme, output)
+        File.write(scheme_path, output)
+      end
+    end
 `;
 
 module.exports = function withWhisperKitSPM(config) {
@@ -85,7 +100,13 @@ module.exports = function withWhisperKitSPM(config) {
       );
       let contents = fs.readFileSync(podfilePath, "utf8");
 
-      if (contents.includes(MARKER)) return cfg;
+      if (contents.includes(MARKER)) {
+        execFileSync("ruby", [path.join(cfg.modRequest.projectRoot, "scripts/install-whisperkit.rb")], {
+          cwd: cfg.modRequest.projectRoot,
+          stdio: "inherit",
+        });
+        return cfg;
+      }
 
       // Insert immediately after the existing react_native_post_install(...)
       // closing paren — it's the cleanest anchor and matches the generator's
@@ -103,6 +124,10 @@ module.exports = function withWhisperKitSPM(config) {
       }
 
       fs.writeFileSync(podfilePath, updated);
+      execFileSync("ruby", [path.join(cfg.modRequest.projectRoot, "scripts/install-whisperkit.rb")], {
+        cwd: cfg.modRequest.projectRoot,
+        stdio: "inherit",
+      });
       return cfg;
     },
   ]);
