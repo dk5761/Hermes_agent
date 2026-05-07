@@ -116,6 +116,21 @@ Snapshots of the Hermes side (not gateway DB) are taken via
 
 ## Deploy log
 
+### 2026-05-08 — STT model upgrade (`large-v3-turbo`) + warmup + agent introspection
+
+Hermes-side patches only — gateway code unchanged from previous deploy (`aef31bf`).
+
+- **Source patches applied:**
+  - `scripts/patch-hermes-stt-warmup.py` — spawns a background thread at server.py module-load that pre-loads the local STT model so the FIRST `stt.transcribe` RPC doesn't pay the model-download + load cost. Module-level `_STT_READY` event gates the handler; concurrent loads (warmup + first user request racing) used to corrupt the partial cache file. The handler now `wait()`s up to 120s on the event before serving.
+  - `scripts/patch-hermes-stt-rpc.py` — handler updated to `wait()` on `_STT_READY` before dispatching. Two patches both reapplied via `--unpatch && --apply` since the marker block changed.
+  - `scripts/patch-hermes-stt-introspect.py` (NEW) — adds an `stt_status` agent tool registered via `tools/stt_introspect_tool.py`. Inserts an `stt_introspect` toolset entry into `toolsets.py`. The agent can now answer "which STT model are you using?" with ground-truth values (`configured_model`, `loaded_model`, `ready`) instead of hallucinating from training defaults.
+- **Config:** `stt.local.model` flipped from `base` to `large-v3-turbo` in `/root/.hermes/config.yaml`. Multilingual (Hindi + English), ~1.6 GB on disk, ~1× realtime CPU on the 2-vCPU VPS, ~3-4% WER. First request post-restart paid the ~3 min HF download; subsequent restarts warm in ~10s from local cache.
+- **`patch-hermes-config.py`:** `_CORE_TOOLSETS` now includes `stt_introspect` so the toolset is added to `platform_toolsets.cli`, `.tui`, and `.api_server` on every config patch run. Three changes applied on VPS, backup written to `config.yaml.bak`.
+- **Wiring:** `post-hermes-update.sh` step 2cc (warmup) + step 2cd (introspect) ensure these survive `hermes update`. `install-vps.sh` patch invocations updated to match for fresh-provisioning.
+- **Verified:** `[stt-warmup] loaded large-v3-turbo in 3949ms` after restart (down from 169s on first download). `stt_status` tool registered in the registry. `/health` = 200.
+- **Restarted:** `hermes-dashboard` (so the patched `server.py` reloads with the warmup thread + readiness gate + new tool), then `hermes-gateway` (no code change, but still restarted to re-scrape the rotated `_SESSION_TOKEN`).
+- **Branch state on VPS after deploy:** `main` tracking `origin/main` at `aef31bf` — gateway code intentionally NOT updated with the recent voice-memo-v2 work. That's a separate deploy when the v2 flow is ready for remote use.
+
 ### 2026-05-07 — server-side transcription (`stt.transcribe` RPC + `POST /transcribe`)
 
 - **Source:** `aef31bf` (latest `main`).

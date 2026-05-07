@@ -117,6 +117,10 @@ step "Step 2cc/5: patch-hermes-stt-warmup.py (pre-load faster-whisper at startup
 python3 "${REPO_ROOT}/scripts/patch-hermes-stt-warmup.py"
 python3 "${REPO_ROOT}/scripts/patch-hermes-stt-warmup.py" --check
 
+step "Step 2cd/5: patch-hermes-stt-introspect.py (stt_status agent tool)"
+python3 "${REPO_ROOT}/scripts/patch-hermes-stt-introspect.py"
+python3 "${REPO_ROOT}/scripts/patch-hermes-stt-introspect.py" --check
+
 step "Step 2d/5: deploy custom skills"
 if [[ -d "${REPO_ROOT}/scripts/skills" ]]; then
   for src in "${REPO_ROOT}"/scripts/skills/*/SKILL.md; do

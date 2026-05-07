@@ -92,6 +92,8 @@ _CORE_TOOLSETS = [
     "mcp-fs",
     "obsidian",
     "mcp-ios-tools",
+    # Exposes the `stt_status` introspection tool — added by patch-hermes-stt-introspect.py.
+    "stt_introspect",
 ]
 DESIRED_PLATFORM_TOOLSETS: dict[str, list[str]] = {
     # Mobile gateway sessions arrive with platform "cli" via _platform_config_key

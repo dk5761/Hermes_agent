@@ -371,6 +371,7 @@ python3 "${REPO_ROOT}/scripts/patch-hermes-reload-mcp.py" || c_yellow "  reload-
 python3 "${REPO_ROOT}/scripts/patch-hermes-slash-history.py" || c_yellow "  slash-history source patch skipped (anchor may have moved — non-fatal)"
 python3 "${REPO_ROOT}/scripts/patch-hermes-stt-rpc.py" || c_yellow "  stt-rpc source patch skipped (anchor may have moved — non-fatal)"
 python3 "${REPO_ROOT}/scripts/patch-hermes-stt-warmup.py" || c_yellow "  stt-warmup source patch skipped (anchor may have moved — non-fatal)"
+python3 "${REPO_ROOT}/scripts/patch-hermes-stt-introspect.py" || c_yellow "  stt-introspect source patch skipped (anchor may have moved — non-fatal)"
 
 # Deploy custom skills to ~/.hermes/skills/. Currently: manage-mcp (teaches
 # the agent to add/remove MCP servers end-to-end when the user asks).
