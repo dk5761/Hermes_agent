@@ -116,6 +116,32 @@ Snapshots of the Hermes side (not gateway DB) are taken via
 
 ## Deploy log
 
+### 2026-05-08 — voice-memo v2 backend + STT introspection (full v2 deploy)
+
+- **Source:** `8afa8d7` (latest `main`).
+- **Previous:** `aef31bf` (server-side transcription deploy, 2026-05-07).
+- **Migrations applied:** `0008_voice_memo.sql` (audio_blob_path, audio_duration_ms, transcription_status, transcription_error + partial index) and `0009_audio_peaks.sql` (audio_peaks_json column). Drizzle reports "migrations applied successfully".
+- **Backend new routes verified (auth-gated, 401):**
+  - `POST /sessions/:id/messages/voice` — multipart audio upload + optional `audioPeaks` form field. Server validates client peaks (length=80, every value in [0,1]) and uses them directly when valid; falls back to the existing ffmpeg `extractAudioPeaks()` extractor when absent or invalid.
+  - `POST /sessions/:id/messages/:msgId/retry-transcription`
+  - `GET /voice-blobs/*` — auth-gated raw audio bytes
+  - `POST /sessions/:id/transcribe` (existing, no regression)
+  - `POST /sessions/:id/branch` (existing, no regression)
+- **Hermes source patches (all PATCHED + verified):**
+  - `patch-hermes-stt-warmup.py` — module-load background thread pre-loads the local STT model. `_STT_READY` event gates the handler so the first request doesn't race the warmup and corrupt the partial cache file.
+  - `patch-hermes-stt-rpc.py` — handler waits up to 120s on `_STT_READY` before serving.
+  - `patch-hermes-stt-introspect.py` — `stt_status` agent tool registered via `tools/stt_introspect_tool.py`; toolset entry added to `toolsets.py`. Agent can answer "which STT model are you using?" with ground-truth values (`configured_model`, `loaded_model`, `ready`) instead of hallucinating defaults.
+  - `patch-hermes-slash-history.py` (preload + refresh) — unchanged, still PATCHED.
+- **Config:** `stt.local.model = large-v3-turbo` (multilingual Hindi+English, ~1.6 GB). `_CORE_TOOLSETS` in `patch-hermes-config.py` updated to include `stt_introspect`; toolset added to `platform_toolsets.cli`, `.tui`, `.api_server`.
+- **Warmup performance on VPS (post-restart):** `[stt-warmup] loaded large-v3-turbo in 23064ms` — first-ever load on VPS pulled from HuggingFace; subsequent restarts warm in <10s from local cache.
+- **Verified:**
+  - Schema: `audio_peaks_json` column at index 10 in chat_history.
+  - Public domain: `https://hermes.drshnk.dev/health` → 200.
+  - Local: `http://127.0.0.1:8080/health` → 200.
+  - `hermes-gateway` + `hermes-dashboard` active.
+- **Restarted:** `hermes-dashboard` (so warmup + introspect patches load), then `hermes-gateway` (rebuilt with new voice memo + waveform routes).
+- **Branch state on VPS after deploy:** `main` tracking `origin/main` at `8afa8d7`.
+
 ### 2026-05-08 — STT model upgrade (`large-v3-turbo`) + warmup + agent introspection
 
 Hermes-side patches only — gateway code unchanged from previous deploy (`aef31bf`).
