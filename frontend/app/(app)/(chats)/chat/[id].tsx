@@ -27,10 +27,10 @@ import {
   type NativeScrollEvent,
   type NativeSyntheticEvent,
 } from "react-native";
-import Animated, {
-  FadeIn,
-  FadeOut,
-} from "react-native-reanimated";
+import Animated from "react-native-reanimated";
+// VOICE_TRANSCRIBE_DISABLED: FadeIn, FadeOut were imported for the partial-
+// transcript preview pill. Removed since the pill is disabled.
+// To restore: re-add `FadeIn, FadeOut` to the Animated import above.
 import { MicButton } from "@/voice";
 import { useVoiceSettings } from "@/state/voice-settings";
 import { FlashList, type FlashListRef, type ListRenderItem } from "@shopify/flash-list";
@@ -486,15 +486,15 @@ export default function ChatScreen() {
   const inputRef = useRef<TextInput>(null);
 
   // ─── voice input ─────────────────────────────────────────────────────────
+  // VOICE_TRANSCRIBE_DISABLED: voiceLanguage, voiceAddsPunctuation, partialVoice,
+  // and voiceBaseInputRef all fed the transcribe-to-composer path.
+  // voiceEnabled is KEPT — it gates whether MicButton renders at all.
+  // To restore: uncomment the disabled lines and re-wire MicButton props.
   const voiceEnabled = useVoiceSettings((s) => s.enabled);
-  const voiceLanguage = useVoiceSettings((s) => s.language);
-  const voiceAddsPunctuation = useVoiceSettings((s) => s.addsPunctuation);
-  // Partial transcript from MicButton's live preview. Cleared when the final
-  // transcript fires and is promoted into `input`.
-  const [partialVoice, setPartialVoice] = useState("");
-  // Capture input value at the moment recording starts so confirmed segments
-  // are appended to the pre-existing text rather than replacing it.
-  const voiceBaseInputRef = useRef<string>("");
+  // const voiceLanguage = useVoiceSettings((s) => s.language);         // VOICE_TRANSCRIBE_DISABLED
+  // const voiceAddsPunctuation = useVoiceSettings((s) => s.addsPunctuation); // VOICE_TRANSCRIBE_DISABLED
+  // const [partialVoice, setPartialVoice] = useState("");               // VOICE_TRANSCRIBE_DISABLED
+  // const voiceBaseInputRef = useRef<string>("");                        // VOICE_TRANSCRIBE_DISABLED
   const pendingList = usePendingAttachments(
     (s) => (sessionId ? (s.bySession[sessionId] ?? EMPTY_PENDING) : EMPTY_PENDING),
   );
@@ -1334,75 +1334,69 @@ export default function ChatScreen() {
     }
   }, [sessionId, addPending]);
 
-  // Called by MicButton on every new confirmed segment (full accumulated text).
-  // Replaces input with base + confirmed so the user sees real text graduate
-  // from the partial pill into the field incrementally.
-  const onVoiceTranscriptChange = useCallback(
-    (fullTranscript: string) => {
-      const base = voiceBaseInputRef.current;
-      setInput(base.trim() ? `${base.trim()} ${fullTranscript}` : fullTranscript);
-    },
-    [],
-  );
-
-  // Called with the final transcript when recording stops completely.
-  // Clears the partial preview; input has already been updated incrementally
-  // via onVoiceTranscriptChange, so this is primarily a cleanup step.
-  const onVoiceTranscript = useCallback(
-    (t: string) => {
-      setPartialVoice("");
-      const base = voiceBaseInputRef.current;
-      setInput(base.trim() ? `${base.trim()} ${t}` : t);
-      // Reset the base reference so the next session starts fresh.
-      voiceBaseInputRef.current = "";
-    },
-    [],
-  );
-
-  // Capture base input value when recording begins so confirmed segments
-  // append to any pre-existing text rather than overwriting it.
-  const onVoiceRecordingStart = useCallback(() => {
-    voiceBaseInputRef.current = input;
-    setPartialVoice("");
-  }, [input]);
-
-  // Maps VoiceInputError kinds to user-facing strings shown as toasts.
-  const onVoiceError = useCallback(
-    (err: { kind: string; message?: string }) => {
-      // Log the raw error to Metro / Xcode console so the underlying native
-      // failure (e.g. AVAudioSession setup, missing model files, WhisperKit
-      // pipeline crash) surfaces during dev. The toast is necessarily terse.
-      console.warn("[voice] error", err);
-      let msg: string;
-      switch (err.kind) {
-        case "permission_denied":
-          msg = "Microphone access denied — open Settings to enable.";
-          break;
-        case "model_not_ready":
-          msg = "Model not downloaded — long-press the mic to download.";
-          break;
-        case "model_download_failed":
-          msg = "Couldn't download voice model. Tap to retry.";
-          break;
-        case "audio_session":
-          msg = `Audio session error: ${err.message ?? "unknown"}`;
-          break;
-        case "whisper_init_failed":
-          msg = `Whisper init failed: ${err.message ?? "unknown"}`;
-          break;
-        case "whisper_runtime_error":
-          msg = `Whisper runtime error: ${err.message ?? "unknown"}`;
-          break;
-        case "module_error":
-          msg = `Voice module error: ${err.message ?? "unknown"}`;
-          break;
-        default:
-          msg = `Voice error (${err.kind}): ${err.message ?? "no detail"}`;
-      }
-      showToast(msg, "error");
-    },
-    [],
-  );
+  /*
+   * VOICE_TRANSCRIBE_DISABLED: onVoiceTranscriptChange, onVoiceTranscript,
+   * onVoiceRecordingStart, and onVoiceError all belonged to the
+   * transcribe-to-composer path.
+   *
+   * What they did:
+   *   - onVoiceTranscriptChange: on each confirmed segment, appended partial
+   *     transcript to the composer input field (incremental live updates).
+   *   - onVoiceTranscript: on recording stop, wrote the final transcript into
+   *     the composer input and cleared the partial preview.
+   *   - onVoiceRecordingStart: snapshotted the pre-existing composer text so
+   *     transcript segments append rather than overwrite.
+   *   - onVoiceError: mapped VoiceInputError kinds to user-facing toast strings.
+   *
+   * How to restore:
+   *   1. Uncomment this block.
+   *   2. Uncomment voiceLanguage, voiceAddsPunctuation, partialVoice, voiceBaseInputRef above.
+   *   3. Re-wire onTranscript, onTranscriptChange, onRecordingStart, onPartial,
+   *      onError, language, addsPunctuation on <MicButton> below.
+   *   4. Uncomment the partial-transcript preview pill in the JSX below.
+   *
+   * const onVoiceTranscriptChange = useCallback(
+   *   (fullTranscript: string) => {
+   *     const base = voiceBaseInputRef.current;
+   *     setInput(base.trim() ? `${base.trim()} ${fullTranscript}` : fullTranscript);
+   *   },
+   *   [],
+   * );
+   *
+   * const onVoiceTranscript = useCallback(
+   *   (t: string) => {
+   *     setPartialVoice("");
+   *     const base = voiceBaseInputRef.current;
+   *     setInput(base.trim() ? `${base.trim()} ${t}` : t);
+   *     voiceBaseInputRef.current = "";
+   *   },
+   *   [],
+   * );
+   *
+   * const onVoiceRecordingStart = useCallback(() => {
+   *   voiceBaseInputRef.current = input;
+   *   setPartialVoice("");
+   * }, [input]);
+   *
+   * const onVoiceError = useCallback(
+   *   (err: { kind: string; message?: string }) => {
+   *     console.warn("[voice] error", err);
+   *     let msg: string;
+   *     switch (err.kind) {
+   *       case "permission_denied": msg = "Microphone access denied — open Settings to enable."; break;
+   *       case "model_not_ready": msg = "Model not downloaded — long-press the mic to download."; break;
+   *       case "model_download_failed": msg = "Couldn't download voice model. Tap to retry."; break;
+   *       case "audio_session": msg = `Audio session error: ${err.message ?? "unknown"}`; break;
+   *       case "whisper_init_failed": msg = `Whisper init failed: ${err.message ?? "unknown"}`; break;
+   *       case "whisper_runtime_error": msg = `Whisper runtime error: ${err.message ?? "unknown"}`; break;
+   *       case "module_error": msg = `Voice module error: ${err.message ?? "unknown"}`; break;
+   *       default: msg = `Voice error (${err.kind}): ${err.message ?? "no detail"}`;
+   *     }
+   *     showToast(msg, "error");
+   *   },
+   *   [],
+   * );
+   */
 
   const actionSheetRef = useRef<ActionSheetHandle>(null);
   const onAttachPress = useCallback(() => {
@@ -2026,27 +2020,29 @@ export default function ChatScreen() {
           </View>
         ) : null}
 
-        {/* Live partial-transcript preview (approach B: caption pill below the
-            textarea). Rendering option B was chosen over an inline TextInput
-            overlay because it avoids cursor/selection interference and is
-            simpler to animate. While recording, unconfirmed hypothesis tokens
-            appear here at reduced opacity; confirmed tokens graduate into the
-            main input value via onVoiceTranscriptChange. */}
-        {partialVoice ? (
-          <Animated.View
-            entering={FadeIn.duration(150)}
-            exiting={FadeOut.duration(150)}
-            style={{ paddingHorizontal: 16, paddingTop: 2, paddingBottom: 2 }}
-          >
-            <Text
-              kind="caption"
-              color={tokens.ink3}
-              style={{ fontStyle: "italic", opacity: 0.7 }}
-            >
-              {partialVoice}
-            </Text>
-          </Animated.View>
-        ) : null}
+        {/*
+          * VOICE_TRANSCRIBE_DISABLED: partial-transcript preview pill.
+          * Rendered below the TextInput while the transcribe engine emitted
+          * partial (unconfirmed) hypothesis tokens. FadeIn/FadeOut animations
+          * from react-native-reanimated were used.
+          *
+          * To restore:
+          *   1. Uncomment partialVoice state above.
+          *   2. Uncomment this block.
+          *   3. Re-enable onPartial={setPartialVoice} on <MicButton>.
+          *
+          * {partialVoice ? (
+          *   <Animated.View
+          *     entering={FadeIn.duration(150)}
+          *     exiting={FadeOut.duration(150)}
+          *     style={{ paddingHorizontal: 16, paddingTop: 2, paddingBottom: 2 }}
+          *   >
+          *     <Text kind="caption" color={tokens.ink3} style={{ fontStyle: "italic", opacity: 0.7 }}>
+          *       {partialVoice}
+          *     </Text>
+          *   </Animated.View>
+          * ) : null}
+          */}
 
         {/* Lineage chips — render above the model strip so users see the
             branch relationship without scrolling. The parent-link is
@@ -2340,22 +2336,14 @@ export default function ChatScreen() {
               }}
             />
             {/* MicButton — left of the send/stop control, right of the TextInput.
-                Disabled while the agent is streaming to prevent interleaving.
-                onRecordingStart captures the current input value as the base
-                for the incremental append flow. onTranscriptChange emits the
-                full confirmed transcript on each confirmed segment so input
-                reflects real text incrementally. onTranscript is the final
-                cleanup step on stop. */}
+                VOICE_TRANSCRIBE_DISABLED: transcribe-path props (language,
+                addsPunctuation, onRecordingStart, onPartial, onTranscriptChange,
+                onTranscript, onError) have been removed. MicButton now only
+                needs disabled + sessionId for the memo-only path.
+                To restore: re-add those props (see commented block above). */}
             {voiceEnabled ? (
               <MicButton
-                language={voiceLanguage ?? undefined}
-                addsPunctuation={voiceAddsPunctuation}
                 disabled={isStreaming}
-                onRecordingStart={onVoiceRecordingStart}
-                onPartial={setPartialVoice}
-                onTranscriptChange={onVoiceTranscriptChange}
-                onTranscript={onVoiceTranscript}
-                onError={onVoiceError}
                 sessionId={sessionId}
                 size={32}
               />

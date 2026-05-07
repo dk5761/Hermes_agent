@@ -1,23 +1,38 @@
 /**
  * Voice settings screen — `(app)/(settings)/voice`.
  *
- * Sections:
- *   (A) Info card — transcription notice
- *   (B) Active model card — status badge, progress bar, action buttons
- *   (C) Model picker — curated WhisperKit variants with radio selection
- *   (D) Speech recognition engine — four-option engine radio + fallback toggle
- *                                   + addsPunctuation + current effective label
- *   (E) Recording limits — local cap slider + server cap slider
- *   (F) General — voice enabled toggle, language picker
- *   (G) Permissions — iOS Settings deep-link
+ * VOICE_TRANSCRIBE_DISABLED: Sections B, C, D, F (language) are commented
+ * out — they all relate to the transcribe-to-composer path (WhisperKit model,
+ * engine picker, language override, addsPunctuation).
  *
- * Layout mirrors notifications.tsx: NavBar + ScrollView + ListGroup sections.
+ * Active sections:
+ *   (A) Info card — voice memo notice (text updated)
+ *   (E) Recording limits — local cap slider (memo length) + server cap slider
+ *   (F-partial) General — voice enabled toggle only
+ *   (G) Permissions — iOS Settings deep-link
+ *   Reset button
+ *
+ * To restore all sections:
+ *   1. Uncomment the VOICE_TRANSCRIBE_DISABLED blocks in this file.
+ *   2. Restore imports: ExpoSpeechRecognitionModule, useWhisperModelState,
+ *      resolveEngine, WhisperModelName.
+ *   3. Re-enable transcribe-path props in MicButton / chat/[id].tsx.
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { Alert, Pressable, ScrollView, View } from "react-native";
+import { useCallback, useState } from "react";
+// VOICE_TRANSCRIBE_DISABLED: useEffect (language-picker fetch), useMemo
+// (languageLabel), Alert (model re-download/remove confirms) removed.
+// To restore: add back to the import above.
+import { ScrollView, View } from "react-native";
+// VOICE_TRANSCRIBE_DISABLED: Pressable was used by EnginePicker and
+// ModelPicker radio rows. Removed since both components are disabled.
+// To restore: re-add Pressable to the react-native import above.
 import { useRouter } from "expo-router";
-import { ExpoSpeechRecognitionModule } from "expo-speech-recognition";
-import { Platform } from "react-native";
+// VOICE_TRANSCRIBE_DISABLED: ExpoSpeechRecognitionModule was used by the
+// language picker (fetchSupportedLocales). Kept on disk; import removed here.
+// import { ExpoSpeechRecognitionModule } from "expo-speech-recognition";
+// VOICE_TRANSCRIBE_DISABLED: Platform was used by EnginePicker
+// (non-iOS platform check). Removed.
+// import { Platform } from "react-native";
 import Slider from "@react-native-community/slider";
 
 import {
@@ -26,8 +41,10 @@ import {
   ListRow,
   NavBar,
   PhoneSafeArea,
-  ProgressBar,
-  Row,
+  // VOICE_TRANSCRIBE_DISABLED: ProgressBar was used by ActiveModelCard download progress.
+  // ProgressBar,
+  // VOICE_TRANSCRIBE_DISABLED: Row was used by QualityDots (model picker). Removed.
+  // Row,
   Stack,
   Text,
   Toggle,
@@ -38,286 +55,46 @@ import {
   LOCAL_CAP_RANGE,
   SERVER_CAP_RANGE,
 } from "@/state/voice-settings";
-import type { VoiceEngine } from "@/state/voice-settings";
-import { useNetworkStatus } from "@/state/network-status";
-import { useWhisperModelState } from "@/voice/whisper-model-state";
-import { resolveEngine } from "@/voice/useVoiceInput";
-import type { WhisperModelName } from "whisperkit";
+// VOICE_TRANSCRIBE_DISABLED: VoiceEngine type was used by EnginePicker.
+// import type { VoiceEngine } from "@/state/voice-settings";
+// VOICE_TRANSCRIBE_DISABLED: useNetworkStatus was used by EnginePicker (online state).
+// import { useNetworkStatus } from "@/state/network-status";
+// VOICE_TRANSCRIBE_DISABLED: useWhisperModelState, resolveEngine, WhisperModelName
+// were used by ActiveModelCard, ModelPicker, and EnginePicker.
+// import { useWhisperModelState } from "@/voice/whisper-model-state";
+// import { resolveEngine } from "@/voice/useVoiceInput";
+// import type { WhisperModelName } from "whisperkit";
 import { openVoiceSettings } from "@/voice";
 
-// ---------------------------------------------------------------------------
-// Curated model picker list
-// ---------------------------------------------------------------------------
-
-interface ModelOption {
-  name: WhisperModelName;
-  label: string;
-  sizeLabel: string;
-  /** 1 = OK, 2 = Good, 3 = Best */
-  qualityTier: 1 | 2 | 3;
-  note?: string;
-  isDefault?: boolean;
-}
-
-const CURATED_MODELS: ReadonlyArray<ModelOption> = [
-  {
-    name: "openai_whisper-tiny.en",
-    label: "Tiny (English)",
-    sizeLabel: "~75 MB",
-    qualityTier: 1,
-  },
-  {
-    name: "openai_whisper-base.en",
-    label: "Base (English)",
-    sizeLabel: "~140 MB",
-    qualityTier: 2,
-    isDefault: true,
-  },
-  {
-    name: "openai_whisper-base",
-    label: "Base (Multilingual)",
-    sizeLabel: "~140 MB",
-    qualityTier: 2,
-  },
-  {
-    name: "openai_whisper-small.en",
-    label: "Small (English)",
-    sizeLabel: "~466 MB",
-    qualityTier: 3,
-    note: "Slow on older iPhones",
-  },
-] as const;
-
-// ---------------------------------------------------------------------------
-// Language picker helpers
-// ---------------------------------------------------------------------------
-
-/** Fallback locale list shown if getSupportedLocales throws or returns empty. */
-const FALLBACK_LOCALES: ReadonlyArray<string> = [
-  "en-US",
-  "en-GB",
-  "en-IN",
-  "es-ES",
-  "fr-FR",
-  "de-DE",
-  "ja-JP",
-  "zh-CN",
-];
-
-function resolveDeviceLocale(): string {
-  try {
-    return Intl.DateTimeFormat().resolvedOptions().locale ?? "en-US";
-  } catch {
-    return "en-US";
-  }
-}
-
-const DEVICE_LOCALE = resolveDeviceLocale();
-
-interface LocaleOption {
-  value: string | null; // null = device default
-  label: string;
-}
-
-async function fetchSupportedLocales(): Promise<ReadonlyArray<string>> {
-  try {
-    const result = await ExpoSpeechRecognitionModule.getSupportedLocales({
-      androidRecognitionServicePackage: undefined,
-    });
-    const locales = result?.locales;
-    if (Array.isArray(locales) && locales.length > 0) {
-      return locales;
-    }
-    return FALLBACK_LOCALES;
-  } catch {
-    return FALLBACK_LOCALES;
-  }
-}
-
-function buildLocaleOptions(
-  supportedLocales: ReadonlyArray<string>,
-): ReadonlyArray<LocaleOption> {
-  const deviceDefault: LocaleOption = {
-    value: null,
-    label: `Device default (${DEVICE_LOCALE})`,
-  };
-
-  const set = new Set(supportedLocales);
-  set.add(DEVICE_LOCALE);
-  const sorted = Array.from(set).sort((a, b) => a.localeCompare(b));
-
-  return [
-    deviceDefault,
-    ...sorted.map((loc) => ({ value: loc, label: loc })),
-  ];
-}
-
-// ---------------------------------------------------------------------------
-// Engine picker
-// ---------------------------------------------------------------------------
-
-interface EngineOption {
-  value: VoiceEngine;
-  label: string;
-  detail: string;
-}
-
-const ENGINE_OPTIONS: ReadonlyArray<EngineOption> = [
-  {
-    value: "auto",
-    label: "Auto (recommended)",
-    detail: "Hermes server when online, on-device WhisperKit when offline (or system if not downloaded).",
-  },
-  {
-    value: "whisper",
-    label: "WhisperKit (on-device)",
-    detail: "Best privacy and quality. Requires model download.",
-  },
-  {
-    value: "sfspeech",
-    label: "Apple system (SFSpeech)",
-    detail: "Instant. Uses system languages.",
-  },
-  {
-    value: "server",
-    label: "Hermes server",
-    detail: "Long recordings, best for >60s. Requires connection.",
-  },
-] as const;
-
-function EnginePicker() {
-  const tokens = useThemeTokens();
-  const engine = useVoiceSettings((s) => s.engine);
-  const addsPunctuation = useVoiceSettings((s) => s.addsPunctuation);
-  const fallbackOnOffline = useVoiceSettings((s) => s.fallbackOnOffline);
-  const setEngine = useVoiceSettings((s) => s.setEngine);
-  const setAddsPunctuation = useVoiceSettings((s) => s.setAddsPunctuation);
-  const setFallbackOnOffline = useVoiceSettings((s) => s.setFallbackOnOffline);
-  const modelStatus = useWhisperModelState((s) => s.status);
-  const online = useNetworkStatus((s) => s.online);
-
-  // Derive which engine is actually active right now for the status label.
-  const effectiveEngine = resolveEngine({ engine, modelStatus, online, fallbackOnOffline });
-
-  const currentEngineLabel: string = (() => {
-    switch (effectiveEngine) {
-      case "whisper": return "WhisperKit (on-device)";
-      case "sfspeech": return "Apple system (SFSpeech)";
-      case "server": return "Hermes server";
-      case "blocked": return "Offline — server unavailable";
-    }
-  })();
-
-  // Show the addsPunctuation toggle only when SFSpeech is the active engine.
-  const showPunctuationToggle = effectiveEngine === "sfspeech";
-
-  const handleSelect = useCallback(
-    (value: VoiceEngine) => {
-      setEngine(value);
-    },
-    [setEngine],
-  );
-
-  return (
-    <ListGroup
-      header="Speech recognition engine"
-      footer="Auto picks Hermes server when you're online (best quality, multilingual). Falls back to WhisperKit on-device when offline, or Apple's system recognizer if WhisperKit isn't downloaded."
-    >
-      {ENGINE_OPTIONS.map((opt) => {
-        const isActive = opt.value === engine;
-        return (
-          <Pressable
-            key={opt.value}
-            onPress={() => handleSelect(opt.value)}
-            accessibilityRole="radio"
-            accessibilityState={{ selected: isActive }}
-            style={{
-              paddingVertical: 12,
-              paddingHorizontal: 16,
-              flexDirection: "row",
-              alignItems: "center",
-              gap: 12,
-            }}
-          >
-            {/* Radio indicator */}
-            <View
-              style={{
-                width: 18,
-                height: 18,
-                borderRadius: 9,
-                borderWidth: 2,
-                borderColor: isActive ? tokens.accent : tokens.line,
-                alignItems: "center",
-                justifyContent: "center",
-                flexShrink: 0,
-              }}
-            >
-              {isActive ? (
-                <View
-                  style={{
-                    width: 8,
-                    height: 8,
-                    borderRadius: 4,
-                    backgroundColor: tokens.accent,
-                  }}
-                />
-              ) : null}
-            </View>
-
-            {/* Label block */}
-            <View style={{ flex: 1, gap: 2 }}>
-              <Text
-                kind="body-lg"
-                style={{ fontWeight: isActive ? "600" : "400" }}
-              >
-                {opt.label}
-              </Text>
-              <Text kind="caption" className="text-ink-3">
-                {opt.detail}
-              </Text>
-            </View>
-          </Pressable>
-        );
-      })}
-
-      {/* Fallback toggle — always visible; controls behaviour when server engine is offline */}
-      <ListRow
-        icon="globe"
-        title="Use on-device when offline"
-        subtitle="If on, switches to WhisperKit or Apple Speech when offline and Hermes server is selected. If off, mic is disabled offline."
-        right={
-          <Toggle on={fallbackOnOffline} onChange={setFallbackOnOffline} />
-        }
-      />
-
-      {/* Punctuation toggle — only visible when SFSpeech is effective engine */}
-      {showPunctuationToggle ? (
-        <ListRow
-          icon="hash"
-          title="Auto-punctuation"
-          subtitle="Adds commas and periods automatically (SFSpeech only)"
-          right={
-            <Toggle on={addsPunctuation} onChange={setAddsPunctuation} />
-          }
-        />
-      ) : null}
-
-      {/* Currently-active engine label */}
-      <View
-        style={{
-          paddingHorizontal: 16,
-          paddingVertical: 10,
-          borderTopWidth: 1,
-          borderTopColor: tokens.lineSoft,
-        }}
-      >
-        <Text kind="micro" className="text-ink-3">
-          Currently using: {currentEngineLabel}
-        </Text>
-      </View>
-    </ListGroup>
-  );
-}
+/*
+ * VOICE_TRANSCRIBE_DISABLED: CURATED_MODELS, language-picker helpers
+ * (FALLBACK_LOCALES, resolveDeviceLocale, DEVICE_LOCALE, LocaleOption,
+ * fetchSupportedLocales, buildLocaleOptions), ENGINE_OPTIONS, and EnginePicker
+ * are all disabled. They provided:
+ *   - CURATED_MODELS: the list of downloadable WhisperKit models shown in
+ *     the model picker UI.
+ *   - Language picker helpers: fetched iOS-supported speech locales, built a
+ *     sorted picker list with device-default as the first entry.
+ *   - ENGINE_OPTIONS + EnginePicker: radio picker for auto / whisper /
+ *     sfspeech / server engines, fallback toggle, addsPunctuation toggle,
+ *     and a "currently using" label derived from resolveEngine().
+ *
+ * To restore: uncomment this block and the corresponding imports above.
+ *
+ * interface ModelOption { ... }
+ * const CURATED_MODELS: ReadonlyArray<ModelOption> = [ ... ];
+ *
+ * const FALLBACK_LOCALES = [ "en-US", ... ];
+ * function resolveDeviceLocale(): string { ... }
+ * const DEVICE_LOCALE = resolveDeviceLocale();
+ * interface LocaleOption { value: string | null; label: string; }
+ * async function fetchSupportedLocales(): Promise<ReadonlyArray<string>> { ... }
+ * function buildLocaleOptions(supportedLocales): ReadonlyArray<LocaleOption> { ... }
+ *
+ * interface EngineOption { value: VoiceEngine; label: string; detail: string; }
+ * const ENGINE_OPTIONS: ReadonlyArray<EngineOption> = [ ... ];
+ * function EnginePicker() { ... }
+ */
 
 // ---------------------------------------------------------------------------
 // Helpers for cap display
@@ -422,275 +199,24 @@ function RecordingLimitsCard() {
   );
 }
 
-// ---------------------------------------------------------------------------
-// Quality tier indicator
-// ---------------------------------------------------------------------------
-
-function QualityDots({ tier }: { tier: 1 | 2 | 3 }) {
-  const tokens = useThemeTokens();
-  return (
-    <Row gap={3}>
-      {([1, 2, 3] as const).map((i) => (
-        <View
-          key={i}
-          style={{
-            width: 6,
-            height: 6,
-            borderRadius: 3,
-            backgroundColor: i <= tier ? tokens.accent : tokens.lineSoft,
-          }}
-        />
-      ))}
-    </Row>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Status badge
-// ---------------------------------------------------------------------------
-
-type BadgeVariant = "ready" | "downloading" | "absent" | "failed";
-
-function StatusBadge({
-  variant,
-  progress,
-}: {
-  variant: BadgeVariant;
-  progress?: number;
-}) {
-  const tokens = useThemeTokens();
-
-  const config: Record<BadgeVariant, { label: string; color: string }> = {
-    ready: { label: "Ready", color: tokens.positive },
-    downloading: {
-      label: progress !== undefined ? `${Math.round(progress * 100)}%` : "Downloading…",
-      color: tokens.warning,
-    },
-    absent: { label: "Not downloaded", color: tokens.ink3 },
-    failed: { label: "Failed", color: tokens.danger },
-  };
-
-  const { label, color } = config[variant];
-
-  return (
-    <View
-      style={{
-        paddingHorizontal: 8,
-        paddingVertical: 3,
-        borderRadius: 6,
-        backgroundColor: `${color}22`,
-        alignSelf: "flex-start",
-      }}
-    >
-      <Text kind="micro" style={{ color, fontWeight: "600" }}>
-        {label}
-      </Text>
-    </View>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Active model card
-// ---------------------------------------------------------------------------
-
-function ActiveModelCard() {
-  const tokens = useThemeTokens();
-  const activeModel = useWhisperModelState((s) => s.activeModel);
-  const status = useWhisperModelState((s) => s.status);
-  const progress = useWhisperModelState((s) => s.progress);
-  const errorMessage = useWhisperModelState((s) => s.errorMessage);
-
-  const modelOption = CURATED_MODELS.find((m) => m.name === activeModel);
-  const friendlyName = modelOption?.label ?? activeModel;
-  const sizeLabel = modelOption?.sizeLabel;
-
-  const handleDownload = useCallback(() => {
-    void useWhisperModelState.getState().ensureReady();
-  }, []);
-
-  const handleRedownload = useCallback(() => {
-    Alert.alert(
-      "Re-download model?",
-      "This will delete the current model files and download them again.",
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Re-download",
-          style: "destructive",
-          onPress: () => void useWhisperModelState.getState().forceRedownload(),
-        },
-      ],
-    );
-  }, []);
-
-  const handleRemove = useCallback(() => {
-    Alert.alert(
-      "Remove model from device?",
-      "The model will be deleted from local storage. You can download it again later.",
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Remove",
-          style: "destructive",
-          onPress: () => void useWhisperModelState.getState().removeFromDevice(),
-        },
-      ],
-    );
-  }, []);
-
-  return (
-    <View
-      className="bg-surface border border-line"
-      style={{ marginHorizontal: 16, padding: 16, borderRadius: 14, gap: 12 }}
-    >
-      {/* Header row */}
-      <View style={{ flexDirection: "row", alignItems: "flex-start", gap: 10 }}>
-        <View style={{ flex: 1, gap: 4 }}>
-          <Text kind="label">{friendlyName}</Text>
-          {sizeLabel ? (
-            <Text kind="caption" className="text-ink-3">
-              {sizeLabel}
-              {status === "ready" ? " · on device" : ""}
-            </Text>
-          ) : null}
-        </View>
-        <StatusBadge variant={status} progress={progress} />
-      </View>
-
-      {/* Progress bar — only while downloading */}
-      {status === "downloading" ? (
-        <ProgressBar value={progress} />
-      ) : null}
-
-      {/* Error message */}
-      {status === "failed" && errorMessage ? (
-        <Text kind="caption" style={{ color: tokens.danger }}>
-          {errorMessage}
-        </Text>
-      ) : null}
-
-      {/* Action buttons */}
-      <View style={{ gap: 8 }}>
-        {(status === "absent" || status === "failed") ? (
-          <Button kind="primary" leftIcon="download" onClick={handleDownload}>
-            Download model
-          </Button>
-        ) : null}
-
-        {status === "ready" ? (
-          <>
-            <Button kind="secondary" leftIcon="refresh" onClick={handleRedownload}>
-              Re-download model
-            </Button>
-            <Button kind="secondary" leftIcon="trash" onClick={handleRemove}>
-              Remove from device
-            </Button>
-          </>
-        ) : null}
-      </View>
-    </View>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Model picker
-// ---------------------------------------------------------------------------
-
-function ModelPicker() {
-  const tokens = useThemeTokens();
-  const activeModel = useWhisperModelState((s) => s.activeModel);
-  const setActiveModel = useWhisperModelState((s) => s.setActiveModel);
-
-  const handleSelect = useCallback(
-    (name: WhisperModelName) => {
-      if (name !== activeModel) {
-        setActiveModel(name);
-      }
-    },
-    [activeModel, setActiveModel],
-  );
-
-  return (
-    <ListGroup
-      header="Model"
-      footer="Downloaded once, used offline forever. Larger models are more accurate but require more storage and processing time."
-    >
-      {CURATED_MODELS.map((opt) => {
-        const isActive = opt.name === activeModel;
-        return (
-          <Pressable
-            key={opt.name}
-            onPress={() => handleSelect(opt.name)}
-            accessibilityRole="radio"
-            accessibilityState={{ selected: isActive }}
-            style={{
-              paddingVertical: 12,
-              paddingHorizontal: 16,
-              flexDirection: "row",
-              alignItems: "center",
-              gap: 12,
-            }}
-          >
-            {/* Radio indicator */}
-            <View
-              style={{
-                width: 18,
-                height: 18,
-                borderRadius: 9,
-                borderWidth: 2,
-                borderColor: isActive ? tokens.accent : tokens.line,
-                alignItems: "center",
-                justifyContent: "center",
-                flexShrink: 0,
-              }}
-            >
-              {isActive ? (
-                <View
-                  style={{
-                    width: 8,
-                    height: 8,
-                    borderRadius: 4,
-                    backgroundColor: tokens.accent,
-                  }}
-                />
-              ) : null}
-            </View>
-
-            {/* Label block */}
-            <View style={{ flex: 1, gap: 2 }}>
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-                <Text
-                  kind="body-lg"
-                  style={{ fontWeight: isActive ? "600" : "400" }}
-                >
-                  {opt.label}
-                </Text>
-                {opt.isDefault ? (
-                  <Text kind="micro" className="text-ink-3">
-                    default
-                  </Text>
-                ) : null}
-              </View>
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-                <Text kind="caption" className="text-ink-3">
-                  {opt.sizeLabel}
-                </Text>
-                {opt.note ? (
-                  <Text kind="caption" style={{ color: tokens.warning }}>
-                    {opt.note}
-                  </Text>
-                ) : null}
-              </View>
-            </View>
-
-            {/* Quality tier dots */}
-            <QualityDots tier={opt.qualityTier} />
-          </Pressable>
-        );
-      })}
-    </ListGroup>
-  );
-}
+/*
+ * VOICE_TRANSCRIBE_DISABLED: QualityDots, StatusBadge, ActiveModelCard, and
+ * ModelPicker are all disabled. They provided:
+ *   - QualityDots: 1–3 dot quality indicator for WhisperKit model variants.
+ *   - StatusBadge: colored badge showing ready / downloading / absent / failed.
+ *   - ActiveModelCard: shows the current WhisperKit model name, size, download
+ *     status (with progress bar), and download/re-download/remove buttons.
+ *   - ModelPicker: radio list of CURATED_MODELS for selecting the active model.
+ *
+ * To restore: uncomment this block and the imports for useWhisperModelState,
+ * WhisperModelName, ProgressBar, CURATED_MODELS.
+ *
+ * function QualityDots(...) { ... }
+ * type BadgeVariant = ...;
+ * function StatusBadge(...) { ... }
+ * function ActiveModelCard() { ... }
+ * function ModelPicker() { ... }
+ */
 
 // ---------------------------------------------------------------------------
 // Screen
@@ -701,34 +227,34 @@ export default function VoiceSettingsScreen() {
   const tokens = useThemeTokens();
 
   const enabled = useVoiceSettings((s) => s.enabled);
-  const language = useVoiceSettings((s) => s.language);
   const setEnabled = useVoiceSettings((s) => s.setEnabled);
-  const setLanguage = useVoiceSettings((s) => s.setLanguage);
 
-  // Language picker state.
-  const [localeOptions, setLocaleOptions] = useState<
-    ReadonlyArray<LocaleOption>
-  >([]);
-  const [pickerOpen, setPickerOpen] = useState(false);
-
-  useEffect(() => {
-    void fetchSupportedLocales().then((locales) => {
-      setLocaleOptions(buildLocaleOptions(locales));
-    });
-  }, []);
-
-  const onSelectLocale = useCallback(
-    (value: string | null) => {
-      setLanguage(value);
-      setPickerOpen(false);
-    },
-    [setLanguage],
-  );
-
-  const languageLabel = useMemo(() => {
-    if (language === null) return `Device default (${DEVICE_LOCALE})`;
-    return language;
-  }, [language]);
+  /*
+   * VOICE_TRANSCRIBE_DISABLED: language and setLanguage, localeOptions,
+   * pickerOpen, the fetchSupportedLocales effect, onSelectLocale, and
+   * languageLabel were used by the language picker (section F).
+   * Language is now auto-detected by faster-whisper on the server.
+   *
+   * To restore: uncomment this block and re-add the Language section in the JSX.
+   *
+   * const language = useVoiceSettings((s) => s.language);
+   * const setLanguage = useVoiceSettings((s) => s.setLanguage);
+   * const [localeOptions, setLocaleOptions] = useState<ReadonlyArray<LocaleOption>>([]);
+   * const [pickerOpen, setPickerOpen] = useState(false);
+   * useEffect(() => {
+   *   void fetchSupportedLocales().then((locales) => {
+   *     setLocaleOptions(buildLocaleOptions(locales));
+   *   });
+   * }, []);
+   * const onSelectLocale = useCallback((value: string | null) => {
+   *   setLanguage(value);
+   *   setPickerOpen(false);
+   * }, [setLanguage]);
+   * const languageLabel = useMemo(() => {
+   *   if (language === null) return `Device default (${DEVICE_LOCALE})`;
+   *   return language;
+   * }, [language]);
+   */
 
   const onManageInSettings = useCallback(() => {
     void openVoiceSettings();
@@ -745,32 +271,45 @@ export default function VoiceSettingsScreen() {
             style={{ marginHorizontal: 16, padding: 14, borderRadius: 12 }}
           >
             <Stack gap={4}>
-              <Text kind="label">Voice transcription</Text>
+              <Text kind="label">Voice memos</Text>
               <Text kind="caption" className="text-ink-3">
-                On-device engines (WhisperKit, Apple) process audio entirely on
-                your device. The Hermes server engine uploads audio to your
-                self-hosted server for longer recordings.
+                Tap the mic button to record a voice memo. Tap again to send.
+                Hold for PTT (push-to-talk): release to send, slide to cancel.
+                Audio is uploaded to your self-hosted Hermes server for
+                transcription.
               </Text>
             </Stack>
           </View>
 
-          {/* ── Active model ───────────────────────────────────────── */}
-          <Stack gap={8}>
-            <Text
-              kind="micro"
-              className="text-ink-3 uppercase"
-              style={{ paddingHorizontal: 16 }}
-            >
-              Active model
-            </Text>
-            <ActiveModelCard />
-          </Stack>
+          {/*
+            * VOICE_TRANSCRIBE_DISABLED: Active model card (B) — WhisperKit model
+            * status, download progress, re-download/remove buttons.
+            * To restore: uncomment <ActiveModelCard /> and its Stack wrapper.
+            *
+            * <Stack gap={8}>
+            *   <Text kind="micro" className="text-ink-3 uppercase" style={{ paddingHorizontal: 16 }}>
+            *     Active model
+            *   </Text>
+            *   <ActiveModelCard />
+            * </Stack>
+            */}
 
-          {/* ── Model picker ───────────────────────────────────────── */}
-          <ModelPicker />
+          {/*
+            * VOICE_TRANSCRIBE_DISABLED: Model picker (C) — curated WhisperKit
+            * model variants with radio selection.
+            * To restore: uncomment <ModelPicker />.
+            *
+            * <ModelPicker />
+            */}
 
-          {/* ── Speech recognition engine ──────────────────────────── */}
-          <EnginePicker />
+          {/*
+            * VOICE_TRANSCRIBE_DISABLED: Engine picker (D) — auto / whisper /
+            * sfspeech / server radio, fallback toggle, addsPunctuation toggle,
+            * and "currently using" label.
+            * To restore: uncomment <EnginePicker />.
+            *
+            * <EnginePicker />
+            */}
 
           {/* ── Recording limits ───────────────────────────────────── */}
           <RecordingLimitsCard />
@@ -785,91 +324,26 @@ export default function VoiceSettingsScreen() {
             />
           </ListGroup>
 
-          {/* ── Language ───────────────────────────────────────────── */}
-          <ListGroup
-            header="Language"
-            footer="Override the speech recognition language. Device default uses your system locale."
-          >
-            <ListRow
-              icon="globe"
-              title="Recognition language"
-              detail={languageLabel}
-              chevron
-              onPress={() => setPickerOpen((prev) => !prev)}
-            />
-            {pickerOpen ? (
-              <View
-                style={{
-                  paddingHorizontal: 16,
-                  paddingBottom: 8,
-                  maxHeight: 280,
-                  overflow: "hidden",
-                }}
-              >
-                <ScrollView
-                  style={{ maxHeight: 260 }}
-                  nestedScrollEnabled
-                  showsVerticalScrollIndicator
-                >
-                  {localeOptions.map((opt) => {
-                    const isActive =
-                      opt.value === null
-                        ? language === null
-                        : language === opt.value;
-                    return (
-                      <Pressable
-                        key={opt.value ?? "__device_default__"}
-                        onPress={() => onSelectLocale(opt.value)}
-                        accessibilityRole="radio"
-                        accessibilityState={{ selected: isActive }}
-                        style={{
-                          paddingVertical: 10,
-                          paddingHorizontal: 4,
-                          flexDirection: "row",
-                          alignItems: "center",
-                          gap: 10,
-                          borderBottomWidth: 1,
-                          borderBottomColor: tokens.line,
-                        }}
-                      >
-                        <View
-                          style={{
-                            width: 16,
-                            height: 16,
-                            borderRadius: 8,
-                            borderWidth: 2,
-                            borderColor: isActive ? tokens.accent : tokens.line,
-                            alignItems: "center",
-                            justifyContent: "center",
-                          }}
-                        >
-                          {isActive ? (
-                            <View
-                              style={{
-                                width: 7,
-                                height: 7,
-                                borderRadius: 3.5,
-                                backgroundColor: tokens.accent,
-                              }}
-                            />
-                          ) : null}
-                        </View>
-                        <Text
-                          kind="body"
-                          style={{
-                            fontWeight: isActive ? "600" : "400",
-                            flex: 1,
-                          }}
-                        >
-                          {opt.label}
-                        </Text>
-                      </Pressable>
-                    );
-                  })}
-                </ScrollView>
-              </View>
-            ) : null}
-          </ListGroup>
+          {/*
+            * VOICE_TRANSCRIBE_DISABLED: Language picker (F) — recognition
+            * language override. Language is now auto-detected by faster-whisper
+            * on the server.
+            * To restore: uncomment this block and re-add language state above.
+            *
+            * <ListGroup
+            *   header="Language"
+            *   footer="Override the speech recognition language. Device default uses your system locale."
+            * >
+            *   <ListRow
+            *     icon="globe"
+            *     title="Recognition language"
+            *     detail={languageLabel}
+            *     chevron
+            *     onPress={() => setPickerOpen((prev) => !prev)}
+            *   />
+            *   {pickerOpen ? ( ... locale list ... ) : null}
+            * </ListGroup>
+            */}
 
           {/* ── Permissions ────────────────────────────────────────── */}
           <ListGroup
