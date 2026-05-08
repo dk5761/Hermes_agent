@@ -116,6 +116,27 @@ Snapshots of the Hermes side (not gateway DB) are taken via
 
 ## Deploy log
 
+### 2026-05-09 — cron Jobs/Outputs split + outputs aggregator
+
+- **Source:** `c795625` (latest `main`).
+- **Previous:** `66e20ad` (chat.send idempotency, 2026-05-08).
+- **Migrations applied:** none.
+- **Restarted:** `hermes-gateway` only.
+- **Backend changes:**
+  - New endpoint `GET /cron/outputs/by-job` — one row per job that has runs on disk, sorted newest-first, includes orphan dirs whose parent job was deleted (frontend renders an `archived` badge for those).
+  - `cron-fs.ts` `extractPreview()` now anchors on the `## Response` heading so list-row previews skip the Hermes preamble (Job ID / Run Time / Schedule / Prompt) and read from the actual run output.
+  - Read buffer per file bumped 1 KB → 8 KB so long prompt blocks don't push the response body out of range.
+  - `CronOutputSummary` / `CronOutput` now include a populated `preview` field; `CronOutputSummary.createdAt` is now a string (ISO) — frontend types updated to match.
+- **Verified on VPS:**
+  - `curl /health` → 200, uptime ticks from 0.
+  - `curl /cron/outputs/by-job` → 401 (route registered + auth required, not 404).
+  - `curl /cron/outputs?job_id=x` and `/cron/jobs` → 401 (existing routes still wired).
+- **Frontend (mobile, OTA, NOT in this VPS deploy):**
+  - Cron tab now splits into `[Jobs | Outputs]` via SegControl. New `CronJobOutputs` screen at `/(cron)/[jobId]/outputs`. CronDetail "Recent runs" capped at 4 with "See all" → that screen.
+  - `cache/query-persister.ts` skips `pending` + `error` queries from dehydration (fixes the "promise.then is not a function" crash on launch). `PERSIST_BUSTER` bumped to 2 to wipe any poisoned cache row from prior launches.
+  - `chat.abort` is now durable — routed through `usePendingSends` so the queue-drainer re-delivers it on reconnect. Fixes the kill+reopen case where stopping a generation but losing the abort frame in transit caused the response to "auto-restart" on reopen.
+- **Branch state on VPS after deploy:** `main` tracking `origin/main` at `c795625`.
+
 ### 2026-05-08 — chat.send idempotency via clientId
 
 - **Source:** `66e20ad` (latest `main`).
