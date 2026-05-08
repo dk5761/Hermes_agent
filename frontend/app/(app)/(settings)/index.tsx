@@ -289,6 +289,12 @@ export default function SettingsIndexScreen() {
               onPress={goto("/(settings)/appearance")}
             />
             <ListRow
+              icon="cog"
+              title="App updates"
+              chevron
+              onPress={goto("/(settings)/updates")}
+            />
+            <ListRow
               icon="doc"
               title="About"
               chevron
