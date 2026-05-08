@@ -116,6 +116,31 @@ Snapshots of the Hermes side (not gateway DB) are taken via
 
 ## Deploy log
 
+### 2026-05-09 — hermes-agent system bump v0.12.0 → v0.13.0 + patches re-applied
+
+- **System hermes:** `v0.12.0 (2026.4.30)` → `v0.13.0 (2026.5.7)` via `hermes update`. 643 commits applied. `hermes-agent` Python package version `0.11.0 → 0.13.0` upstream; `croniter` is now a core dep.
+- **Submodule pointer (parent repo):** `7d46484 → 498bfc7c` (commit `d5fa256`). Verified locally before VPS deploy: all 7 patch scripts apply cleanly to the new source (apply → check → unpatch round-trip, all touched files parse).
+- **Patches re-applied (all idempotent on `--apply`):**
+  - `patch-hermes-config.py` — already up to date (no config drift from update).
+  - `patch-hermes-reload-mcp.py` (`gateway/run.py` + `hermes_cli/main.py`).
+  - `patch-hermes-slash-history.py` (`tui_gateway/slash_worker.py`, preload + refresh).
+  - `patch-hermes-stt-rpc.py` (`tui_gateway/server.py`).
+  - `patch-hermes-stt-warmup.py` (`tui_gateway/server.py`).
+  - `patch-hermes-stt-introspect.py` (`tools/stt_introspect_tool.py` + `toolsets.py`).
+  - `patch-hermes-tts-kokoro.py` (`tools/tts_tool.py`, three injections — cache, generate, dispatch).
+  - `patch-hermes-tts-warmup.py` (`tui_gateway/server.py`).
+  - All marked `PATCHED` in post-update `--check`.
+- **Custom skills redeployed:** `manage-mcp`.
+- **Restarted (in order):** `hermes-dashboard` → `hermes-gateway` → `hermes-cron`. The dashboard restart rotates `_SESSION_TOKEN`, gateway re-scrapes from `/index.html`. Skipping that order leaves chat hung with `upstream_ws_open_failed`.
+- **Verified:**
+  - `hermes --version` → `v0.13.0 (2026.5.7) — Up to date`.
+  - `curl /health` → 200, uptime ticks from 0.
+  - `curl /cron/outputs/by-job` → 401 (route registered, auth-gated).
+  - `doctor.sh` → PASS (services up, HTTP reachable, source patches present, MCP listing succeeds, dashboard token scrapeable).
+- **Notes:**
+  - Pre-update snapshot **failed to push** to `dk5761/hermes-snapshots` (GitHub 100MB file size limit; existing 334MB + 354MB tarballs rejected). Re-ran with `SKIP_SNAPSHOT=1`. Pre-existing concern — needs git-lfs or a separate object store. Local snapshot tarballs still exist in `/root/hermes-snapshots/` (the upload-to-GitHub leg is what's broken).
+- **Branch state on VPS after deploy:** `main` tracking `origin/main` at `d5fa256`. System hermes at upstream commit-hash equivalent of `498bfc7c`.
+
 ### 2026-05-09 — cron Jobs/Outputs split + outputs aggregator
 
 - **Source:** `c795625` (latest `main`).
