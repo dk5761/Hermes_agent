@@ -5,6 +5,7 @@ import type { Db } from "../db/client.js";
 import { cronPrefs } from "../db/schema.js";
 import type { HermesHttpClient } from "../hermes/http-client.js";
 import {
+  listAllJobsOutputSummary,
   listCronOutputs,
   readCronOutput,
   resolveHermesHome,
@@ -77,6 +78,16 @@ export async function registerCronRoutes(app: FastifyInstance, deps: CronRoutesD
     if (!parsed.success) return reply.code(400).send({ error: "invalid_query" });
     const outputs = await listCronOutputs(hermesHome, parsed.data.job_id);
     return reply.send({ outputs });
+  });
+
+  // Aggregated "one row per job" list for the mobile Outputs tab. Returns
+  // every job that has at least one output on disk, including outputs from
+  // jobs that have since been deleted (the directory survives). Frontend
+  // joins by jobId against /cron/jobs and surfaces an "archived" affordance
+  // for unmatched ids.
+  app.get("/cron/outputs/by-job", { preHandler: requireAuth }, async (_request, reply) => {
+    const items = await listAllJobsOutputSummary(hermesHome);
+    return reply.send({ items });
   });
 
   app.get("/cron/outputs/:output_id", { preHandler: requireAuth }, async (request, reply) => {
