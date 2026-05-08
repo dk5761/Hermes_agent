@@ -38,6 +38,12 @@ export const persister = createSQLitePersister({
  */
 export const dehydrateOptions = {
   shouldDehydrateQuery: (q: Query): boolean => {
+    // Pending queries serialize as a placeholder the persist plugin can't
+    // revive — on rehydrate it tries to call `.then` on the dropped promise
+    // and throws "promise.then is not a function". Skip them.
+    if (q.state.status === "pending") return false;
+    // Errored queries shouldn't poison the next launch either.
+    if (q.state.status === "error") return false;
     const k = q.queryKey;
     if (!Array.isArray(k) || k.length === 0) return false;
     const root = k[0];

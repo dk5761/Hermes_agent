@@ -16,4 +16,7 @@
 export const PERSIST_MAX_AGE = 1000 * 60 * 60 * 24 * 7;
 
 /** Cache version. Bump on shape-breaking API changes. */
-export const PERSIST_BUSTER = "1";
+// 2 — cron output rows now use ISO `createdAt` strings + a required `preview`;
+// also flushes any pending/errored queries persisted under the old code path
+// that triggered the "promise.then is not a function" hydration crash.
+export const PERSIST_BUSTER = "2";
