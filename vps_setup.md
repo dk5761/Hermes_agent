@@ -318,6 +318,29 @@ Run from `frontend/`:
 eas update --channel production --message "<short summary> (<commit>)"
 ```
 
+**Important:** `eas update` bundles env from the local `.env` at run time, **not** from the build profile's `env` block in `eas.json` (that's builds only). Production OTAs MUST either:
+
+1. Inline the env on the command (one-off):
+   ```bash
+   EXPO_PUBLIC_API_URL=https://hermes.drshnk.dev \
+   EXPO_PUBLIC_WS_URL=wss://hermes.drshnk.dev \
+   eas update --channel production --message "..."
+   ```
+2. Or use `--environment production` after setting the vars in the EAS dashboard
+   (https://expo.dev/accounts/nanatsuxiv/projects/hermes-app/environment-variables).
+
+Skipping this ships the developer's local LAN IP into production — see the
+2026-05-09 corrective entry below.
+
+### 2026-05-09 — fix: prod API URL revert (production)
+
+- **Source commit:** `dc7afe3` (no app code changes — env-only re-bundle).
+- **Update group:** `a6116c0f-147c-4bd7-b18e-e43744c45b06`.
+- **Channel:** `production`. Runtime: `0.1.0`. Native rebuild: none.
+- **What broke:** the prior OTA (`7d28dae0-…`) was bundled without the prod env explicit on the command, so metro picked up the developer's local `.env` and shipped `EXPO_PUBLIC_API_URL=http://192.168.1.11:8080` into production. App tried to talk to a LAN IP and failed for everyone outside that network.
+- **Fix:** re-shipped the same JS with `EXPO_PUBLIC_API_URL=https://hermes.drshnk.dev EXPO_PUBLIC_WS_URL=wss://hermes.drshnk.dev` inlined on the `eas update` command. Updated this doc above so future OTAs go out with the correct env.
+- **Dashboard:** https://expo.dev/accounts/nanatsuxiv/projects/hermes-app/updates/a6116c0f-147c-4bd7-b18e-e43744c45b06
+
 ### 2026-05-09 — cron Jobs/Outputs + persister fix + durable chat.abort (production)
 
 - **Source commit:** `f4dc783` — covers `c795625` (durable chat.abort), `e82a58e` (cron docs), `4f29c3a` (cron tabs UI), `cc4e7d2` (cron outputs aggregator backend, mobile types update), `977bfa0` (query persister hydration crash fix).
