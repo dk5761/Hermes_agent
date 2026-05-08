@@ -7,6 +7,7 @@ import type {
   CronNotifyPrefsResponse,
   CronOutputDetail,
   CronOutputsResponse,
+  JobOutputSummaryResponse,
 } from "./types";
 
 // Light type-guards at the network boundary. We don't use zod here to avoid
@@ -61,6 +62,22 @@ export async function getOutput(
   );
   if (!data || typeof data.id !== "string" || typeof data.content !== "string") {
     throw new Error("Invalid /cron/outputs/:id response shape");
+  }
+  return data;
+}
+
+/**
+ * Aggregated "one row per job that has outputs" view used by the Outputs
+ * tab on the cron screen. Includes outputs whose parent job has been
+ * deleted — the on-disk dir survives. Frontend joins by jobId against
+ * /cron/jobs and surfaces an "archived" affordance for unmatched ids.
+ */
+export async function listOutputsByJob(): Promise<JobOutputSummaryResponse> {
+  const data = await apiFetch<JobOutputSummaryResponse>(
+    `/cron/outputs/by-job`,
+  );
+  if (!data || !Array.isArray(data.items)) {
+    throw new Error("Invalid /cron/outputs/by-job response shape");
   }
   return data;
 }
@@ -165,6 +182,7 @@ export const cronKeys = {
   jobs: () => ["cron", "jobs"] as const,
   job: (jobId: string) => ["cron", "job", jobId] as const,
   outputs: (jobId: string) => ["cron", "outputs", jobId] as const,
+  outputsByJob: () => ["cron", "outputs", "by-job"] as const,
   output: (jobId: string, outputId: string) =>
     ["cron", "output", jobId, outputId] as const,
   prefs: () => ["cron", "prefs"] as const,

@@ -124,6 +124,10 @@ export function setupNotificationListeners(
     // the new entry without a manual pull-to-refresh.
     void queryClient.invalidateQueries({ queryKey: cronKeys.outputs(data.jobId) });
     void queryClient.invalidateQueries({ queryKey: cronKeys.job(data.jobId) });
+    // Also bump the cross-job aggregator that powers the Cron > Outputs
+    // tab — without this the new run wouldn't surface there until the
+    // user navigates away and back.
+    void queryClient.invalidateQueries({ queryKey: cronKeys.outputsByJob() });
   });
 
   const responseSub = Notifications.addNotificationResponseReceivedListener((evt) => {

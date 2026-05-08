@@ -191,8 +191,10 @@ export interface CronJobResponse extends CronJob {}
 export interface CronOutputSummary {
   id: string;
   jobId: string;
-  createdAt: number;
-  preview?: string | null;
+  /** ISO timestamp string from the backend (file mtime). */
+  createdAt: string;
+  sizeBytes: number;
+  preview: string;
 }
 
 export interface CronOutputsResponse {
@@ -202,8 +204,29 @@ export interface CronOutputsResponse {
 export interface CronOutputDetail {
   id: string;
   jobId: string;
-  createdAt: number;
+  createdAt: string;
+  sizeBytes: number;
+  preview: string;
   content: string;
+}
+
+/**
+ * One row per job that has at least one output on disk. Returned by
+ * GET /cron/outputs/by-job and powers the Outputs tab on the cron screen.
+ * Sorted newest-first by `latest.createdAt`.
+ */
+export interface JobOutputSummary {
+  jobId: string;
+  count: number;
+  latest: {
+    id: string;
+    createdAt: string;
+    preview: string;
+  };
+}
+
+export interface JobOutputSummaryResponse {
+  items: JobOutputSummary[];
 }
 
 export interface CronNotifyPref {

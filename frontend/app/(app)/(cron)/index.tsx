@@ -1,12 +1,10 @@
 /**
- * Cron list — Stage 7 redesign.
+ * Cron list — Jobs / Outputs split.
  *
- * Visual target: design/screens-2.jsx::CronList (lines 20-75). All existing
- * cron API wiring (Phase 6) survives unchanged — this is the presentation
- * rebuild only.
- *
- * Filter chips (Notify on / Sort: name) are intentional placeholders per the
- * stage spec; their state is local but no-op until backend support exists.
+ * Visual target: design/screens-2.jsx + cron-implementation.md §4.1.
+ * Top-level SegControl picks between two bodies:
+ *   - Jobs   → list of all cron jobs (existing behavior).
+ *   - Outputs → "one row per job that has outputs", newest first.
  */
 import { useCallback, useMemo, useRef, useState } from "react";
 import {
@@ -21,6 +19,7 @@ import * as Haptics from "expo-haptics";
 
 import {
   ActionSheet,
+  Button,
   Chip,
   EmptyState,
   Icon,
@@ -28,89 +27,86 @@ import {
   NavIcon,
   PhoneSafeArea,
   Row,
+  SegControl,
   SkeletonGroup,
   Stack,
-  StatusPill,
   Text,
-  Button,
   useThemeTokens,
   type ActionSheetHandle,
 } from "@/components/ui";
 import {
   cronKeys,
   listJobs,
+  listOutputsByJob,
   pauseJob,
   resumeJob,
   triggerJob,
 } from "@/api/cron";
-import type { CronJob } from "@/api/types";
-import { formatRelative, toDate } from "@/util/time";
+import type { CronJob, JobOutputSummary } from "@/api/types";
 import { OfflineBanner } from "@/components/OfflineBanner";
 import { useNetworkStatus } from "@/state/network-status";
 import { showToast } from "@/components/ui";
+import { JobRow, isJobPaused, isJobRunning } from "@/components/cron/JobRow";
 
 type FilterKey = "all" | "enabled" | "paused" | "notify";
+type Tab = "jobs" | "outputs";
 
 // Floating tab bar height + safe slack so the last row clears the pill.
 const TAB_BOTTOM_PAD = 140;
-
-function isRunning(job: CronJob): boolean {
-  return job.state === "running";
-}
-
-function isPaused(job: CronJob): boolean {
-  return job.state === "paused" || !job.enabled;
-}
 
 export default function CronListScreen() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const tokens = useThemeTokens();
+  const [tab, setTab] = useState<Tab>("jobs");
   const [filter, setFilter] = useState<FilterKey>("all");
-  // RefreshControl spinner is bound to user pulls only (see comment in
-  // (chats)/index.tsx) — binding to `isFetching` causes a stuck spinner on
-  // focus-driven invalidation.
+  // RefreshControl spinner is bound to user pulls only — binding to
+  // `isFetching` causes a stuck spinner on focus-driven invalidation.
   const [pullRefreshing, setPullRefreshing] = useState(false);
 
   const jobsQuery = useQuery({
     queryKey: cronKeys.jobs(),
     queryFn: listJobs,
-    // Refetch on every mount (back-pop or first open) and when the data goes
-    // stale on focus (see useFocusEffect below). When a job is currently
-    // running, poll every 5s so its state pill updates without manual refresh.
     refetchOnMount: "always",
     refetchInterval: (query) => {
       const data = query.state.data as { jobs: CronJob[] } | undefined;
-      const running = data?.jobs?.some((j) => isRunning(j)) ?? false;
+      const running = data?.jobs?.some((j) => isJobRunning(j)) ?? false;
       return running ? 5_000 : false;
     },
   });
 
-  const invalidateJobs = useCallback(() => {
+  // The Outputs aggregator is FS-backed and cheap; refetch on focus + when
+  // a run completes (Phase 5 wires the WS invalidation).
+  const outputsByJobQuery = useQuery({
+    queryKey: cronKeys.outputsByJob(),
+    queryFn: listOutputsByJob,
+    refetchOnMount: "always",
+    enabled: tab === "outputs",
+    staleTime: 30_000,
+  });
+
+  const invalidateAll = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: cronKeys.jobs() });
+    void queryClient.invalidateQueries({ queryKey: cronKeys.outputsByJob() });
   }, [queryClient]);
 
-  useFocusEffect(useCallback(() => invalidateJobs(), [invalidateJobs]));
+  useFocusEffect(useCallback(() => invalidateAll(), [invalidateAll]));
 
-  // Long-press actions are wired here so the row can stay a pure presentation
-  // component. Each mutation is fire-and-forget — the global toast handler
-  // surfaces failures, and onSuccess invalidates the jobs list.
   const pauseMut = useMutation({
     mutationFn: (id: string) => pauseJob(id),
-    onSuccess: invalidateJobs,
+    onSuccess: invalidateAll,
   });
   const resumeMut = useMutation({
     mutationFn: (id: string) => resumeJob(id),
-    onSuccess: invalidateJobs,
+    onSuccess: invalidateAll,
   });
   const triggerMut = useMutation({
     mutationFn: (id: string) => triggerJob(id),
-    onSuccess: () => {
-      invalidateJobs();
-    },
+    onSuccess: invalidateAll,
   });
 
   const jobs = jobsQuery.data?.jobs ?? [];
+  const outputItems = outputsByJobQuery.data?.items ?? [];
 
   const counts = useMemo(() => {
     let enabled = 0;
@@ -118,28 +114,52 @@ export default function CronListScreen() {
     let running = 0;
     let notify = 0;
     for (const j of jobs) {
-      if (isPaused(j)) paused += 1;
+      if (isJobPaused(j)) paused += 1;
       else enabled += 1;
-      if (isRunning(j)) running += 1;
+      if (isJobRunning(j)) running += 1;
       if (j.notifyOnComplete) notify += 1;
     }
     return { enabled, paused, running, notify, total: jobs.length };
   }, [jobs]);
 
+  const totalRecentRuns = useMemo(
+    () => outputItems.reduce((sum, it) => sum + it.count, 0),
+    [outputItems],
+  );
+
+  // Build a {jobId → CronJob} index so the Outputs tab can look up name +
+  // schedule_display in O(1) per row. Jobs with no match (deleted) render
+  // with an "archived" badge.
+  const jobsById = useMemo(() => {
+    const map = new Map<string, CronJob>();
+    for (const j of jobs) map.set(j.id, j);
+    return map;
+  }, [jobs]);
+
   const filtered = useMemo(() => {
     return jobs.filter((j) => {
-      if (filter === "enabled") return !isPaused(j);
-      if (filter === "paused") return isPaused(j);
+      if (filter === "enabled") return !isJobPaused(j);
+      if (filter === "paused") return isJobPaused(j);
       if (filter === "notify") return j.notifyOnComplete;
       return true;
     });
   }, [jobs, filter]);
 
-  const onOpen = useCallback(
+  const onOpenJob = useCallback(
     (job: CronJob) => {
       router.push({
         pathname: "/(cron)/[jobId]",
         params: { jobId: job.id },
+      });
+    },
+    [router],
+  );
+
+  const onOpenJobOutputs = useCallback(
+    (jobId: string) => {
+      router.push({
+        pathname: "/(cron)/[jobId]/outputs",
+        params: { jobId },
       });
     },
     [router],
@@ -157,12 +177,10 @@ export default function CronListScreen() {
 
   const onLongPress = useCallback(
     (job: CronJob) => {
-      // Haptic feedback signals "menu opened". `.catch` swallows the rare
-      // case where Haptics is unavailable (e.g. simulator or web).
       void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(
         () => undefined,
       );
-      const paused = isPaused(job);
+      const paused = isJobPaused(job);
       const pauseLabel = paused ? "Resume" : "Pause";
       actionSheetRef.current?.present({
         title: job.name,
@@ -190,9 +208,26 @@ export default function CronListScreen() {
   const actionSheetRef = useRef<ActionSheetHandle>(null);
 
   const subtitle = useMemo(() => {
+    if (tab === "outputs") {
+      if (counts.total === 0) return "No jobs yet";
+      return `${totalRecentRuns} recent run${totalRecentRuns === 1 ? "" : "s"} · ${counts.total} job${counts.total === 1 ? "" : "s"}`;
+    }
     if (counts.total === 0) return "No jobs yet";
     return `${counts.total} job${counts.total === 1 ? "" : "s"} · ${counts.running} running`;
-  }, [counts.total, counts.running]);
+  }, [tab, counts.total, counts.running, totalRecentRuns]);
+
+  const onPullRefresh = useCallback(async () => {
+    setPullRefreshing(true);
+    try {
+      if (tab === "outputs") {
+        await Promise.all([jobsQuery.refetch(), outputsByJobQuery.refetch()]);
+      } else {
+        await jobsQuery.refetch();
+      }
+    } finally {
+      setPullRefreshing(false);
+    }
+  }, [tab, jobsQuery, outputsByJobQuery]);
 
   return (
     <PhoneSafeArea>
@@ -204,10 +239,82 @@ export default function CronListScreen() {
       />
       <OfflineBanner />
 
-      {/* Filter chip row. Horizontal scroll for narrow widths.
-          Wrapped in a fixed-height View — a bare horizontal ScrollView in a
-          flex-column parent claims extra vertical space (RN quirk), which
-          pushed the list ~200px down. Constraining height = 48 fixes it. */}
+      <View style={{ paddingHorizontal: 16, paddingTop: 4, paddingBottom: 8 }}>
+        <SegControl
+          options={[
+            { value: "jobs", label: "Jobs" },
+            { value: "outputs", label: "Outputs" },
+          ]}
+          value={tab}
+          onChange={(next) => setTab(next as Tab)}
+        />
+      </View>
+
+      {tab === "jobs" ? (
+        <JobsBody
+          jobsQuery={jobsQuery}
+          filter={filter}
+          setFilter={setFilter}
+          counts={counts}
+          filtered={filtered}
+          onOpen={onOpenJob}
+          onLongPress={onLongPress}
+          onNew={onNew}
+          pullRefreshing={pullRefreshing}
+          onPullRefresh={onPullRefresh}
+          accent={tokens.accent}
+        />
+      ) : (
+        <OutputsBody
+          isLoading={outputsByJobQuery.isLoading}
+          items={outputItems}
+          jobsById={jobsById}
+          onOpenJobOutputs={onOpenJobOutputs}
+          pullRefreshing={pullRefreshing}
+          onPullRefresh={onPullRefresh}
+          accent={tokens.accent}
+        />
+      )}
+
+      <ActionSheet ref={actionSheetRef} />
+    </PhoneSafeArea>
+  );
+}
+
+// ─── Jobs body ──────────────────────────────────────────────────────────
+
+interface JobsBodyProps {
+  jobsQuery: ReturnType<typeof useQuery<{ jobs: CronJob[] }>>;
+  filter: FilterKey;
+  setFilter: (f: FilterKey) => void;
+  counts: { enabled: number; paused: number; running: number; notify: number; total: number };
+  filtered: CronJob[];
+  onOpen: (j: CronJob) => void;
+  onLongPress: (j: CronJob) => void;
+  onNew: () => void;
+  pullRefreshing: boolean;
+  onPullRefresh: () => Promise<void>;
+  accent: string;
+}
+
+function JobsBody({
+  jobsQuery,
+  filter,
+  setFilter,
+  counts,
+  filtered,
+  onOpen,
+  onLongPress,
+  onNew,
+  pullRefreshing,
+  onPullRefresh,
+  accent,
+}: JobsBodyProps) {
+  return (
+    <>
+      {/* Filter chip row. Wrapped in a fixed-height View — a bare horizontal
+          ScrollView in a flex-column parent claims extra vertical space (RN
+          quirk), pushing the list ~200px down. height=48 fixes it. */}
       <View style={{ height: 48 }}>
         <ScrollView
           horizontal
@@ -220,22 +327,18 @@ export default function CronListScreen() {
             alignItems: "center",
           }}
         >
-          <Chip
-            active={filter === "all"}
-            onPress={() => setFilter("all")}
-          >{`All`}</Chip>
-          <Chip
-            active={filter === "enabled"}
-            onPress={() => setFilter("enabled")}
-          >{`Enabled · ${counts.enabled}`}</Chip>
-          <Chip
-            active={filter === "paused"}
-            onPress={() => setFilter("paused")}
-          >{`Paused · ${counts.paused}`}</Chip>
-          <Chip
-            active={filter === "notify"}
-            onPress={() => setFilter("notify")}
-          >{`Notify on`}</Chip>
+          <Chip active={filter === "all"} onPress={() => setFilter("all")}>
+            {`All`}
+          </Chip>
+          <Chip active={filter === "enabled"} onPress={() => setFilter("enabled")}>
+            {`Enabled · ${counts.enabled}`}
+          </Chip>
+          <Chip active={filter === "paused"} onPress={() => setFilter("paused")}>
+            {`Paused · ${counts.paused}`}
+          </Chip>
+          <Chip active={filter === "notify"} onPress={() => setFilter("notify")}>
+            {`Notify on`}
+          </Chip>
           {/* Sort placeholder per spec — visible but inert. */}
           <Chip>Sort: name</Chip>
         </ScrollView>
@@ -246,9 +349,6 @@ export default function CronListScreen() {
           <SkeletonGroup count={5} />
         </View>
       ) : filtered.length === 0 ? (
-        // Centered empty state — rendering this outside FlashList avoids the
-        // v2 quirk where ListEmptyComponent gets pushed to the bottom of the
-        // available list space.
         <View
           style={{
             flex: 1,
@@ -269,10 +369,6 @@ export default function CronListScreen() {
           />
         </View>
       ) : (
-        // Cron lists are tiny (typically < 20 entries). FlashList v2
-        // vertically-centered a lone row here — likely a `centerContent`
-        // default we couldn't override. Plain ScrollView is fine for this
-        // size and lays out items strictly top-down.
         <ScrollView
           style={{ flex: 1 }}
           contentContainerStyle={{
@@ -282,21 +378,14 @@ export default function CronListScreen() {
           refreshControl={
             <RefreshControl
               refreshing={pullRefreshing}
-              onRefresh={async () => {
-                setPullRefreshing(true);
-                try {
-                  await jobsQuery.refetch();
-                } finally {
-                  setPullRefreshing(false);
-                }
-              }}
-              tintColor={tokens.accent}
-              colors={[tokens.accent]}
+              onRefresh={onPullRefresh}
+              tintColor={accent}
+              colors={[accent]}
             />
           }
         >
           {filtered.map((item, index) => (
-            <CronRow
+            <JobRow
               key={item.id}
               job={item}
               isLast={index === filtered.length - 1}
@@ -306,49 +395,107 @@ export default function CronListScreen() {
           ))}
         </ScrollView>
       )}
-      <ActionSheet ref={actionSheetRef} />
-    </PhoneSafeArea>
+    </>
   );
 }
 
-// ─── row component ──────────────────────────────────────────────────────────
+// ─── Outputs body ───────────────────────────────────────────────────────
 
-interface CronRowProps {
-  job: CronJob;
-  isLast: boolean;
-  onPress: () => void;
-  onLongPress: () => void;
+interface OutputsBodyProps {
+  isLoading: boolean;
+  items: JobOutputSummary[];
+  jobsById: Map<string, CronJob>;
+  onOpenJobOutputs: (jobId: string) => void;
+  pullRefreshing: boolean;
+  onPullRefresh: () => Promise<void>;
+  accent: string;
 }
 
-function CronRow({ job, isLast, onPress, onLongPress }: CronRowProps) {
+function OutputsBody({
+  isLoading,
+  items,
+  jobsById,
+  onOpenJobOutputs,
+  pullRefreshing,
+  onPullRefresh,
+  accent,
+}: OutputsBodyProps) {
   const tokens = useThemeTokens();
-  const running = isRunning(job);
-  const paused = isPaused(job);
-  // Hermes' jobs.json shape is `schedule: { kind, expr, display }`. We narrow
-  // to `expr` here; older snapshots may use `expression` so we tolerate both.
-  const sched = job.schedule as Record<string, unknown> | undefined;
-  const cronExpr =
-    typeof sched?.expr === "string"
-      ? (sched.expr as string)
-      : typeof sched?.expression === "string"
-        ? (sched.expression as string)
-        : "";
-  const lastRel = formatRelative(job.last_run_at);
-  const nextDate = toDate(job.next_run_at);
-  const nextRel = nextDate ? formatRelative(nextDate.toISOString()) : "soon";
-  // formatRelative renders future dates as past ("Xm ago" with negative diff
-  // becomes "just now"); fall back to a forward-looking phrasing.
-  const nextLabel = nextDate
-    ? nextDate.getTime() > Date.now()
-      ? formatForward(nextDate)
-      : "soon"
-    : "soon";
+
+  if (isLoading) {
+    return (
+      <View style={{ paddingHorizontal: 16, paddingTop: 8 }}>
+        <SkeletonGroup count={5} />
+      </View>
+    );
+  }
+  if (items.length === 0) {
+    return (
+      <View
+        style={{
+          flex: 1,
+          justifyContent: "center",
+          alignItems: "center",
+          paddingBottom: TAB_BOTTOM_PAD,
+        }}
+      >
+        <EmptyState
+          icon="terminal"
+          title="No runs yet"
+          body="Your jobs will appear here once they execute."
+        />
+      </View>
+    );
+  }
+  return (
+    <ScrollView
+      style={{ flex: 1 }}
+      contentContainerStyle={{
+        paddingTop: 4,
+        paddingBottom: TAB_BOTTOM_PAD,
+      }}
+      refreshControl={
+        <RefreshControl
+          refreshing={pullRefreshing}
+          onRefresh={onPullRefresh}
+          tintColor={accent}
+          colors={[accent]}
+        />
+      }
+    >
+      {items.map((item, index) => (
+        <OutputsByJobRow
+          key={item.jobId}
+          item={item}
+          job={jobsById.get(item.jobId)}
+          isLast={index === items.length - 1}
+          onPress={() => onOpenJobOutputs(item.jobId)}
+          tokens={tokens}
+        />
+      ))}
+    </ScrollView>
+  );
+}
+
+// ─── Outputs row ────────────────────────────────────────────────────────
+
+interface OutputsByJobRowProps {
+  item: JobOutputSummary;
+  job: CronJob | undefined;
+  isLast: boolean;
+  onPress: () => void;
+  tokens: ReturnType<typeof useThemeTokens>;
+}
+
+function OutputsByJobRow({ item, job, isLast, onPress, tokens }: OutputsByJobRowProps) {
+  const archived = !job;
+  const name = job?.name ?? `(deleted job)`;
+  const scheduleDisplay = job?.schedule_display ?? "—";
+  const dayLabel = formatDayFragment(item.latest.createdAt);
 
   return (
     <Pressable
       onPress={onPress}
-      onLongPress={onLongPress}
-      delayLongPress={300}
       style={({ pressed }) => ({
         opacity: pressed ? 0.7 : 1,
         paddingVertical: 14,
@@ -368,77 +515,72 @@ function CronRow({ job, isLast, onPress, onLongPress }: CronRowProps) {
           flexShrink: 0,
           alignItems: "center",
           justifyContent: "center",
-          backgroundColor: running ? tokens.accentBg : tokens.chip,
-          borderWidth: running ? 1 : 0,
-          borderColor: running ? `${tokens.accent}88` : "transparent",
+          backgroundColor: tokens.chip,
         }}
       >
-        <Icon name="clock" size={16} color={running ? tokens.accent : tokens.ink2} />
+        <Icon name="terminal" size={16} color={tokens.ink2} />
       </View>
       <Stack gap={3} style={{ flex: 1, minWidth: 0 }}>
         <Row gap={8} align="center" justify="space-between">
-          <Text
-            kind="body-lg"
-            numberOfLines={1}
-            style={{ fontWeight: "500", flex: 1, minWidth: 0 }}
-          >
-            {job.name}
-          </Text>
-          <Row gap={6} align="center" style={{ flexShrink: 0 }}>
-            {job.notifyOnComplete ? (
-              <Icon name="bell" size={11} color={tokens.ink3} />
+          <Row gap={6} align="center" style={{ flex: 1, minWidth: 0 }}>
+            <Text
+              kind="body-lg"
+              numberOfLines={1}
+              style={{ fontWeight: "500", flexShrink: 1 }}
+            >
+              {name}
+            </Text>
+            {archived ? (
+              <View
+                style={{
+                  paddingHorizontal: 6,
+                  paddingVertical: 2,
+                  borderRadius: 4,
+                  backgroundColor: tokens.chip,
+                }}
+              >
+                <Text kind="micro" color={tokens.ink3}>
+                  archived
+                </Text>
+              </View>
             ) : null}
-            <Text kind="caption" mono color={tokens.ink3}>
-              {lastRel || "never"}
-            </Text>
           </Row>
-        </Row>
-        <Row gap={6} align="center">
-          {cronExpr ? (
-            <Text kind="caption" mono color={tokens.ink3}>
-              {cronExpr}
-            </Text>
-          ) : null}
-          {cronExpr && job.schedule_display ? (
-            <Text kind="caption" color={tokens.ink3}>
-              ·
-            </Text>
-          ) : null}
-          <Text
-            kind="caption"
-            color={tokens.ink3}
-            numberOfLines={1}
-            style={{ flexShrink: 1 }}
-          >
-            {job.schedule_display}
+          <Text kind="caption" mono color={tokens.ink3} style={{ flexShrink: 0 }}>
+            {dayLabel}
           </Text>
         </Row>
-        <Row gap={6} style={{ marginTop: 4 }}>
-          {running ? (
-            <StatusPill kind="connecting" label="running" />
-          ) : paused ? (
-            <StatusPill kind="paused" label="paused" />
-          ) : (
-            <StatusPill kind="online" label={`next ${nextLabel}`} />
-          )}
+        <Text
+          kind="body"
+          color={tokens.ink2}
+          numberOfLines={2}
+          style={{ marginTop: 2 }}
+        >
+          {item.latest.preview || "—"}
+        </Text>
+        <Row gap={6} align="center" justify="space-between" style={{ marginTop: 4 }}>
+          <Text kind="caption" color={tokens.ink3} numberOfLines={1} style={{ flexShrink: 1 }}>
+            {`${item.count} run${item.count === 1 ? "" : "s"} · ${scheduleDisplay}`}
+          </Text>
+          <Icon name="chevR" size={14} color={tokens.ink3} />
         </Row>
       </Stack>
     </Pressable>
   );
 }
 
-/**
- * Forward-looking variant of `formatRelative`. The shared util is past-only
- * ("4m ago"); for the "next" pill we want "in 4m" / "in 2h" phrasing.
- */
-function formatForward(d: Date): string {
-  const sec = Math.floor((d.getTime() - Date.now()) / 1000);
-  if (sec < 60) return "in <1m";
-  const min = Math.floor(sec / 60);
-  if (min < 60) return `in ${min}m`;
-  const hr = Math.floor(min / 60);
-  if (hr < 24) return `in ${hr}h`;
-  const day = Math.floor(hr / 24);
-  if (day < 7) return `in ${day}d`;
-  return d.toLocaleDateString();
+// "Today" / "Yesterday" / "Mon" / "Apr 24" — the day fragment for the
+// right-aligned timestamp on Outputs rows.
+function formatDayFragment(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const now = new Date();
+  const startOf = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const dayMs = 86_400_000;
+  const diffDays = Math.round((startOf(now) - startOf(d)) / dayMs);
+  if (diffDays === 0) return "Today";
+  if (diffDays === 1) return "Yesterday";
+  if (diffDays > 1 && diffDays < 7) {
+    return d.toLocaleDateString(undefined, { weekday: "short" });
+  }
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }

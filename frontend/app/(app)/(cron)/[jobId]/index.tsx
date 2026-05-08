@@ -17,7 +17,7 @@
  * new state when the user navigates back.
  */
 import { useCallback, useMemo, useState } from "react";
-import { Alert, RefreshControl, ScrollView, View } from "react-native";
+import { Alert, Pressable, RefreshControl, ScrollView, View } from "react-native";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
@@ -205,11 +205,18 @@ export default function CronJobDetailScreen() {
     [jobId, router],
   );
 
-  // Sort outputs newest-first, cap at 10 per spec.
+  // Sort outputs newest-first. cron-implementation.md §4.2 caps the
+  // CronDetail "Recent runs" section at 4 and surfaces a "See all" link to
+  // the dedicated CronJobOutputs screen for the rest. createdAt is an ISO
+  // string, which sorts correctly with localeCompare.
   const outputs = useMemo(() => {
     const list = outputsQuery.data?.outputs ?? [];
-    return [...list].sort((a, b) => b.createdAt - a.createdAt).slice(0, 10);
+    return [...list]
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      .slice(0, 4);
   }, [outputsQuery.data?.outputs]);
+
+  const totalOutputs = outputsQuery.data?.outputs?.length ?? 0;
 
   if (!job) {
     return (
@@ -371,8 +378,27 @@ export default function CronJobDetailScreen() {
             </Section>
           ) : null}
 
-          {/* Recent runs */}
-          <Section title={`Last ${Math.min(outputs.length || 10, 10)} runs`}>
+          {/* Recent runs (top 4) — full history lives in CronJobOutputs. */}
+          <Section
+            title="Recent runs"
+            action={
+              totalOutputs > outputs.length ? (
+                <Pressable
+                  onPress={() =>
+                    router.push({
+                      pathname: "/(cron)/[jobId]/outputs",
+                      params: { jobId: job.id },
+                    })
+                  }
+                  hitSlop={8}
+                >
+                  <Text kind="caption" color={tokens.accent} style={{ fontWeight: "600" }}>
+                    See all
+                  </Text>
+                </Pressable>
+              ) : undefined
+            }
+          >
             {outputsQuery.isLoading && outputs.length === 0 ? (
               // Skeleton placeholder so the user gets immediate visual feedback
               // instead of "Loading runs…" text on a fresh detail open.
