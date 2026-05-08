@@ -424,6 +424,16 @@ function AssistantRow({
   const tokens = useThemeTokens();
   const hasText = message.text.length > 0;
   const hasReasoning = !!message.reasoning && message.reasoning.length > 0;
+  // TEMP DEBUG — confirm what AssistantRow actually receives at render time.
+  // Together with [tts-debug] msg pushed in the store, this pinpoints whether
+  // audio fields survive through state → memo → render.
+  // eslint-disable-next-line no-console
+  console.log("[tts-debug] AssistantRow render", {
+    id: message.id,
+    audioBlobUrl: message.audioBlobUrl,
+    streaming,
+    hasText,
+  });
   // Hide the action row while a turn is streaming — it's pointless to copy
   // a half-written response, and regenerate would just kill the in-flight
   // turn we're watching.

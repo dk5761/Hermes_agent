@@ -490,6 +490,18 @@ function reduce(state: ChatSessionState, env: GatewayEventEnvelope): ChatSession
         ...(audioDurationMs !== undefined ? { audioDurationMs } : {}),
         ...(audioPeaks ? { audioPeaks } : {}),
       };
+      // TEMP DEBUG — confirm the AssistantMessage we push carries the audio
+      // fields. If this prints undefined while [tts-debug] message.complete
+      // shows audio_blob_url present in the payload, something between
+      // payload-read and msg-construction is dropping it.
+      // eslint-disable-next-line no-console
+      console.log("[tts-debug] msg pushed", {
+        id: msg.id,
+        textLen: msg.text.length,
+        audioBlobUrl: msg.audioBlobUrl,
+        audioDurationMs: msg.audioDurationMs,
+        peaksLen: msg.audioPeaks?.length,
+      });
       next.messages = [...next.messages, msg];
       next.streaming = null;
       next.isStreaming = false;
