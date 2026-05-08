@@ -25,7 +25,17 @@ export interface ControlFrame {
 // Outbound frames the gateway accepts (see clientFrameSchema in gateway-ws.ts).
 export type ClientFrame =
   | { type: "resume"; lastEventId: number }
-  | { type: "chat.send"; text: string; attachmentIds?: string[]; regenerate?: boolean }
+  | {
+      type: "chat.send";
+      text: string;
+      attachmentIds?: string[];
+      regenerate?: boolean;
+      // Idempotency key — the pending-sends row id. Allows the gateway to
+      // dedup a frame that survives a kill+reopen race (the SQLite DELETE
+      // may not flush before the OS evicts the app, so the drainer would
+      // otherwise re-send a frame the server already processed).
+      clientId?: string;
+    }
   | { type: "chat.abort" }
   | { type: "approval.respond"; requestId: string; choice: string; all?: boolean }
   | { type: "clarify.respond"; requestId: string; text: string }

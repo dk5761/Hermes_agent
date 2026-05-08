@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, isNotNull } from "drizzle-orm";
+import { and, desc, eq, gte, isNotNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { WebSocket } from "ws";
@@ -161,6 +161,13 @@ const clientFrameSchema = z.discriminatedUnion("type", [
     text: z.string().min(1),
     attachmentIds: z.array(z.string().min(1)).max(20).optional(),
     regenerate: z.boolean().optional(),
+    // Idempotency key. The frontend mints this once per send + persists it
+    // to the pending-sends row. If the same frame replays after an app
+    // kill+reopen race (SQLite delete didn't flush before the OS evicted
+    // the process), the gateway recognises the duplicate by clientId and
+    // skips processing. Optional — older clients omit it and pay the cost
+    // of double-processing on a dirty restart.
+    clientId: z.string().min(1).max(128).optional(),
   }),
   z.object({ type: z.literal("chat.abort") }),
   z.object({
@@ -363,6 +370,7 @@ class GatewayClientHandler {
           frame.text,
           frame.attachmentIds ?? [],
           !!frame.regenerate,
+          frame.clientId,
         );
         return;
       case "chat.abort":
@@ -403,10 +411,36 @@ class GatewayClientHandler {
     text: string,
     attachmentIds: readonly string[],
     regenerate: boolean,
+    clientId: string | undefined,
   ): Promise<void> {
     const sid = this.appSessionId;
     const userId = this.userId;
     if (!sid || !userId) return;
+
+    // Idempotency: if a chat_history user.message already exists in this
+    // session with the same clientId, the frame is a replay (kill+reopen
+    // race; pending-sends row survived the SQLite DELETE that should have
+    // dropped it). Skip everything — agent already ran for this turn.
+    if (clientId) {
+      const existing = await this.deps.db
+        .select({ id: chatHistory.id })
+        .from(chatHistory)
+        .where(
+          and(
+            eq(chatHistory.appSessionId, sid),
+            eq(chatHistory.kind, "user.message"),
+            sql`json_extract(${chatHistory.payloadJson}, '$.clientId') = ${clientId}`,
+          ),
+        )
+        .limit(1);
+      if (existing.length > 0) {
+        this.log.info(
+          { sid, clientId, rowId: existing[0]?.id },
+          "chat.send: duplicate clientId, skipping (replay after kill+reopen)",
+        );
+        return;
+      }
+    }
 
     if (regenerate) {
       // Drop the last turn so the new submission replaces it. Order matters:
@@ -495,6 +529,8 @@ class GatewayClientHandler {
         text,
         finalText,
         attachmentIds: attachmentIds.length > 0 ? [...attachmentIds] : undefined,
+        // Stored so the dedup query above can find this turn on replay.
+        clientId,
       };
       const env = await appendEvent(this.deps.db, {
         appSessionId: sid,

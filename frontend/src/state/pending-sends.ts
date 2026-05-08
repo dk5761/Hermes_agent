@@ -55,6 +55,13 @@ export interface PendingSendsState {
   hydrated: boolean;
   hydrate: () => Promise<void>;
   enqueue: (sessionId: string, frame: ClientFrame) => string;
+  /**
+   * Enqueue a frame with a caller-provided id. Use when the same id must
+   * also travel inside the frame (e.g. chat.send.clientId for gateway-side
+   * dedup) — keeping the row id and the dedup id identical guarantees the
+   * drainer's replay carries the same key the original send used.
+   */
+  enqueueWithId: (sessionId: string, frame: ClientFrame, id: string) => string;
   markSending: (id: string) => void;
   markSent: (id: string) => void;
   markFailed: (id: string, error: string) => void;
@@ -177,7 +184,10 @@ export const usePendingSends = create<PendingSendsState>((set, get) => ({
   },
 
   enqueue(sessionId, frame) {
-    const id = uuid();
+    return get().enqueueWithId(sessionId, frame, uuid());
+  },
+
+  enqueueWithId(sessionId, frame, id) {
     set((s) => {
       const entry: PendingFrame = {
         id,

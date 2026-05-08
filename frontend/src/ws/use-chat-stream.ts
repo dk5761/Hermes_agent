@@ -3,6 +3,13 @@ import { useQueryClient } from "@tanstack/react-query";
 import { WS_URL } from "../config";
 import { getAuthSnapshot } from "../auth/store";
 import { attemptRefresh } from "../api/client";
+
+// Stable per-frame id used both for the pending-sends row and as the
+// gateway-side dedup key (chat.send.clientId). Math.random is fine — these
+// are user-scoped and per-frame; uniqueness is plenty.
+function mintClientId(): string {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 11)}-${Math.random().toString(36).slice(2, 11)}`;
+}
 import { useChatStore } from "../state/chat-store";
 import { GatewayWsClient, type ConnectionStatus } from "./client";
 import { attachQueueDrainer } from "./queue-drainer";
@@ -171,16 +178,20 @@ export function useChatStream(appSessionId: string | null): ChatStreamApi {
       // attachment-only sends as an implicit "describe these" prompt.
       if (!trimmed && !hasAttachments) return;
       const attachmentIds = attachments?.map((a) => a.id);
+      // Mint the dedup id up front so it both keys the pending-sends row AND
+      // travels in the frame to the gateway. Without a stable clientId, a
+      // kill+reopen race can replay this frame and the server processes it
+      // as a brand-new turn (no user bubble locally because the drainer
+      // doesn't push the in-memory bubble). With clientId, the gateway
+      // recognises the duplicate and skips processing.
+      const clientId = mintClientId();
       const frame: ClientFrame =
         hasAttachments && attachmentIds && attachmentIds.length > 0
-          ? { type: "chat.send", text: trimmed, attachmentIds }
-          : { type: "chat.send", text: trimmed };
-      // Always enqueue first — this is the durable record that survives an
-      // app kill or a flaky network. The bubble carries the same id so the
-      // renderer can paint queued/sending/failed dots.
+          ? { type: "chat.send", text: trimmed, attachmentIds, clientId }
+          : { type: "chat.send", text: trimmed, clientId };
       const pendingId = usePendingSends
         .getState()
-        .enqueue(appSessionId, frame);
+        .enqueueWithId(appSessionId, frame, clientId);
       pushUserMessage(appSessionId, trimmed, attachments, pendingId);
       // Fast path: if WS is already open, send immediately and dequeue
       // synchronously so the dot doesn't flash on a healthy connection.
@@ -207,21 +218,16 @@ export function useChatStream(appSessionId: string | null): ChatStreamApi {
       const trimmed = text.trim();
       const hasAttachments = (attachments?.length ?? 0) > 0;
       if (!trimmed && !hasAttachments) return;
-      // Locally drop the prior turn first so the user sees the old answer
-      // disappear immediately; the new one will stream into its place once
-      // the backend acks the re-submission. Note: any prior queued frame
-      // for this session is INTENTIONALLY left alone — the user explicitly
-      // enqueued that text and regenerate replaces only the last turn UI,
-      // not the offline queue history.
       truncateLastTurn(appSessionId);
       const attachmentIds = attachments?.map((a) => a.id);
+      const clientId = mintClientId();
       const frame: ClientFrame =
         hasAttachments && attachmentIds && attachmentIds.length > 0
-          ? { type: "chat.send", text: trimmed, attachmentIds, regenerate: true }
-          : { type: "chat.send", text: trimmed, regenerate: true };
+          ? { type: "chat.send", text: trimmed, attachmentIds, regenerate: true, clientId }
+          : { type: "chat.send", text: trimmed, regenerate: true, clientId };
       const pendingId = usePendingSends
         .getState()
-        .enqueue(appSessionId, frame);
+        .enqueueWithId(appSessionId, frame, clientId);
       pushUserMessage(appSessionId, trimmed, attachments, pendingId);
       const client = clientRef.current;
       if (client && client.getStatus() === "open") {
