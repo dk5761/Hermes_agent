@@ -424,16 +424,6 @@ function AssistantRow({
   const tokens = useThemeTokens();
   const hasText = message.text.length > 0;
   const hasReasoning = !!message.reasoning && message.reasoning.length > 0;
-  // TEMP DEBUG — confirm what AssistantRow actually receives at render time.
-  // Together with [tts-debug] msg pushed in the store, this pinpoints whether
-  // audio fields survive through state → memo → render.
-  // eslint-disable-next-line no-console
-  console.log("[tts-debug] AssistantRow render", {
-    id: message.id,
-    audioBlobUrl: message.audioBlobUrl,
-    streaming,
-    hasText,
-  });
   // Hide the action row while a turn is streaming — it's pointless to copy
   // a half-written response, and regenerate would just kill the in-flight
   // turn we're watching.
@@ -1076,11 +1066,18 @@ function MessageInner({
       );
       break;
     case "assistant": {
+      // Reasoning-only short-circuit fires when an assistant turn produced
+      // ONLY a thought block and no visible text. TTS turns also have empty
+      // text (the MEDIA: marker is stripped server-side), but they DO carry
+      // an audioBlobUrl — those must keep the full AssistantRow so the audio
+      // bubble actually renders. Without the audio guard here, ReasoningOnlyRow
+      // wins and the audio bubble is silently dropped.
       if (
         !streaming &&
         message.text.length === 0 &&
         message.reasoning &&
-        message.reasoning.length > 0
+        message.reasoning.length > 0 &&
+        !message.audioBlobUrl
       ) {
         inner = (
           <ReasoningOnlyRow
