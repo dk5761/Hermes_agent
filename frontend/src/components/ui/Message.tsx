@@ -1349,7 +1349,13 @@ export const Message = memo(MessageInner, (prev, next) => {
       a.reasoning === b.reasoning &&
       a.warning === b.warning &&
       a.reasoningDurationMs === b.reasoningDurationMs &&
-      a.interrupted === b.interrupted
+      a.interrupted === b.interrupted &&
+      // TTS bridge fields — without these the memo can declare "equal" while
+      // audioBlobUrl flips from undefined → set, leaving the audio bubble
+      // hidden until something else triggers a render.
+      a.audioBlobUrl === b.audioBlobUrl &&
+      a.audioDurationMs === b.audioDurationMs &&
+      a.audioPeaks === b.audioPeaks
     );
   }
   if (a.kind === "tool" && b.kind === "tool") {
