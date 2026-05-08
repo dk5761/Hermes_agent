@@ -293,6 +293,18 @@ Run from `frontend/`:
 eas update --channel production --message "<short summary> (<commit>)"
 ```
 
+### 2026-05-09 — cron Jobs/Outputs + persister fix + durable chat.abort (production)
+
+- **Source commit:** `f4dc783` — covers `c795625` (durable chat.abort), `e82a58e` (cron docs), `4f29c3a` (cron tabs UI), `cc4e7d2` (cron outputs aggregator backend, mobile types update), `977bfa0` (query persister hydration crash fix).
+- **Update group:** `7d28dae0-b24c-40be-b1fd-772eb0283750`.
+- **Channel:** `production` (reaches preview + prod). Runtime version: `0.1.0`. Native rebuild: none.
+- **What ships:**
+  - Cron tab now splits into `[Jobs | Outputs]` via SegControl. New `CronJobOutputs` screen for full per-job run history. CronDetail "Recent runs" capped at 4 with "See all" link. Outputs tab joins backend's new `/cron/outputs/by-job` aggregator with the existing `/cron/jobs` for name + schedule. Orphan output dirs (parent job deleted) render with an `archived` badge.
+  - `cache/query-persister.ts` skips `pending` + `error` queries from dehydration — fixes the `TypeError: promise.then is not a function` crash on cold launch when a query was in-flight at backgrounding. `PERSIST_BUSTER` bumped `1 → 2` to wipe poisoned rows from prior launches.
+  - `chat.abort` is now durable — routed through `usePendingSends` so the queue-drainer re-delivers it on reconnect. Fixes the kill+reopen case where stopping a generation but losing the abort frame in transit caused the response to "auto-restart" on reopen (the live stream from the never-aborted Hermes turn looked like a fresh generation since the user message was already accepted).
+- **Backend pre-req:** `/cron/outputs/by-job` deployed to VPS at `c795625` earlier today (see VPS deploy log entry above). The Outputs tab calls into that route.
+- **Dashboard:** https://expo.dev/accounts/nanatsuxiv/projects/hermes-app/updates/7d28dae0-b24c-40be-b1fd-772eb0283750
+
 ### 2026-05-08 — App updates screen (production)
 
 - **Source commit:** `656bf1c` — `settings: add "App updates" screen`.
