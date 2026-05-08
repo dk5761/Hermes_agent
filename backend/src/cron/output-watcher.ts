@@ -107,6 +107,13 @@ export class CronOutputWatcher {
         pollInterval: this.pollIntervalMs,
       },
       depth: 2,
+      // Docker Desktop on macOS uses VirtioFS bind mounts whose inotify
+      // events from host-side writes don't reliably reach the container.
+      // Enable polling fallback when CHOKIDAR_USEPOLLING is set (already
+      // wired into docker-compose.yml for the gateway service). Native
+      // inotify is preferred on Linux/VPS where it's reliable.
+      usePolling: process.env["CHOKIDAR_USEPOLLING"] === "true",
+      interval: this.pollIntervalMs,
     });
 
     this.watcher.on("add", (filePath) => {
