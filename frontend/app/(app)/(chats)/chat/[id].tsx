@@ -79,6 +79,7 @@ import {
   listSessions,
   reloadSessionMcp,
 } from "@/api/sessions";
+import { cronKeys, listInboxes } from "@/api/cron";
 import { BranchLoader } from "@/chat/BranchLoader";
 import { humanizeError } from "@/util/errors";
 import { ApiError } from "@/api/types";
@@ -626,10 +627,40 @@ export default function ChatScreen() {
     queryKey: ["sessions"] as const,
     queryFn: listSessions,
   });
-  const session: SessionDto | undefined = useMemo(
-    () => sessionsQuery.data?.sessions.find((s) => s.id === sessionId),
-    [sessionsQuery.data, sessionId],
-  );
+  // /sessions filters out cron_inbox kind so the Chats list stays clean. When
+  // the user lands on this screen via a cron-tab destination chip, the session
+  // id won't be found in sessionsQuery — fall back to /cron/inboxes which does
+  // include those rows.
+  const cronInboxesQuery = useQuery({
+    queryKey: cronKeys.inboxes(),
+    queryFn: listInboxes,
+  });
+  const session: SessionDto | undefined = useMemo(() => {
+    const fromList = sessionsQuery.data?.sessions.find(
+      (s) => s.id === sessionId,
+    );
+    if (fromList) return fromList;
+    const inbox = cronInboxesQuery.data?.inboxes.find(
+      (i) => i.appSessionId === sessionId,
+    );
+    if (!inbox) return undefined;
+    // Synthesise a SessionDto-shaped row from the inbox metadata so the rest
+    // of the screen (header, model pill, etc.) renders without special-casing.
+    return {
+      id: inbox.appSessionId,
+      hermesSessionId: null,
+      title: inbox.title,
+      archived: false,
+      createdAt: inbox.createdAt,
+      updatedAt: inbox.updatedAt,
+      preview: null,
+      modelOverride: null,
+      providerOverride: null,
+      parentAppSessionId: null,
+      kind: "cron_inbox",
+      cronJobId: inbox.cronJobId,
+    } satisfies SessionDto;
+  }, [sessionsQuery.data, cronInboxesQuery.data, sessionId]);
 
   // Lineage — derived from the same ["sessions"] cache.
   //   children: any session whose parentAppSessionId === current sessionId.

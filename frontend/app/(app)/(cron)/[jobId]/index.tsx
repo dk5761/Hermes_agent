@@ -17,7 +17,7 @@
  * new state when the user navigates back.
  */
 import { useCallback, useMemo, useState } from "react";
-import { Alert, RefreshControl, ScrollView, View } from "react-native";
+import { Alert, Pressable, RefreshControl, ScrollView, View } from "react-native";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
@@ -371,8 +371,28 @@ export default function CronJobDetailScreen() {
             </Section>
           ) : null}
 
-          {/* Recent runs */}
-          <Section title={`Last ${Math.min(outputs.length || 10, 10)} runs`}>
+          {/* Recent runs — capped per spec; "See all" deep-links to the full
+              outputs list so the user doesn't lose history above the cap. */}
+          <Section
+            title="Recent runs"
+            action={
+              outputs.length > 0 ? (
+                <Pressable
+                  onPress={() =>
+                    router.push({
+                      pathname: "/(cron)/[jobId]/outputs",
+                      params: { jobId },
+                    })
+                  }
+                  hitSlop={8}
+                >
+                  <Text kind="caption" color={tokens.accent}>
+                    See all
+                  </Text>
+                </Pressable>
+              ) : undefined
+            }
+          >
             {outputsQuery.isLoading && outputs.length === 0 ? (
               // Skeleton placeholder so the user gets immediate visual feedback
               // instead of "Loading runs…" text on a fresh detail open.
