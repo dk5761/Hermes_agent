@@ -257,3 +257,43 @@ Hermes-side patches only — gateway code unchanged from previous deploy (`aef31
 - **Restarted:** `hermes-gateway`. Dashboard + cron untouched.
 - **Branch state on VPS after deploy:** `main` tracking `origin/main` at
   `eb4f3ca`. The previous local `feat/reload-mcp` branch retained.
+
+---
+
+## Mobile OTA log
+
+JS-only EAS Update shipments. Production channel reaches preview + prod
+builds with `runtimeVersion: { policy: "appVersion" }`. Native rebuild only
+needed when `appVersion` bumps or a native module is added.
+
+Run from `frontend/`:
+
+```bash
+eas update --channel production --message "<short summary> (<commit>)"
+```
+
+### 2026-05-08 — App updates screen (production)
+
+- **Source commit:** `656bf1c` — `settings: add "App updates" screen`.
+- **Update group:** `3425956f-201f-4ce5-840b-aa8fb9e841a6`.
+- **Channel:** `production` (also reaches preview builds since both bake the
+  VPS URL). Runtime version: `0.1.0`.
+- **What ships:** new `Settings → Account → App updates` row + screen. Auto-
+  checks on mount, walks user through check → download (indeterminate
+  progress) → ready → restart, with explicit error recovery. Disabled state
+  in dev / Expo Go since `Updates.isEnabled` is false there.
+- **Native rebuild:** none.
+- **Dashboard:** https://expo.dev/accounts/nanatsuxiv/projects/hermes-app/updates/3425956f-201f-4ce5-840b-aa8fb9e841a6
+
+### 2026-05-08 — TTS bubble + auth refresh + chat.send dedup (production)
+
+- **Source commit:** `e9f0f38` — combined window covering Kokoro TTS frontend
+  rendering, WS auto-refresh + refresh-token rotation, audio cache extension
+  fix, MEDIA tag streaming strip, `chat.send` clientId idempotency, and the
+  reasoning-only short-circuit fix.
+- **Update group:** `27e1239d-29c8-4558-a6d2-09940a1167aa`.
+- **Channel:** `production`. Runtime version: `0.1.0`.
+- **Backend dependency:** requires gateway at `66e20ad` or later (the
+  clientId dedup); already deployed to VPS in the same window.
+- **Native rebuild:** none — pure JS/TS, no plugin or native-module changes.
+- **Dashboard:** https://expo.dev/accounts/nanatsuxiv/projects/hermes-app/updates/27e1239d-29c8-4558-a6d2-09940a1167aa
