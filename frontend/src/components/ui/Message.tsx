@@ -215,6 +215,42 @@ function UserRow({
 }) {
   const tokens = useThemeTokens();
 
+  // Cron-run divider: when the gateway's cron-inbox bridge synthesises a
+  // user.message row to bracket a scheduled run, render a centered pill
+  // ("Scheduled run · <local time>") instead of a regular bubble. This
+  // gives the chat narrative a clear "this turn was triggered by a cron,
+  // not by the user" header.
+  if (message.cronRun) {
+    const ranAtMs = message.cronRun.ranAt * 1000;
+    const when = new Date(ranAtMs);
+    const local = isFinite(when.getTime())
+      ? when.toLocaleString(undefined, {
+          weekday: "short",
+          hour: "numeric",
+          minute: "2-digit",
+        })
+      : "now";
+    const cronName = message.cronRun.cronName;
+    return (
+      <View style={{ paddingHorizontal: 12, paddingVertical: 8, alignItems: "center" }}>
+        <View
+          style={{
+            paddingHorizontal: 12,
+            paddingVertical: 6,
+            borderRadius: 999,
+            backgroundColor: tokens.chip,
+            borderWidth: 1,
+            borderColor: tokens.line,
+          }}
+        >
+          <Text kind="caption" color={tokens.ink3}>
+            {cronName ? `${cronName} · ${local}` : `Scheduled run · ${local}`}
+          </Text>
+        </View>
+      </View>
+    );
+  }
+
   // Voice memo branch: render AudioMessage instead of the text bubble when
   // the row carries audio — either an already-uploaded server blob URL or
   // a still-pending local file URI (optimistic insert before upload). Both
@@ -1347,7 +1383,10 @@ export const Message = memo(MessageInner, (prev, next) => {
       a.clientId === b.clientId &&
       a.audioBlobUrl === b.audioBlobUrl &&
       a.localAudioUri === b.localAudioUri &&
-      a.transcriptionStatus === b.transcriptionStatus
+      a.transcriptionStatus === b.transcriptionStatus &&
+      // Cron-run divider — without this, flipping cronRun on/off would
+      // memo-cache an empty bubble in place of the divider pill.
+      a.cronRun === b.cronRun
     );
   }
   if (a.kind === "assistant" && b.kind === "assistant") {
@@ -1362,7 +1401,9 @@ export const Message = memo(MessageInner, (prev, next) => {
       // hidden until something else triggers a render.
       a.audioBlobUrl === b.audioBlobUrl &&
       a.audioDurationMs === b.audioDurationMs &&
-      a.audioPeaks === b.audioPeaks
+      a.audioPeaks === b.audioPeaks &&
+      // Cron-run flag — for the optional "from <cron>" subhead.
+      a.cronRun === b.cronRun
     );
   }
   if (a.kind === "tool" && b.kind === "tool") {

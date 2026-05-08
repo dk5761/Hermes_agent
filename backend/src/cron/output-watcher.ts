@@ -28,8 +28,11 @@ import type { HermesHttpClient } from "../hermes/http-client.js";
 import { readCronOutput } from "../hermes/cron-fs.js";
 import { findSubscribersForJob } from "./subscriber-lookup.js";
 import { buildNotificationFor, type JobMeta } from "./notify.js";
+import { maybeRouteCronOutput } from "./route-to-session.js";
 import type { ExpoClient } from "../push/expo-client.js";
 import type { PushPayload } from "../push/types.js";
+import type { SubscriberRegistry } from "../ws/subscriber-registry.js";
+import type { ChatCompleteNotifier } from "../push/chat-complete.js";
 
 export interface CronOutputWatcherDeps {
   db: Db;
@@ -38,6 +41,19 @@ export interface CronOutputWatcherDeps {
   hermesHttp: HermesHttpClient;
   expo: ExpoClient;
   pollIntervalMs: number;
+  /**
+   * Shared WS subscriber registry. When the cron has a binding to an
+   * app_session, we emit live envelopes through this registry so an open
+   * chat screen for that session updates without reload. Optional —
+   * routing still persists rows correctly without it.
+   */
+  registry?: SubscriberRegistry;
+  /**
+   * Push notifier reused from gateway-ws. When a binding has notifyOnRun=true
+   * and the user has notifyChatComplete enabled, fires an Expo push on each
+   * cron run that lands in the bound session.
+   */
+  chatCompleteNotifier?: ChatCompleteNotifier;
 }
 
 interface CachedJobMeta {
@@ -54,6 +70,8 @@ export class CronOutputWatcher {
   private readonly hermesHttp: HermesHttpClient;
   private readonly expo: ExpoClient;
   private readonly pollIntervalMs: number;
+  private readonly registry: SubscriberRegistry | undefined;
+  private readonly chatCompleteNotifier: ChatCompleteNotifier | undefined;
   private watcher: FSWatcher | null = null;
   private readonly jobMetaCache = new Map<string, CachedJobMeta>();
   // Serialize per-job processing so two concurrent `add` events for the same
@@ -67,6 +85,8 @@ export class CronOutputWatcher {
     this.hermesHttp = deps.hermesHttp;
     this.expo = deps.expo;
     this.pollIntervalMs = deps.pollIntervalMs;
+    this.registry = deps.registry;
+    this.chatCompleteNotifier = deps.chatCompleteNotifier;
   }
 
   async start(): Promise<void> {
@@ -200,6 +220,51 @@ export class CronOutputWatcher {
   }
 
   private async processOutput(jobId: string, outputId: string): Promise<void> {
+    // Cron-inbox dispatch: if this job has a binding, route its output into
+    // the bound app_session's chat history INSTEAD of fanning out the legacy
+    // markdown push. The session-bound rendering covers both the visible
+    // chat update and (via chat-complete-notifier on the assistant.message
+    // we synthesise) the push-notification UX.
+    const out = await readCronOutput(this.hermesHome, jobId, outputId);
+    if (!out) {
+      this.log.warn({ jobId, outputId }, "output disappeared before processing");
+      return;
+    }
+    const job = await this.getJobMeta(jobId);
+
+    const routed = await maybeRouteCronOutput({
+      db: this.db,
+      cronJobId: jobId,
+      outputId,
+      content: out.content,
+      ...(job.name ? { cronName: job.name } : {}),
+      ...(this.registry ? { registry: this.registry } : {}),
+      ...(this.chatCompleteNotifier
+        ? { chatCompleteNotifier: this.chatCompleteNotifier }
+        : {}),
+      log: this.log,
+    });
+    if (routed) {
+      // Routed into a session — skip the legacy push fan-out. Advance
+      // last_seen pointers for any subscribed cron_prefs rows so a later
+      // unbinding doesn't replay this output as a fresh push.
+      const subs = await findSubscribersForJob(this.db, jobId);
+      const prefIds = subs
+        .filter((s) => s.lastSeenOutputId === null || outputId > s.lastSeenOutputId)
+        .map((s) => s.prefId);
+      if (prefIds.length > 0) {
+        const now = Math.floor(Date.now() / 1000);
+        this.db.transaction((tx) => {
+          tx.update(cronPrefs)
+            .set({ lastSeenOutputId: outputId, updatedAt: now })
+            .where(inArray(cronPrefs.id, prefIds))
+            .run();
+        });
+      }
+      return;
+    }
+
+    // No binding — legacy markdown push fan-out path.
     const subs = await findSubscribersForJob(this.db, jobId);
     if (subs.length === 0) return;
 
@@ -208,13 +273,6 @@ export class CronOutputWatcher {
       (s) => s.lastSeenOutputId === null || outputId > s.lastSeenOutputId,
     );
     if (eligible.length === 0) return;
-
-    const out = await readCronOutput(this.hermesHome, jobId, outputId);
-    if (!out) {
-      this.log.warn({ jobId, outputId }, "output disappeared before processing");
-      return;
-    }
-    const job = await this.getJobMeta(jobId);
 
     const payloads: PushPayload[] = [];
     for (const sub of eligible) {

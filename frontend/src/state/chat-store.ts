@@ -47,6 +47,18 @@ export interface UserMessage {
    * falling back to audioBlobUrl when set.
    */
   localAudioUri?: string;
+  /**
+   * Cron-run divider metadata. Present when the gateway's cron-inbox bridge
+   * synthesised this user.message row (kind='user.message', payload carries
+   * cronRun=true) instead of a real user-typed prompt. Renderer paints a
+   * centered pill ("▼ Scheduled run · <time>") rather than a regular bubble.
+   */
+  cronRun?: {
+    cronJobId: string;
+    cronName?: string;
+    ranAt: number;
+    outputId?: string;
+  };
 }
 
 export interface AssistantMessage {
@@ -70,6 +82,18 @@ export interface AssistantMessage {
   audioBlobUrl?: string;
   audioDurationMs?: number;
   audioPeaks?: number[] | null;
+  /**
+   * Cron-run metadata when this assistant.message is the body of a scheduled
+   * cron run (gateway-synthesised — Hermes-cron produced markdown, the
+   * gateway routed it into the bound app_session). The renderer shows a
+   * subtle "from <cron name>" subhead to distinguish from user-driven turns.
+   */
+  cronRun?: {
+    cronJobId: string;
+    cronName?: string;
+    ranAt: number;
+    outputId?: string;
+  };
 }
 
 // Subtask of a parent `delegate_task` tool call. Hermes emits dedicated
@@ -477,6 +501,23 @@ function reduce(state: ChatSessionState, env: GatewayEventEnvelope): ChatSession
       const audioPeaks = Array.isArray(audioPeaksRaw)
         ? (audioPeaksRaw.filter((v): v is number => typeof v === "number") as number[])
         : undefined;
+      // Cron-run flag — gateway-synthesised assistant.message rows from a
+      // cron output route. Renderer uses this to dim the avatar/show a
+      // "from <cron>" subhead instead of treating it as a regular reply.
+      const cronRunFlag = (payload as Record<string, unknown>)["cronRun"] === true;
+      let cronRun: AssistantMessage["cronRun"];
+      if (cronRunFlag) {
+        const ranAtRaw = (payload as Record<string, unknown>)["ranAt"];
+        const cronJobId = getString(payload, "cronJobId") ?? "";
+        const cronName = getString(payload, "cronName");
+        const outputId = getString(payload, "outputId");
+        cronRun = {
+          cronJobId,
+          ...(cronName ? { cronName } : {}),
+          ...(outputId ? { outputId } : {}),
+          ranAt: typeof ranAtRaw === "number" ? ranAtRaw : Date.now() / 1000,
+        };
+      }
       const msg: AssistantMessage = {
         kind: "assistant",
         id: `assistant-${env.id > 0 ? env.id : genId("a")}`,
@@ -489,6 +530,7 @@ function reduce(state: ChatSessionState, env: GatewayEventEnvelope): ChatSession
         ...(audioBlobUrl ? { audioBlobUrl } : {}),
         ...(audioDurationMs !== undefined ? { audioDurationMs } : {}),
         ...(audioPeaks ? { audioPeaks } : {}),
+        ...(cronRun ? { cronRun } : {}),
       };
       next.messages = [...next.messages, msg];
       next.streaming = null;
@@ -574,6 +616,35 @@ function reduce(state: ChatSessionState, env: GatewayEventEnvelope): ChatSession
     case "background.complete":
     case "subagent.tool":
       return next;
+    case "gateway.user.message": {
+      // Live cron-run divider: when a cron fires, the gateway synthesises a
+      // gateway.user.message envelope before the assistant.message body.
+      // Only handle the cron-flag case here — non-cron echoes are duplicates
+      // of pushUserMessage (the local bubble was already inserted on send).
+      if (!payload || (payload as Record<string, unknown>)["cronRun"] !== true) {
+        return next;
+      }
+      const cronJobId = getString(payload, "cronJobId") ?? "";
+      const cronName = getString(payload, "cronName");
+      const outputId = getString(payload, "outputId");
+      const ranAtRaw = (payload as Record<string, unknown>)["ranAt"];
+      const ranAt = typeof ranAtRaw === "number" ? ranAtRaw : Date.now() / 1000;
+      const text = getString(payload, "text") ?? "";
+      const msg: UserMessage = {
+        kind: "user",
+        id: `cron-divider-${env.id > 0 ? env.id : genId("c")}`,
+        text,
+        createdAt: env.createdAt,
+        cronRun: {
+          cronJobId,
+          ...(cronName ? { cronName } : {}),
+          ...(outputId ? { outputId } : {}),
+          ranAt,
+        },
+      };
+      next.messages = [...next.messages, msg];
+      return next;
+    }
     default:
       return next;
   }

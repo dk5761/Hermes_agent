@@ -11,6 +11,8 @@ import { startEventLogSweeper } from "./ws/event-log.js";
 import { ExpoClient } from "./push/expo-client.js";
 import { CronOutputWatcher } from "./cron/output-watcher.js";
 import { resolveHermesHome } from "./hermes/cron-fs.js";
+import { SubscriberRegistry } from "./ws/subscriber-registry.js";
+import { ChatCompleteNotifier } from "./push/chat-complete.js";
 import { startCleanupTasks } from "./cleanup/runner.js";
 import { ChatRunTimer } from "./observability/chat-run-timer.js";
 import { backfillSearchIndex } from "./db/searchable-text-indexer.js";
@@ -105,6 +107,21 @@ async function main(): Promise<void> {
     accessToken: config.EXPO_ACCESS_TOKEN,
     logger,
   });
+  // Single shared subscriber registry — both the WS route and the cron
+  // output watcher emit through it so a binding-routed cron run shows up
+  // live in any open chat screen for the bound session.
+  const registry = new SubscriberRegistry();
+
+  // Shared chat-complete notifier. The WS route uses it for user-driven
+  // turns; the cron output watcher uses it for cron-bound runs that opted
+  // into notifyOnRun. One instance keeps the user-pref check + 5s minimum
+  // gating behaviour consistent across both code paths.
+  const chatCompleteNotifier = new ChatCompleteNotifier({
+    db: dbHandle.db,
+    expo: expoClient,
+    logger,
+  });
+
   const cronWatcher = new CronOutputWatcher({
     db: dbHandle.db,
     logger,
@@ -112,6 +129,8 @@ async function main(): Promise<void> {
     hermesHttp,
     expo: expoClient,
     pollIntervalMs: config.CRON_WATCH_POLL_MS,
+    registry,
+    chatCompleteNotifier,
   });
 
   // Track cron watcher lifecycle for /health/detailed.
@@ -132,6 +151,8 @@ async function main(): Promise<void> {
     }),
     chatRunTimer,
     expoClient,
+    registry,
+    chatCompleteNotifier,
   });
 
   let shuttingDown = false;

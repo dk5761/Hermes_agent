@@ -45,6 +45,13 @@ export interface GatewayWsDeps {
   attachmentBridge: AttachmentBridge;
   /** Absolute path to the blob store root (STORAGE_LOCAL_ROOT). Used by the TTS bridge. */
   blobRoot: string;
+  /**
+   * Optional shared subscriber registry. When provided, the WS route uses
+   * THIS registry instead of creating a fresh one — so background workers
+   * (cron output watcher, etc.) can emit live envelopes into the same
+   * fan-out as user-triggered events. Tests / minimal embeds can omit it.
+   */
+  registry?: SubscriberRegistry;
   // Phase 7: per-run timing recorder. Optional so tests can omit it.
   chatRunTimer?: ChatRunTimer;
   // ActivityKit push provider — wired by server.ts.
@@ -86,33 +93,9 @@ class ReverseSessionMap {
   }
 }
 
-// Subscribers indexed by app_session_id. Each gateway WS client registers
-// itself for exactly one app session; events fan out 1->N.
-class SubscriberRegistry {
-  private readonly subs = new Map<string, Set<(env: GatewayEventEnvelope) => void>>();
-  add(appSessionId: string, fn: (env: GatewayEventEnvelope) => void): () => void {
-    const set = this.subs.get(appSessionId) ?? new Set();
-    set.add(fn);
-    this.subs.set(appSessionId, set);
-    return () => {
-      const s = this.subs.get(appSessionId);
-      if (!s) return;
-      s.delete(fn);
-      if (s.size === 0) this.subs.delete(appSessionId);
-    };
-  }
-  emit(appSessionId: string, env: GatewayEventEnvelope): void {
-    const s = this.subs.get(appSessionId);
-    if (!s) return;
-    for (const fn of s) {
-      try {
-        fn(env);
-      } catch {
-        // listener-level errors swallowed; the WS handler logs separately.
-      }
-    }
-  }
-}
+// Re-export so callers importing from this module keep a stable surface.
+import { SubscriberRegistry } from "./subscriber-registry.js";
+export { SubscriberRegistry };
 
 const wsQuerySchema = z.object({
   token: z.string().optional(),
@@ -188,7 +171,9 @@ export async function registerGatewayWsRoute(
   deps: GatewayWsDeps,
 ): Promise<void> {
   const reverse = new ReverseSessionMap(deps.db);
-  const registry = new SubscriberRegistry();
+  // Allow callers to inject a shared registry so background workers can fan
+  // events into the same set of subscribers — falls back to a private one.
+  const registry = deps.registry ?? new SubscriberRegistry();
   const log = deps.logger.child({ component: "gateway-ws" });
 
   // Single shared upstream listener — demux by session_id and forward to the

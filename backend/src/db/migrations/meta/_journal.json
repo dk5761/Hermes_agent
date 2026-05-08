@@ -71,6 +71,13 @@
       "when": 1778175145381,
       "tag": "0009_audio_peaks",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1778235159637,
+      "tag": "0010_minor_valkyrie",
+      "breakpoints": true
     }
   ]
 }

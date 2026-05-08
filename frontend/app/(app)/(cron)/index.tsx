@@ -38,12 +38,13 @@ import {
 } from "@/components/ui";
 import {
   cronKeys,
+  listInboxes,
   listJobs,
   pauseJob,
   resumeJob,
   triggerJob,
 } from "@/api/cron";
-import type { CronJob } from "@/api/types";
+import type { CronInboxDto, CronJob } from "@/api/types";
 import { formatRelative, toDate } from "@/util/time";
 import { OfflineBanner } from "@/components/OfflineBanner";
 import { useNetworkStatus } from "@/state/network-status";
@@ -85,6 +86,22 @@ export default function CronListScreen() {
       return running ? 5_000 : false;
     },
   });
+
+  // Cron-inbox bindings — per-job destination chip. We index by cron_job_id
+  // so each row can render "→ Inbox" (tappable, opens the bound app_session)
+  // or "→ Chat" without an extra fetch per row.
+  const inboxesQuery = useQuery({
+    queryKey: cronKeys.inboxes(),
+    queryFn: listInboxes,
+    refetchOnMount: "always",
+  });
+  const bindingsByJobId = useMemo(() => {
+    const map = new Map<string, CronInboxDto>();
+    for (const i of inboxesQuery.data?.inboxes ?? []) {
+      map.set(i.cronJobId, i);
+    }
+    return map;
+  }, [inboxesQuery.data]);
 
   const invalidateJobs = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: cronKeys.jobs() });
@@ -295,15 +312,22 @@ export default function CronListScreen() {
             />
           }
         >
-          {filtered.map((item, index) => (
-            <CronRow
-              key={item.id}
-              job={item}
-              isLast={index === filtered.length - 1}
-              onPress={() => onOpen(item)}
-              onLongPress={() => onLongPress(item)}
-            />
-          ))}
+          {filtered.map((item, index) => {
+            const binding = bindingsByJobId.get(item.id);
+            return (
+              <CronRow
+                key={item.id}
+                job={item}
+                isLast={index === filtered.length - 1}
+                onPress={() => onOpen(item)}
+                onLongPress={() => onLongPress(item)}
+                {...(binding ? { binding } : {})}
+                onOpenDestination={(b) =>
+                  router.push(`/chat/${b.appSessionId}` as never)
+                }
+              />
+            );
+          })}
         </ScrollView>
       )}
       <ActionSheet ref={actionSheetRef} />
@@ -318,9 +342,13 @@ interface CronRowProps {
   isLast: boolean;
   onPress: () => void;
   onLongPress: () => void;
+  /** Cron-inbox binding for this job, when one exists. */
+  binding?: CronInboxDto;
+  /** Tap the destination chip → navigate into the bound app_session. */
+  onOpenDestination?: (binding: CronInboxDto) => void;
 }
 
-function CronRow({ job, isLast, onPress, onLongPress }: CronRowProps) {
+function CronRow({ job, isLast, onPress, onLongPress, binding, onOpenDestination }: CronRowProps) {
   const tokens = useThemeTokens();
   const running = isRunning(job);
   const paused = isPaused(job);
@@ -413,7 +441,7 @@ function CronRow({ job, isLast, onPress, onLongPress }: CronRowProps) {
             {job.schedule_display}
           </Text>
         </Row>
-        <Row gap={6} style={{ marginTop: 4 }}>
+        <Row gap={6} style={{ marginTop: 4, flexWrap: "wrap" }}>
           {running ? (
             <StatusPill kind="connecting" label="running" />
           ) : paused ? (
@@ -421,6 +449,34 @@ function CronRow({ job, isLast, onPress, onLongPress }: CronRowProps) {
           ) : (
             <StatusPill kind="online" label={`next ${nextLabel}`} />
           )}
+          {binding && onOpenDestination ? (
+            <Pressable
+              onPress={(e) => {
+                e.stopPropagation();
+                onOpenDestination(binding);
+              }}
+              style={({ pressed }) => ({
+                paddingHorizontal: 10,
+                paddingVertical: 4,
+                borderRadius: 999,
+                borderWidth: 1,
+                borderColor: tokens.line,
+                backgroundColor: pressed ? tokens.chip : tokens.surface,
+                flexDirection: "row",
+                alignItems: "center",
+                gap: 4,
+              })}
+            >
+              <Icon
+                name={binding.outputKind === "inbox" ? "flow" : "chevR"}
+                size={11}
+                color={tokens.ink2}
+              />
+              <Text kind="caption" color={tokens.ink2}>
+                {binding.outputKind === "inbox" ? "Inbox" : "In chat"}
+              </Text>
+            </Pressable>
+          ) : null}
         </Row>
       </Stack>
     </Pressable>

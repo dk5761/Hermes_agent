@@ -22,9 +22,11 @@ import { registerAccountRoutes } from "./routes/account.js";
 import { registerUploadsRoutes } from "./routes/uploads.js";
 import { registerBlobsRoutes } from "./routes/blobs.js";
 import { registerGatewayWsRoute } from "./ws/gateway-ws.js";
+import { SubscriberRegistry } from "./ws/subscriber-registry.js";
 import { IosToolsRouter } from "./ws/ios-tools-router.js";
 import { registerIosToolsWsRoute } from "./ws/ios-tools-ws.js";
 import { registerInternalIosToolsRoutes } from "./routes/internal-ios-tools.js";
+import { registerInternalCronSchedulerRoutes } from "./routes/internal-cron-scheduler.js";
 import { registerLiveActivityRoutes } from "./routes/live-activity.js";
 import { registerPrefsRoutes } from "./routes/prefs.js";
 import { registerTranscribeRoutes } from "./routes/transcribe.js";
@@ -55,6 +57,20 @@ export interface BuildServerDeps {
   // Expo push client — used to construct ChatCompleteNotifier inline.
   // Optional so tests can omit push entirely.
   expoClient?: ExpoClient;
+  /**
+   * Shared subscriber registry. The cron output watcher (or any other
+   * background worker that needs to push live envelopes into open chat
+   * screens) emits via this registry; the WS route adds/removes
+   * subscribers as clients connect. Created in index.ts at boot.
+   */
+  registry?: SubscriberRegistry;
+  /**
+   * Shared chat-complete push notifier. When provided, the WS route uses
+   * THIS instance instead of constructing its own — so cron-bound runs
+   * (which fire pushes from the cron watcher) and user-driven turns share
+   * a single notifier with a single set of pref-checks.
+   */
+  chatCompleteNotifier?: ChatCompleteNotifier;
 }
 
 export async function buildServer(deps: BuildServerDeps): Promise<FastifyInstance> {
@@ -280,13 +296,18 @@ export async function buildServer(deps: BuildServerDeps): Promise<FastifyInstanc
     logger: deps.logger,
   });
 
-  const chatCompleteNotifier = deps.expoClient
-    ? new ChatCompleteNotifier({
-        db: deps.dbHandle.db,
-        expo: deps.expoClient,
-        logger: deps.logger,
-      })
-    : undefined;
+  // Prefer an injected notifier (so background workers like the cron
+  // watcher share the same instance). Fall back to constructing one inline
+  // when buildServer is invoked standalone (tests, embedded use).
+  const chatCompleteNotifier =
+    deps.chatCompleteNotifier ??
+    (deps.expoClient
+      ? new ChatCompleteNotifier({
+          db: deps.dbHandle.db,
+          expo: deps.expoClient,
+          logger: deps.logger,
+        })
+      : undefined);
 
   // Phase 4 (iOS native tools): IOS_MCP_TOKEN present → enable the router
   // and the /internal/ios-tool endpoint. Without the token the feature is
@@ -304,6 +325,16 @@ export async function buildServer(deps: BuildServerDeps): Promise<FastifyInstanc
     await registerInternalIosToolsRoutes(app, {
       iosToolsRouter,
       iosMcpToken: deps.config.IOS_MCP_TOKEN!,
+      logger: deps.logger,
+    });
+    // Same loopback-bearer pattern, same token. The cron scheduler MCP
+    // server is a sibling of the iOS tools MCP — both live behind the same
+    // trust boundary (Hermes child process talking to gateway over loopback)
+    // so a single shared token is fine.
+    await registerInternalCronSchedulerRoutes(app, {
+      db: deps.dbHandle.db,
+      hermesHttp: deps.hermesHttp,
+      internalToken: deps.config.IOS_MCP_TOKEN!,
       logger: deps.logger,
     });
     await registerIosToolsWsRoute(app, {
@@ -326,6 +357,7 @@ export async function buildServer(deps: BuildServerDeps): Promise<FastifyInstanc
     attachmentBridge,
     blobRoot: deps.config.STORAGE_LOCAL_ROOT,
     liveActivityPusher,
+    ...(deps.registry ? { registry: deps.registry } : {}),
     ...(deps.chatRunTimer ? { chatRunTimer: deps.chatRunTimer } : {}),
     ...(chatCompleteNotifier ? { chatCompleteNotifier } : {}),
     ...(iosToolsRouter ? { iosToolsRouter } : {}),

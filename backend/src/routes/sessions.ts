@@ -127,10 +127,19 @@ export async function registerSessionsRoutes(
     const user = request.user;
     if (!user) return reply.code(401).send({ error: "unauthenticated" });
 
+    // Filter to user-owned chats only. Cron inbox sessions (kind='cron_inbox')
+    // are presented under the Cron tab via /cron/inboxes — they shouldn't
+    // appear in the Chats list and would be misleading there since the
+    // composer is in follow-up mode rather than free-form chat.
     const rows = await db
       .select()
       .from(appSessions)
-      .where(eq(appSessions.userId, user.id))
+      .where(
+        and(
+          eq(appSessions.userId, user.id),
+          eq(appSessions.kind, "user"),
+        ),
+      )
       .orderBy(desc(appSessions.updatedAt));
 
     // Hermes' tui_gateway session_id (8-char hex from session.create) lives in
@@ -155,6 +164,8 @@ export async function registerSessionsRoutes(
       // uses this to paint a "branched from X" chip and group children
       // under their parent.
       parentAppSessionId: row.parentAppSessionId,
+      kind: row.kind,
+      cronJobId: row.cronJobId,
     }));
     return reply.send({ sessions: enriched });
   });
@@ -278,6 +289,25 @@ export async function registerSessionsRoutes(
         await hermesHttp.deleteSession(row.hermesSessionId);
       } catch (err) {
         logger.warn({ err, hsid: row.hermesSessionId }, "upstream delete failed; continuing");
+      }
+    }
+
+    // Cron-inbox lifecycle: when the user deletes a cron_inbox session, also
+    // cancel the Hermes cron job that fed it — the inbox IS the cron's reason
+    // to exist. Best-effort: failures here log a warning but don't abort the
+    // local deletion. The cron_job_bindings row cascade-deletes via FK.
+    if (row.kind === "cron_inbox" && row.cronJobId) {
+      try {
+        await hermesHttp.deleteCronJob(row.cronJobId);
+        logger.info(
+          { sessionId: row.id, cronJobId: row.cronJobId },
+          "cron-inbox delete cascaded to Hermes cron job",
+        );
+      } catch (err) {
+        logger.warn(
+          { err, sessionId: row.id, cronJobId: row.cronJobId },
+          "cron-inbox delete: Hermes cron delete failed; orphaned schedule may remain",
+        );
       }
     }
 

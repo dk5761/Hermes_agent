@@ -1,5 +1,6 @@
 import { apiFetch } from "./client";
 import type {
+  CronInboxesResponse,
   CronJob,
   CronJobResponse,
   CronJobsResponse,
@@ -168,4 +169,18 @@ export const cronKeys = {
   output: (jobId: string, outputId: string) =>
     ["cron", "output", jobId, outputId] as const,
   prefs: () => ["cron", "prefs"] as const,
+  inboxes: () => ["cron", "inboxes"] as const,
 };
+
+/**
+ * List the current user's cron inbox sessions, joined with their bindings.
+ * Each row carries the `cron_job_id` so the Cron tab can match each job
+ * to its destination inbox without a second fetch.
+ */
+export async function listInboxes(): Promise<CronInboxesResponse> {
+  const data = await apiFetch<CronInboxesResponse>("/cron/inboxes");
+  if (!data || !Array.isArray(data.inboxes)) {
+    throw new Error("Invalid /cron/inboxes response shape");
+  }
+  return data;
+}

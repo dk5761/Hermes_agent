@@ -52,11 +52,52 @@ export const appSessions = sqliteTable(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (): any => appSessions.id,
     ),
+    // Discriminator: 'user' (default — chat the user explicitly created) or
+    // 'cron_inbox' (a synthetic session that holds output from a single cron
+    // job, surfaced under the Cron tab rather than the Chats list).
+    kind: text("kind").notNull().default("user"),
+    // Hermes' cron job_id when kind='cron_inbox'. Soft FK — Hermes' cron
+    // schedule lives in jobs.json, not in this DB, so we only reference the
+    // string id and resolve metadata via /api/cron/jobs lookups when needed.
+    cronJobId: text("cron_job_id"),
   },
   (t) => ({
     userArchivedIdx: index("app_sessions_user_archived_idx").on(t.userId, t.archivedAt),
     hermesSessionIdx: index("app_sessions_hermes_session_idx").on(t.hermesSessionId),
     parentIdx: index("app_sessions_parent_idx").on(t.parentAppSessionId),
+    kindIdx: index("app_sessions_kind_idx").on(t.kind),
+  }),
+);
+
+// Per-cron destination binding. 1:1 with cron_job_id — each cron has exactly
+// one output target. Created by the schedule_chat_task MCP tool when the
+// agent schedules a recurring task; deleted when the cron job is deleted
+// (cascade through Hermes side, mirrored here on receipt of the delete RPC).
+export const cronJobBindings = sqliteTable(
+  "cron_job_bindings",
+  {
+    cronJobId: text("cron_job_id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    appSessionId: text("app_session_id")
+      .notNull()
+      .references(() => appSessions.id, { onDelete: "cascade" }),
+    // 'inbox' = a dedicated app_session with kind='cron_inbox' was minted
+    // for this cron. 'session' = the cron writes into an existing user chat.
+    outputKind: text("output_kind").notNull(),
+    // Lazy-bound on first follow-up message in the inbox (or first cron run
+    // for a session-bound cron) so the agent's session.create RPC carries
+    // the cron's prompt as system context.
+    hermesSessionId: text("hermes_session_id"),
+    // Default opt-in for inbox bindings, opt-out for session bindings (the
+    // user is presumably reading the chat anyway).
+    notifyOnRun: integer("notify_on_run", { mode: "boolean" }).notNull().default(true),
+    createdAt: integer("created_at").notNull(),
+  },
+  (t) => ({
+    userIdx: index("cron_job_bindings_user_idx").on(t.userId),
+    sessionIdx: index("cron_job_bindings_session_idx").on(t.appSessionId),
   }),
 );
 

@@ -263,8 +263,31 @@ function historyRowToUiRow(
         ? attachmentIdsRaw.filter((v): v is string => typeof v === "string")
         : undefined;
       const hasAudio = !!r.audioBlobUrl;
-      // Allow audio-only rows (text === "" is valid when audio is present).
-      if (!text && !hasAudio && (!attachmentRefs || attachmentRefs.length === 0)) return null;
+      // Cron-run divider — gateway-synthesised user.message row preceding
+      // a cron output. Renderer paints it as a centered pill, not a bubble.
+      const cronRunFlag = p["cronRun"] === true;
+      let cronRun: { cronJobId: string; cronName?: string; ranAt: number; outputId?: string } | undefined;
+      if (cronRunFlag) {
+        const ranAtRaw = p["ranAt"];
+        const cronJobId = pickString(p, "cronJobId") || "";
+        const cronName = pickString(p, "cronName");
+        const outputId = pickString(p, "outputId");
+        cronRun = {
+          cronJobId,
+          ...(cronName ? { cronName } : {}),
+          ...(outputId ? { outputId } : {}),
+          ranAt: typeof ranAtRaw === "number" ? ranAtRaw : r.createdAt,
+        };
+      }
+      // Allow audio-only and cron-divider rows even with empty text.
+      if (
+        !text &&
+        !hasAudio &&
+        !cronRun &&
+        (!attachmentRefs || attachmentRefs.length === 0)
+      ) {
+        return null;
+      }
       return {
         rowKind: "msg",
         data: {
@@ -287,6 +310,7 @@ function historyRowToUiRow(
             : {}),
           ...(r.transcriptionError != null ? { transcriptionError: r.transcriptionError } : {}),
           ...(r.audioPeaks != null ? { audioPeaks: r.audioPeaks } : {}),
+          ...(cronRun ? { cronRun } : {}),
         },
       };
     }
@@ -297,6 +321,23 @@ function historyRowToUiRow(
       const status = pickString(p, "status");
       const interrupted = status === "interrupted";
       const hasAudio = !!r.audioBlobUrl;
+      // Cron-run flag from the gateway routing path. Renderer dims the
+      // avatar / shows a "from <cron>" subhead instead of treating this as
+      // a regular reply.
+      const cronRunFlag = p["cronRun"] === true;
+      let cronRun: { cronJobId: string; cronName?: string; ranAt: number; outputId?: string } | undefined;
+      if (cronRunFlag) {
+        const ranAtRaw = p["ranAt"];
+        const cronJobId = pickString(p, "cronJobId") || "";
+        const cronName = pickString(p, "cronName");
+        const outputId = pickString(p, "outputId");
+        cronRun = {
+          cronJobId,
+          ...(cronName ? { cronName } : {}),
+          ...(outputId ? { outputId } : {}),
+          ranAt: typeof ranAtRaw === "number" ? ranAtRaw : r.createdAt,
+        };
+      }
       // Audio-only rows (text fully consisted of the MEDIA: tag) are still
       // rendered when audio is attached; otherwise require text/reasoning.
       if (!text && !reasoning && !hasAudio) return null;
@@ -315,6 +356,7 @@ function historyRowToUiRow(
           ...(r.audioBlobUrl ? { audioBlobUrl: r.audioBlobUrl } : {}),
           ...(r.audioDurationMs != null ? { audioDurationMs: r.audioDurationMs } : {}),
           ...(r.audioPeaks != null ? { audioPeaks: r.audioPeaks } : {}),
+          ...(cronRun ? { cronRun } : {}),
           createdAt: iso,
         },
       };
@@ -1782,6 +1824,10 @@ export default function ChatScreen() {
   }, []);
 
   const headerTitle = session?.title || "New chat";
+  // Subtitle: only shown for cron inboxes — communicates that this chat is a
+  // cron's output channel and the composer is in follow-up mode.
+  const headerSubtitle =
+    session?.kind === "cron_inbox" ? "Cron output · follow-up only" : undefined;
   // Banner visibility:
   //   - Before the first non-idle status arrives (cold mount), stay hidden
   //     so we don't flash a meaningless "idle" pill.
@@ -1815,6 +1861,7 @@ export default function ChatScreen() {
     <PhoneSafeArea>
       <NavBar
         title={headerTitle}
+        {...(headerSubtitle ? { subtitle: headerSubtitle } : {})}
         onBack={() => safeBack("/(chats)")}
         // Model pill moved out of the leading slot — see the composer-anchored
         // strip below. Headers were clipping long model names and crowding
@@ -2412,7 +2459,13 @@ export default function ChatScreen() {
                 ref={inputRef}
                 value={input}
                 onChangeText={setInput}
-                placeholder={isStreaming ? "Streaming…" : "Message Hermes…"}
+                placeholder={
+                  isStreaming
+                    ? "Streaming…"
+                    : session?.kind === "cron_inbox"
+                      ? "Ask a follow-up about this cron…"
+                      : "Message Hermes…"
+                }
                 placeholderTextColor={tokens.ink3}
                 multiline
                 editable={!!sessionId}

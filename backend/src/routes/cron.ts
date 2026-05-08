@@ -1,8 +1,8 @@
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import type { FastifyInstance, preHandlerHookHandler } from "fastify";
 import { z } from "zod";
 import type { Db } from "../db/client.js";
-import { cronPrefs } from "../db/schema.js";
+import { appSessions, cronJobBindings, cronPrefs } from "../db/schema.js";
 import type { HermesHttpClient } from "../hermes/http-client.js";
 import {
   listCronOutputs,
@@ -68,7 +68,82 @@ export async function registerCronRoutes(app: FastifyInstance, deps: CronRoutesD
     const params = idParams.safeParse(request.params);
     if (!params.success) return reply.code(400).send({ error: "invalid_params" });
     await hermesHttp.deleteCronJob(params.data.id);
+    // The binding row + cron_inbox app_session cascade-delete via FK
+    // (cron_job_bindings.app_session_id → app_sessions.id ON DELETE CASCADE)
+    // when the inbox session is dropped. We drop the binding here to also
+    // clean up bindings whose target was a current_session (where the inbox
+    // wasn't created and the user-chat itself stays around).
+    const user = request.user;
+    if (user) {
+      const bindingRows = await db
+        .select({
+          appSessionId: cronJobBindings.appSessionId,
+          outputKind: cronJobBindings.outputKind,
+        })
+        .from(cronJobBindings)
+        .where(
+          and(
+            eq(cronJobBindings.cronJobId, params.data.id),
+            eq(cronJobBindings.userId, user.id),
+          ),
+        )
+        .limit(1);
+      const binding = bindingRows[0];
+      if (binding) {
+        if (binding.outputKind === "inbox") {
+          // Cascade-delete the synthetic inbox session — there's no chat
+          // history worth retaining once the cron is gone.
+          await db.delete(appSessions).where(eq(appSessions.id, binding.appSessionId));
+        } else {
+          // current_session bindings: just drop the binding row, leave the
+          // user chat alone. Past cron-run rows in chat_history stand on
+          // their own as messages.
+          await db
+            .delete(cronJobBindings)
+            .where(eq(cronJobBindings.cronJobId, params.data.id));
+        }
+      }
+    }
     return reply.send({ id: params.data.id, deleted: true });
+  });
+
+  // List all cron inbox sessions for the current user, joined with their
+  // bindings so the Cron tab can show "name + schedule + output destination"
+  // without an extra round-trip per row. Results are sorted newest-first by
+  // app_session.updatedAt — recent activity bubbles up.
+  app.get("/cron/inboxes", { preHandler: requireAuth }, async (request, reply) => {
+    const user = request.user;
+    if (!user) return reply.code(401).send({ error: "unauthenticated" });
+    const rows = await db
+      .select({
+        appSessionId: appSessions.id,
+        cronJobId: cronJobBindings.cronJobId,
+        title: appSessions.titleOverride,
+        outputKind: cronJobBindings.outputKind,
+        notifyOnRun: cronJobBindings.notifyOnRun,
+        createdAt: cronJobBindings.createdAt,
+        updatedAt: appSessions.updatedAt,
+      })
+      .from(cronJobBindings)
+      .innerJoin(appSessions, eq(appSessions.id, cronJobBindings.appSessionId))
+      .where(
+        and(
+          eq(cronJobBindings.userId, user.id),
+          eq(appSessions.kind, "cron_inbox"),
+        ),
+      )
+      .orderBy(desc(appSessions.updatedAt));
+    return reply.send({
+      inboxes: rows.map((r) => ({
+        appSessionId: r.appSessionId,
+        cronJobId: r.cronJobId,
+        title: r.title ?? "Untitled",
+        outputKind: r.outputKind as "inbox" | "session",
+        notifyOnRun: r.notifyOnRun,
+        createdAt: r.createdAt,
+        updatedAt: r.updatedAt,
+      })),
+    });
   });
 
   // Cron outputs are FS-only — Hermes does not expose them via HTTP (per contract).

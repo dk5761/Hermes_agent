@@ -61,6 +61,16 @@ DESIRED_MCP_SERVERS: dict[str, dict] = {
         "timeout": 30,
         "connect_timeout": 10,
     },
+    # Cron scheduler — exposes `schedule_chat_task` so the agent can create
+    # recurring tasks bound to a specific output destination (cron inbox or
+    # the user's current chat). Same wrapper-script + .env-load pattern as
+    # ios-tools; reuses IOS_MCP_TOKEN since both are loopback-only.
+    "cron-scheduler": {
+        "command": "/root/repos/Hermes_agent/scripts/spawn-cron-scheduler-mcp.sh",
+        "args": [],
+        "timeout": 30,
+        "connect_timeout": 10,
+    },
     # Add more here. Each entry needs a matching `mcp-<name>` in
     # DESIRED_PLATFORM_TOOLSETS["cli"] below or the agent won't see its tools.
     #
@@ -101,6 +111,10 @@ _CORE_TOOLSETS = [
     "mcp-ios-tools",
     # Exposes the `stt_status` introspection tool — added by patch-hermes-stt-introspect.py.
     "stt_introspect",
+    # `mcp-<server-name>` — toolset gate for the `cron-scheduler` MCP server.
+    # Without this, the agent can't see schedule_chat_task even if the MCP
+    # server itself is registered.
+    "mcp-cron-scheduler",
 ]
 DESIRED_PLATFORM_TOOLSETS: dict[str, list[str]] = {
     # Mobile gateway sessions arrive with platform "cli" via _platform_config_key

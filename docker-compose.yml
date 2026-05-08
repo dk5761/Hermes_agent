@@ -19,6 +19,13 @@ services:
       # host directory at the same path inside Hermes' container — read-only
       # is sufficient (Hermes only needs to load the bytes for the model).
       - ./backend/data/blobs:/app/data/blobs:ro
+      # MCP wrapper scripts + compiled stdio bundles. Hermes spawns these as
+      # MCP servers (cron-scheduler is the active one on docker; ios-tools is
+      # also bound here but skipped by patch-hermes-config.py on non-iOS hosts).
+      # The path matches what patch-hermes-config.py writes into config.yaml.
+      - ./scripts:/root/repos/Hermes_agent/scripts:ro
+      - ./backend/dist:/root/repos/Hermes_agent/backend/dist:ro
+      - ./backend/node_modules:/root/repos/Hermes_agent/backend/node_modules:ro
       # Obsidian vault — kept in sync with cloud by the obsidian-sync service.
       # Hermes' bundled note-taking-obsidian skill reads/writes here.
       # Convention: agent writes only under ${VAULT}/Hermes/ (enforced via

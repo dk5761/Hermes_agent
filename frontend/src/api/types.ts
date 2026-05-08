@@ -38,6 +38,28 @@ export interface SessionDto {
   // Lineage: app-session id of the parent if this row was created via
   // POST /sessions/:id/branch. null for organically-created sessions.
   parentAppSessionId: string | null;
+  // Discriminator: 'user' for chats the user created, 'cron_inbox' for
+  // synthetic sessions that hold output of one cron job. The Chats list
+  // server-side filters to kind='user' so cron inboxes never appear here;
+  // the field is present so the chat screen can branch the composer when
+  // the user navigates into one via the Cron tab.
+  kind: "user" | "cron_inbox";
+  // When kind='cron_inbox', the Hermes job_id this inbox is bound to.
+  cronJobId: string | null;
+}
+
+export interface CronInboxDto {
+  appSessionId: string;
+  cronJobId: string;
+  title: string;
+  outputKind: "inbox" | "session";
+  notifyOnRun: boolean;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface CronInboxesResponse {
+  inboxes: CronInboxDto[];
 }
 
 /**
