@@ -244,9 +244,30 @@ export function useChatStream(appSessionId: string | null): ChatStreamApi {
     [appSessionId, pushUserMessage, truncateLastTurn],
   );
 
+  // Aborts must be durable: a kill+reopen race that loses the abort frame
+  // mid-flight leaves Hermes generating, and on reattach the mobile sees
+  // the live stream as if generation auto-restarted (no new user bubble,
+  // because the user message was already accepted). Enqueue the abort
+  // through pending-sends so the drainer re-delivers it on reconnect.
+  // The gateway is idempotent — handleChatAbort calls session.interrupt,
+  // which is a no-op if nothing is running, so duplicate aborts are safe.
   const abort = useCallback(() => {
-    clientRef.current?.send({ type: "chat.abort" });
-  }, []);
+    if (!appSessionId) return;
+    const frame: ClientFrame = { type: "chat.abort" };
+    const pendingId = usePendingSends.getState().enqueue(appSessionId, frame);
+    const client = clientRef.current;
+    if (client && client.getStatus() === "open") {
+      try {
+        usePendingSends.getState().markSending(pendingId);
+        client.send(frame);
+        usePendingSends.getState().markSent(pendingId);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : "abort send failed";
+        usePendingSends.getState().markFailed(pendingId, msg);
+      }
+    }
+    // Else: drainer picks it up on the next "open" transition.
+  }, [appSessionId]);
 
   const respondApproval = useCallback(
     (requestId: string, choice: string, all?: boolean) => {
