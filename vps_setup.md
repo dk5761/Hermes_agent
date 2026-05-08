@@ -116,6 +116,21 @@ Snapshots of the Hermes side (not gateway DB) are taken via
 
 ## Deploy log
 
+### 2026-05-08 — chat.send idempotency via clientId
+
+- **Source:** `66e20ad` (latest `main`).
+- **Previous:** `cd8e146` (install-vps.sh idempotency fixes, same day).
+- **Migrations applied:** none (uses `json_extract` over the existing `payload_json` column).
+- **Restarted:** `hermes-gateway` only (dashboard untouched).
+- **What broke before:** closing the app right after a response, then reopening, sometimes triggered a duplicate agent run with no user bubble. Pending-sends persists each frame to SQLite on enqueue and DELETEs on send; SQLite WAL with `synchronous=NORMAL` doesn't fsync after every commit, so a recent DELETE could be lost when the OS evicted the backgrounded app. On reopen, hydrate restored the row as `queued`, the queue-drainer fired the same frame on WS reconnect, and the gateway processed it as a brand-new turn. The drainer doesn't push a local user bubble (its job is just to flush queued frames), so the user saw the agent processing nothing.
+- **Fix:** gateway-side dedup keyed by a frontend-minted `clientId`.
+  - `chat.send` schema accepts an optional `clientId` (≤128 chars).
+  - `handleChatSend` runs `SELECT … WHERE kind='user.message' AND json_extract(payload_json,'$.clientId')=?` before processing; on hit it logs and returns — no second `prompt.submit` to Hermes, no second user.message persist, no second envelope emitted.
+  - `user.message` payload now stores `clientId` so the dedup query has something to match on next time.
+- **Frontend:** `ClientFrame` `chat.send` gains `clientId`. `send()` / `regenerate()` mint the id once, persist the pending-sends row with the same id (new `enqueueWithId` accessor), and include it in the WS frame. Older clients that omit `clientId` hit the legacy path unchanged.
+- **Verified on VPS:** WS test sending the same frame twice with `clientId=DEDUP-X` — first send produced `gateway.user.message` + `message.start` + `message.complete`; second send produced *zero* events. Gateway log: `chat.send: duplicate clientId, skipping (replay after kill+reopen) clientId=DEDUP-X rowId=564`.
+- **Branch state on VPS after deploy:** `main` tracking `origin/main` at `66e20ad`.
+
 ### 2026-05-08 — install-vps.sh idempotency fixes (Steps 5 + 6)
 
 - **Source:** `cd8e146` (latest `main`).
