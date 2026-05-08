@@ -952,7 +952,10 @@ async function handleUpstreamEvent(
       if (payloadObj) {
         const stripped = extractMediaFromMessageText(payloadObj["text"]);
         if (stripped.absPath) {
-          const hermesHome = process.env["HERMES_HOME"] ?? "/data/hermes-home";
+          // `||` not `??` so an empty-string env (e.g. `HERMES_HOME=` literally
+          // in .env on bare-metal where the gateway shares fs with hermes) also
+          // falls back to the default rather than producing a broken mount path.
+          const hermesHome = process.env["HERMES_HOME"] || "/data/hermes-home";
           const accessible = translateHermesPath(stripped.absPath, hermesHome);
           let relocated: Awaited<ReturnType<typeof relocateTtsBlob>> = null;
           if (accessible) {

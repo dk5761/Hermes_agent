@@ -168,16 +168,13 @@ export function translateHermesPath(absPath: string, hermesHomeMount: string): s
     return hermesHomeMount.replace(/\/$/, "") + suffix;
   }
 
-  // VPS bare-metal: /root/.hermes/... → pass through when hermesHomeMount matches
+  // VPS bare-metal: hermes and gateway share the same host filesystem at the
+  // SAME absolute path. Always pass through — never remap. The previous
+  // remap-on-mismatch fallback produced broken paths when hermesHomeMount was
+  // empty (e.g. `HERMES_HOME=` literally in the .env), turning
+  // `/root/.hermes/audio_cache/x.mp3` into `/audio_cache/x.mp3`.
   if (absPath.startsWith(HERMES_VPS_PREFIX + "/")) {
-    if (hermesHomeMount === HERMES_VPS_PREFIX) {
-      // Standard VPS config — gateway reads it directly.
-      return absPath;
-    }
-    // hermesHomeMount is a different path (unusual). Remap by suffix anyway,
-    // matching the same logic used for docker above.
-    const suffix = absPath.slice(HERMES_VPS_PREFIX.length);
-    return hermesHomeMount.replace(/\/$/, "") + suffix;
+    return absPath;
   }
 
   // Unknown prefix — return as-is; caller verifies accessibility.
