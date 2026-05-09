@@ -349,6 +349,18 @@ eas update --channel production --message "<short summary> (<commit>)"
 Skipping this ships the developer's local LAN IP into production — see the
 2026-05-09 corrective entry below.
 
+### 2026-05-09 — validate split-env release pipeline (production)
+
+- **Source commit:** `d8a0755`. Ops/infra only — no app code change.
+- **Update group:** `cc6f8eb7-7d3d-4ea1-8191-bb36a432c33f`.
+- **Channel:** `production`. Runtime: `0.1.0`. Native rebuild: none.
+- **What's different operationally:**
+  - `frontend/.env` now committed with the prod URLs (`https://hermes.drshnk.dev` / `wss://hermes.drshnk.dev`). It mirrors the EAS server-side production env — bundling produces the same bundle whether EAS pulls from server or `.env`.
+  - `frontend/.env.local` (gitignored) is the per-machine dev override. Expo dotenv rules load it ONLY for `expo start`. `eas update` / `eas build` ignore it entirely. Each dev keeps their LAN URL there now.
+  - Procedure used for THIS ship was simply `pnpm update:prod -m "..."` — no `.env` stash dance. The old workaround (move `.env` aside, run, restore) is obsolete.
+  - The safe-eas-update guard still inspects `frontend/.env` (defense in depth — catches a fat-fingered prod URL committed into `.env`). It does not look at `.env.local` since Expo loading rules guarantee that file isn't bundled by `eas update`.
+- **Dashboard:** https://expo.dev/accounts/nanatsuxiv/projects/hermes-app/updates/cc6f8eb7-7d3d-4ea1-8191-bb36a432c33f
+
 ### 2026-05-09 — verify hardened release pipeline (production)
 
 - **Source commit:** `2228abe`. No app code change vs the previous OTA — this run validates the new release infra.
