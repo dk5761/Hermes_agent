@@ -27,11 +27,19 @@
 set -euo pipefail
 
 VAULT_DIR="${VAULT_DIR:-/opt/obsidian-vault}"
+# Hermes operates inside a subdirectory of the Obsidian vault — keeps the
+# user's Obsidian sidebar uncluttered (only the `Hermes/` namespace and any
+# personal files appear at the vault root). All cron job prompts, skill
+# SKILL.md files, and helper scripts (wiki-graph.py, wiki-lint.py) resolve
+# their paths relative to this. Override with HERMES_VAULT_PATH if you want
+# to flatten the layout (set it equal to VAULT_DIR).
+HERMES_VAULT_PATH="${HERMES_VAULT_PATH:-${VAULT_DIR}/Hermes}"
 VAULT_NAME="${VAULT_NAME:-Drshnk}"
 NODE_MAJOR="${NODE_MAJOR:-22}"
 SERVICE_NAME="obsidian-sync"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 HERMES_DASHBOARD_SERVICE="/etc/systemd/system/hermes-dashboard.service"
+HERMES_CRON_SERVICE="/etc/systemd/system/hermes-cron.service"
 HERMES_HOME="${HERMES_HOME:-/root/.hermes}"
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
@@ -161,37 +169,62 @@ else
 fi
 
 # ─── Step 6: hermes-dashboard.service env ────────────────────────────────────
-step "Step 6: OBSIDIAN_VAULT_PATH on hermes-dashboard.service"
+step "Step 6: OBSIDIAN_VAULT_PATH on hermes systemd units"
 
-if [[ ! -f "${HERMES_DASHBOARD_SERVICE}" ]]; then
-  c_yellow "  ${HERMES_DASHBOARD_SERVICE} not found — skipping (run hermes deploy first)"
-else
-  desired_env_line="Environment=OBSIDIAN_VAULT_PATH=${VAULT_DIR}"
-  if grep -qF "${desired_env_line}" "${HERMES_DASHBOARD_SERVICE}"; then
-    c_green "  already set"
+# Make sure the Hermes-scoped subdirectory exists. With a fresh vault dir
+# the sync hasn't created it yet, so without this the dashboard would
+# point at a non-existent path on first boot.
+mkdir -p "${HERMES_VAULT_PATH}"
+ok "ensured ${HERMES_VAULT_PATH} exists"
+
+desired_env_line="Environment=OBSIDIAN_VAULT_PATH=${HERMES_VAULT_PATH}"
+service_changed=0
+
+# Patch a systemd unit's [Service] section to set OBSIDIAN_VAULT_PATH.
+# Idempotent: rewrites an existing line, or inserts after [Service] header.
+patch_unit_env() {
+  local unit_file="$1" label="$2"
+  if [[ ! -f "$unit_file" ]]; then
+    c_yellow "  ${unit_file} not found — skipping ${label}"
+    return 1
+  fi
+  if grep -qF "${desired_env_line}" "$unit_file"; then
+    c_green "  ${label}: already set"
+    return 0
+  fi
+  if grep -qE '^Environment=OBSIDIAN_VAULT_PATH=' "$unit_file"; then
+    sed -i "s|^Environment=OBSIDIAN_VAULT_PATH=.*|${desired_env_line}|" "$unit_file"
+    c_green "  ${label}: updated existing line"
   else
-    # Insert after [Service] section header, idempotent. We check first to
-    # avoid duplicates if a partial line already exists.
-    if grep -qE '^Environment=OBSIDIAN_VAULT_PATH=' "${HERMES_DASHBOARD_SERVICE}"; then
-      sed -i "s|^Environment=OBSIDIAN_VAULT_PATH=.*|${desired_env_line}|" "${HERMES_DASHBOARD_SERVICE}"
-      c_green "  updated existing line"
-    else
-      sed -i "/^\[Service\]/a ${desired_env_line}" "${HERMES_DASHBOARD_SERVICE}"
-      c_green "  inserted new line"
-    fi
-    systemctl daemon-reload
-    c_yellow "  hermes-dashboard.service env changed — restarting dashboard + gateway"
-    # Hermes 0.12+ generates a fresh _SESSION_TOKEN on every dashboard restart.
-    # The gateway caches the token (scraped from /index.html) and only re-scrapes
-    # on HTTP 401. The upstream-WS open failure path manifests as "non-101
-    # status" (not 401) — so the gateway gets stuck with a stale token after
-    # any dashboard restart. Restarting the gateway forces a fresh scrape.
-    systemctl restart hermes-dashboard
-    sleep 2
-    if systemctl is-enabled --quiet hermes-gateway 2>/dev/null; then
-      systemctl restart hermes-gateway
-      c_green "    hermes-gateway restarted (forces fresh token scrape)"
-    fi
+    sed -i "/^\[Service\]/a ${desired_env_line}" "$unit_file"
+    c_green "  ${label}: inserted new line"
+  fi
+  service_changed=1
+  return 0
+}
+
+patch_unit_env "${HERMES_DASHBOARD_SERVICE}" "hermes-dashboard.service" || true
+# hermes-cron also needs the env so cron-driven agent runs resolve the
+# vault to the Hermes-scoped subdirectory consistently with the dashboard.
+patch_unit_env "${HERMES_CRON_SERVICE}" "hermes-cron.service" || true
+
+if [[ "$service_changed" == "1" ]]; then
+  systemctl daemon-reload
+  c_yellow "  systemd unit env changed — restarting dashboard + gateway + cron"
+  # Hermes 0.12+ generates a fresh _SESSION_TOKEN on every dashboard restart.
+  # The gateway caches the token (scraped from /index.html) and only re-scrapes
+  # on HTTP 401. The upstream-WS open failure path manifests as "non-101
+  # status" (not 401) — so the gateway gets stuck with a stale token after
+  # any dashboard restart. Restarting the gateway forces a fresh scrape.
+  systemctl restart hermes-dashboard
+  sleep 2
+  if systemctl is-enabled --quiet hermes-gateway 2>/dev/null; then
+    systemctl restart hermes-gateway
+    c_green "    hermes-gateway restarted (forces fresh token scrape)"
+  fi
+  if systemctl is-enabled --quiet hermes-cron 2>/dev/null; then
+    systemctl restart hermes-cron
+    c_green "    hermes-cron restarted"
   fi
 fi
 

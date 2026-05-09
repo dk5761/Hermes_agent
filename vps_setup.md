@@ -116,6 +116,34 @@ Snapshots of the Hermes side (not gateway DB) are taken via
 
 ## Deploy log
 
+### 2026-05-10 — Obsidian vault re-scoped to /opt/obsidian-vault/Hermes
+
+- **Why:** Hermes was treating the entire Obsidian vault root (`/opt/obsidian-vault`) as its working area, so cron-generated folders (`raw/`, `wiki/`, `scripts/`, `graphify-out/`, `Daily Notes/`) plus `ME.md`/`AGENT.md` cluttered the user's Obsidian sidebar at root. The fix scopes Hermes to a `Hermes/` subfolder so the user's vault root stays clean (only `Hermes/` namespace and personal files like `Test note.md`).
+- **Migrations applied:** none (filesystem move + config edits only).
+- **Restarted:** `hermes-dashboard` + `hermes-cron`.
+- **Filesystem moves on VPS:**
+  ```
+  cd /opt/obsidian-vault
+  mv raw wiki scripts graphify-out "Daily Notes" ME.md AGENT.md .hermes.md Hermes/
+  ```
+  Vault root now has only `.obsidian/`, `Hermes/`, and the user's `Test note.md`.
+- **Systemd env updates:**
+  - `/etc/systemd/system/hermes-dashboard.service`: `OBSIDIAN_VAULT_PATH=/opt/obsidian-vault → /opt/obsidian-vault/Hermes`.
+  - `/etc/systemd/system/hermes-cron.service`: added `Environment=OBSIDIAN_VAULT_PATH=/opt/obsidian-vault/Hermes` (was missing entirely; cron jobs previously relied on hardcoded paths in their prompts).
+- **Path edits on VPS:**
+  - `/opt/obsidian-vault/Hermes/scripts/wiki-graph.py` `base_path`.
+  - `/opt/obsidian-vault/Hermes/scripts/wiki-lint.py` `base_path`.
+  - `/root/.hermes/cron/jobs.json` — 5 of 6 cron prompts patched (`daily-dashboard`, `vault-memory-sync`, `session-to-vault`, `daily-ingest`, `weekly-lint`). The `AI News Daily Digest` job has no vault writes.
+  - `/root/.hermes/skills/note-taking/vault-ingest/SKILL.md` + `vault-lint/SKILL.md`: hardcoded `/opt/obsidian-vault/...` references rewritten to `/opt/obsidian-vault/Hermes/...`.
+  - `/opt/obsidian-vault/Hermes/.hermes.md`: vault-structure block rewritten to reflect the Hermes-scoped layout.
+- **Repo edit (this commit, for future re-runs of `install-obsidian-sync.sh`):**
+  - New `HERMES_VAULT_PATH` env var on the script (defaults to `${VAULT_DIR}/Hermes`). Used as the value for the systemd `OBSIDIAN_VAULT_PATH` env line on both dashboard and cron units. Override to flatten by setting `HERMES_VAULT_PATH=${VAULT_DIR}` before re-running.
+  - Step 6 now patches BOTH `hermes-dashboard.service` and `hermes-cron.service`.
+  - Pre-creates `${HERMES_VAULT_PATH}` on first install so the dashboard doesn't boot pointing at a non-existent path.
+- **Snag during deploy:** stopping `hermes-cron` left a stale `hermes gateway` PID running (PID 126721), which made the next `systemctl start` fail with `❌ Gateway already running`. `kill -9` on the stale PID, then `systemctl restart` cleanly. Worth noting in case it repeats — the unit file uses `ExecStart=hermes gateway run` without `--replace`, so any orphan from a hard-stop blocks restart.
+- **Verified:** both services `active`; running cron's `/proc/$pid/environ` shows `OBSIDIAN_VAULT_PATH=/opt/obsidian-vault/Hermes`; `curl /health` 200.
+- **Branch state on VPS after deploy:** filesystem + service config updated in place, no git pull required (the script change is for future re-runs only).
+
 ### 2026-05-09 — chat: historyId on envelopes for live↔history dedup
 
 - **Source:** `4736577` (latest `main`, includes b9be3e2 backend change).
