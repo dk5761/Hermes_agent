@@ -29,7 +29,11 @@ services:
       HERMES_GID: ${HERMES_GID:-10000}
       # Required to enable the JSON-RPC /api/ws endpoint (off by default).
       HERMES_DASHBOARD_TUI: "1"
-      OBSIDIAN_VAULT_PATH: /vault
+      # Hermes is scoped to a Hermes/ subfolder of the Obsidian vault so the
+      # user's Obsidian sidebar stays clean (only `Hermes/` namespace + any
+      # personal files visible at vault root). Matches the VPS layout — see
+      # vps_setup.md "2026-05-10 Obsidian vault re-scoped" deploy log entry.
+      OBSIDIAN_VAULT_PATH: /vault/Hermes
     command:
       - dashboard
       - --host
@@ -67,10 +71,13 @@ services:
     environment:
       HERMES_UID: ${HERMES_UID:-10000}
       HERMES_GID: ${HERMES_GID:-10000}
-      OBSIDIAN_VAULT_PATH: /vault
+      # Match the dashboard service — Hermes scoped to the `Hermes/`
+      # subfolder of the vault. See the dashboard service comment.
+      OBSIDIAN_VAULT_PATH: /vault/Hermes
     command:
       - gateway
       - run
+      - --replace
 
   # Obsidian Sync headless client. Keeps ./data/obsidian-vault in sync with
   # your remote Obsidian Sync vault end-to-end encrypted. UID/GID are pinned

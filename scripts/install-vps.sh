@@ -281,7 +281,12 @@ Wants=hermes-dashboard.service
 Type=simple
 User=root
 Environment=HOME=/root
-ExecStart=/usr/local/bin/hermes gateway run
+# --replace evicts any stale `hermes gateway` worker process holding the
+# cron lockfile. Without it, a hard-stop (systemctl stop) that left the
+# child PID running blocks the next start with `❌ Gateway already
+# running`. Witnessed during the 2026-05-10 vault re-scope deploy; safer
+# to bake the safety in than rely on operators to remember kill -9.
+ExecStart=/usr/local/bin/hermes gateway run --replace
 Restart=on-failure
 RestartSec=3
 StandardOutput=journal
