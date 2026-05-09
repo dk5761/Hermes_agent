@@ -11,7 +11,9 @@
     "android": "expo run:android",
     "android:device": "expo run:android --device",
     "android:release": "expo run:android --variant release",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "update:prod": "bash scripts/safe-eas-update.sh --channel production",
+    "update:preview": "bash scripts/safe-eas-update.sh --channel preview"
   },
   "dependencies": {
     "@expo-google-fonts/inter": "^0.4.2",
