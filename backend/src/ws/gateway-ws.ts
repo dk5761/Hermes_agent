@@ -30,6 +30,13 @@ import {
   AttachmentUnauthorizedError,
   type AttachmentBridgeWarning,
 } from "./attachment-bridge.js";
+import {
+  AttachmentResolutionError,
+  ImageAttachFailedError,
+  PromptSubmitFailedError,
+  prepareImageAttach,
+  submitPrompt,
+} from "./attach-and-submit.js";
 import type { ChatRunTimer } from "../observability/chat-run-timer.js";
 import type { LiveActivityPusher } from "../push/apns-live-activity.js";
 import type { ChatCompleteNotifier } from "../push/chat-complete.js";
@@ -456,29 +463,6 @@ class GatewayClientHandler {
     // so we can't fetch the title from there — derive it locally instead.
     await this.maybeAutoTitle(sid, text);
 
-    let bridgeResult: Awaited<ReturnType<AttachmentBridge["build"]>> | null = null;
-    if (attachmentIds.length > 0) {
-      try {
-        bridgeResult = await this.deps.attachmentBridge.build({
-          userId,
-          appSessionId: sid,
-          attachmentIds,
-        });
-      } catch (err) {
-        if (err instanceof AttachmentUnauthorizedError) {
-          this.sendControl("control.error", {
-            error: "attachment_unauthorized",
-            attachmentId: err.attachmentId,
-          });
-          return;
-        }
-        this.log.error({ err }, "attachment bridge failed");
-        this.sendControl("control.error", { error: "attachment_resolution_failed" });
-        return;
-      }
-      this.surfaceAttachmentWarnings(bridgeResult.warnings);
-    }
-
     const sharedClient = this.deps.wsPool.getOrCreateShared();
     let hermesSessionId = await this.getOrCreateHermesSession(sid);
     if (!hermesSessionId) {
@@ -498,28 +482,39 @@ class GatewayClientHandler {
     // so the user still gets a response, just without the override applied.
     await this.maybeApplySessionModelOverride(sid, hermesSessionId, sharedClient);
 
-    // image.attach must precede prompt.submit so Hermes binds the image to the
-    // current turn (per HERMES_CONTRACT.md). Failures here are surfaced as
-    // control.error and abort the turn rather than silently dropping images.
-    if (bridgeResult) {
-      for (const img of bridgeResult.imagePaths) {
-        try {
-          await sharedClient.request("image.attach", {
-            session_id: hermesSessionId,
-            path: img.localPath,
-          });
-        } catch (err) {
-          this.log.error({ err, attachmentId: img.attachmentId }, "image.attach failed");
-          this.sendControl("control.error", {
-            error: "image_attach_failed",
-            attachmentId: img.attachmentId,
-          });
-          return;
-        }
+    // Resolve attachments + image.attach loop. Errors are mapped to the
+    // existing control.error WS payloads so the mobile client's surface is
+    // unchanged. The voice-memo HTTP route uses the same helper but maps
+    // these to its own 4xx responses.
+    let prepResult: Awaited<ReturnType<typeof prepareImageAttach>>;
+    try {
+      prepResult = await prepareImageAttach(
+        { sharedClient, attachmentBridge: this.deps.attachmentBridge, log: this.log },
+        { userId, appSessionId: sid, hermesSessionId, attachmentIds, text },
+      );
+    } catch (err) {
+      if (err instanceof AttachmentUnauthorizedError) {
+        this.sendControl("control.error", {
+          error: "attachment_unauthorized",
+          attachmentId: err.attachmentId,
+        });
+        return;
       }
+      if (err instanceof ImageAttachFailedError) {
+        this.sendControl("control.error", {
+          error: "image_attach_failed",
+          attachmentId: err.attachmentId,
+        });
+        return;
+      }
+      if (err instanceof AttachmentResolutionError) {
+        this.sendControl("control.error", { error: "attachment_resolution_failed" });
+        return;
+      }
+      throw err;
     }
-
-    const finalText = buildFinalPromptText(text, bridgeResult?.promptPrefix ?? "");
+    this.surfaceAttachmentWarnings(prepResult.warnings);
+    const { finalText, bridgeResult } = prepResult;
 
     // Persist the user turn to both logs:
     //   - ws_events: short-lived replay log used for mid-stream reconnect
@@ -554,62 +549,29 @@ class GatewayClientHandler {
     }
 
     try {
-      await sharedClient.request("prompt.submit", {
-        session_id: hermesSessionId,
-        text: finalText,
-      });
+      await submitPrompt(
+        { sharedClient, log: this.log },
+        {
+          hermesSessionId,
+          finalText,
+          recoverSession: async () => {
+            // chat.send's recovery: clear our session-id mapping in the
+            // app_sessions table, mint a fresh upstream session via
+            // session.create. The helper retries prompt.submit on the new id.
+            await this.clearHermesSessionMapping(sid);
+            return this.createHermesSession(sid);
+          },
+          applyOverrideAfterRecover: async (fresh) => {
+            await this.maybeApplySessionModelOverride(sid, fresh, sharedClient);
+          },
+        },
+      );
     } catch (err) {
-      // Hermes' tui_gateway sessions live in-memory only — they vanish on
-      // Hermes restart or after idle eviction. Two failure modes we can
-      // recover from:
-      //   1. session_gone: stale id; recreate then retry.
-      //   2. session_busy (Hermes code 4009): a prior run() crashed before
-      //      finally{} reset `running=False`. Send session.interrupt to
-      //      force-clear, brief sleep, then retry on the same session id.
-      const reason = errorMessage(err);
-      this.log.warn({ err, hermesSessionId, reason }, "prompt.submit failed");
-      const sessionGone =
-        /session/i.test(reason) &&
-        /not found|unknown|invalid|expired|missing|no such|gone|evicted/i.test(reason);
-      const isInvalidParams = /-32602|invalid params/i.test(reason);
-      const sessionBusy = /4009|session busy|busy/i.test(reason);
-
-      if (sessionBusy && !sessionGone && !isInvalidParams) {
-        this.log.warn({ hermesSessionId }, "upstream session busy, interrupting then retrying");
-        try {
-          await sharedClient.request("session.interrupt", { session_id: hermesSessionId });
-          // Give Hermes' run-thread a moment to hit its finally{} and clear
-          // the running flag.
-          await new Promise((r) => setTimeout(r, 300));
-          await sharedClient.request("prompt.submit", {
-            session_id: hermesSessionId,
-            text: finalText,
-          });
-          return;
-        } catch (retryErr) {
-          this.log.error({ err: retryErr }, "prompt.submit retry after interrupt failed");
-          // Fall through to recreate path below — interrupt didn't help.
-        }
+      if (err instanceof PromptSubmitFailedError) {
+        this.sendControl("control.error", { error: "prompt_submit_failed" });
+        return;
       }
-
-      if (sessionGone || isInvalidParams || sessionBusy) {
-        this.log.warn({ hermesSessionId }, "upstream session unrecoverable, recreating");
-        try {
-          await this.clearHermesSessionMapping(sid);
-          const fresh = await this.createHermesSession(sid);
-          await this.maybeApplySessionModelOverride(sid, fresh, sharedClient);
-          await sharedClient.request("prompt.submit", {
-            session_id: fresh,
-            text: finalText,
-          });
-          return;
-        } catch (retryErr) {
-          this.log.error({ err: retryErr }, "prompt.submit retry after recreate failed");
-          this.sendControl("control.error", { error: "prompt_submit_failed" });
-          return;
-        }
-      }
-      this.sendControl("control.error", { error: "prompt_submit_failed" });
+      throw err;
     }
   }
 
@@ -923,11 +885,6 @@ class GatewayClientHandler {
       this.detachUpstream = null;
     }
   }
-}
-
-function buildFinalPromptText(userText: string, promptPrefix: string): string {
-  if (!promptPrefix) return userText;
-  return `${promptPrefix}\n\n${userText}`;
 }
 
 async function handleUpstreamEvent(
@@ -1335,17 +1292,6 @@ async function maybePersistHistory(
     log.warn({ err, kind, upstreamType }, "failed to persist chat history row");
     return null;
   }
-}
-
-// Best-effort string extraction from arbitrary thrown values for log + match.
-function errorMessage(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  if (typeof err === "string") return err;
-  if (err && typeof err === "object" && "message" in err) {
-    const m = (err as { message: unknown }).message;
-    if (typeof m === "string") return m;
-  }
-  return String(err);
 }
 
 // ─── Live Activity push relay ────────────────────────────────────────────
