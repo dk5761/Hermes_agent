@@ -271,6 +271,7 @@ export async function buildServer(deps: BuildServerDeps): Promise<FastifyInstanc
     db: deps.dbHandle.db,
     requireAuth,
     wsPool: deps.wsPool,
+    attachmentBridge,
     blobRoot: deps.config.STORAGE_LOCAL_ROOT,
     logger: deps.logger,
   });

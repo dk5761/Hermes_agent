@@ -12,6 +12,16 @@ import { HermesRpcError } from "../hermes/types.js";
 import { transcribeWithRetry } from "./transcribe.js";
 import { ensureHermesSession } from "../sessions/ensure-hermes-session.js";
 import { extractAudioPeaks } from "../blobs/audio-peaks.js";
+import {
+  AttachmentBridge,
+  AttachmentUnauthorizedError,
+} from "../ws/attachment-bridge.js";
+import {
+  ImageAttachFailedError,
+  PromptSubmitFailedError,
+  prepareImageAttach,
+  submitPrompt,
+} from "../ws/attach-and-submit.js";
 
 // --------------------------------------------------------------------------
 // Constants
@@ -34,6 +44,10 @@ export interface VoiceMemoRoutesDeps {
   db: Db;
   requireAuth: preHandlerHookHandler;
   wsPool: HermesWsPool;
+  /** Same instance the WS gateway holds — resolves attachment ids to local
+   * file paths so we can issue `image.attach` for each before submitting
+   * the transcript as a prompt. */
+  attachmentBridge: AttachmentBridge;
   /** Absolute path to the blob root directory (STORAGE_LOCAL_ROOT). */
   blobRoot: string;
   logger: AppLogger;
@@ -108,13 +122,17 @@ async function writeVoiceBlob(
  * @param text         Transcript text to submit.
  * @param logger       Structured logger.
  */
-async function forwardTranscriptToHermes(
-  db: Db,
-  wsPool: HermesWsPool,
-  appSessionId: string,
-  text: string,
-  logger: AppLogger,
-): Promise<void> {
+async function forwardTranscriptToHermes(args: {
+  db: Db;
+  wsPool: HermesWsPool;
+  attachmentBridge: AttachmentBridge;
+  appSessionId: string;
+  userId: string;
+  text: string;
+  attachmentIds: readonly string[];
+  logger: AppLogger;
+}): Promise<void> {
+  const { db, wsPool, attachmentBridge, appSessionId, userId, text, attachmentIds, logger } = args;
   const client = wsPool.getOrCreateShared();
 
   let hermesSessionId: string;
@@ -130,57 +148,59 @@ async function forwardTranscriptToHermes(
     return;
   }
 
-  const submitOnce = async (hsid: string): Promise<void> => {
-    await client.request("prompt.submit", {
-      session_id: hsid,
-      text,
-    });
-  };
+  // bridge.build → image.attach loop → finalText. Errors are logged and
+  // swallowed because the user.message row is already persisted; failing
+  // here just means Hermes never sees the images for this turn (the user
+  // can retry via retry-transcription, which goes through the same path).
+  let finalText: string;
+  try {
+    const prep = await prepareImageAttach(
+      { sharedClient: client, attachmentBridge, log: logger },
+      { userId, appSessionId, hermesSessionId, attachmentIds, text },
+    );
+    finalText = prep.finalText;
+  } catch (err) {
+    if (err instanceof AttachmentUnauthorizedError) {
+      logger.warn({ err, appSessionId, attachmentId: err.attachmentId }, "voice-memo: attachment unauthorized");
+      // Submit the transcript without images — better than nothing.
+      finalText = text;
+    } else if (err instanceof ImageAttachFailedError) {
+      logger.warn({ err, appSessionId, attachmentId: err.attachmentId }, "voice-memo: image.attach failed");
+      finalText = text;
+    } else {
+      logger.warn({ err, appSessionId }, "voice-memo: attachment resolution failed");
+      finalText = text;
+    }
+  }
 
   try {
-    await submitOnce(hermesSessionId);
+    await submitPrompt(
+      { sharedClient: client, log: logger },
+      {
+        hermesSessionId,
+        finalText,
+        recoverSession: async () => {
+          // voice-memo's recovery path: clear the appSessions.hermesSessionId
+          // mapping and ensure-create a fresh upstream session. The helper
+          // retries prompt.submit on the new id.
+          const now = Math.floor(Date.now() / 1000);
+          await db
+            .update(appSessions)
+            .set({ hermesSessionId: null, updatedAt: now })
+            .where(eq(appSessions.id, appSessionId));
+          return ensureHermesSession({ db, wsPool, appSessionId, logger });
+        },
+      },
+    );
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    const sessionGone =
-      /session/i.test(msg) &&
-      /not found|unknown|invalid|expired|missing|no such|gone|evicted/i.test(msg);
-    const sessionBusy = /4009|session busy|busy/i.test(msg);
-    const isInvalidParams = /-32602|invalid params/i.test(msg);
-
-    if (sessionBusy && !sessionGone && !isInvalidParams) {
-      // Interrupt the stuck session and retry once.
-      try {
-        await client.request("session.interrupt", { session_id: hermesSessionId });
-        await new Promise((r) => setTimeout(r, 300));
-        await submitOnce(hermesSessionId);
-        return;
-      } catch (retryErr) {
-        logger.error({ err: retryErr, appSessionId }, "voice-memo: prompt.submit retry after interrupt failed");
-      }
+    if (err instanceof PromptSubmitFailedError) {
+      // The user.message row is already persisted with the transcript. The
+      // worst case is Hermes never replies — the bubble shows correctly,
+      // user can re-prompt or retry.
+      logger.warn({ err, appSessionId }, "voice-memo: prompt.submit failed (non-recoverable)");
+      return;
     }
-
-    if (sessionGone || isInvalidParams || sessionBusy) {
-      // Recreate the session and retry.
-      try {
-        const now = Math.floor(Date.now() / 1000);
-        await db
-          .update(appSessions)
-          .set({ hermesSessionId: null, updatedAt: now })
-          .where(eq(appSessions.id, appSessionId));
-        const fresh = await ensureHermesSession({
-          db,
-          wsPool,
-          appSessionId,
-          logger,
-        });
-        await submitOnce(fresh);
-        return;
-      } catch (retryErr) {
-        logger.error({ err: retryErr, appSessionId }, "voice-memo: prompt.submit retry after recreate failed");
-      }
-    }
-
-    logger.warn({ err, appSessionId }, "voice-memo: prompt.submit failed (non-recoverable)");
+    throw err;
   }
 }
 
@@ -195,6 +215,52 @@ async function forwardTranscriptToHermes(
  * @param raw  Raw JSON string from the multipart field, or null if absent.
  * @returns Validated peaks array, or null if absent / invalid.
  */
+/** Per-message cap, mirrors chat.send's `attachmentIds: z.array(...).max(20)`. */
+const MAX_ATTACHMENTS_PER_MESSAGE = 20;
+
+/**
+ * Parse a JSON-stringified string[] from the multipart `attachmentIds` field.
+ *
+ * Returns:
+ *   - `string[]` when valid (or empty array if absent / explicitly "[]").
+ *   - `"invalid"` for malformed JSON, non-array values, non-string elements,
+ *     or arrays exceeding `MAX_ATTACHMENTS_PER_MESSAGE`. Caller maps this
+ *     to HTTP 400.
+ */
+function parseAttachmentIds(raw: string | null): string[] | "invalid" {
+  if (raw === null || raw === "") return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return "invalid";
+  }
+  if (!Array.isArray(parsed)) return "invalid";
+  if (parsed.length > MAX_ATTACHMENTS_PER_MESSAGE) return "invalid";
+  for (const v of parsed) {
+    if (typeof v !== "string" || v.length === 0) return "invalid";
+  }
+  return parsed as string[];
+}
+
+/**
+ * Read attachmentIds from an existing chat_history `payload_json`. Used by
+ * retry-transcription so a retried voice memo forwards the same images
+ * Hermes would have seen on the first attempt. Tolerates malformed
+ * payloads and returns [] (the row stays valid; just no images forwarded).
+ */
+function readAttachmentIdsFromPayload(payloadJson: string): string[] {
+  try {
+    const obj = JSON.parse(payloadJson);
+    if (!obj || typeof obj !== "object") return [];
+    const ids = (obj as { attachmentIds?: unknown }).attachmentIds;
+    if (!Array.isArray(ids)) return [];
+    return ids.filter((v): v is string => typeof v === "string" && v.length > 0);
+  } catch {
+    return [];
+  }
+}
+
 function parseClientPeaks(raw: string | null): number[] | null {
   if (raw === null) return null;
   let parsed: unknown;
@@ -258,8 +324,9 @@ function buildMessageEnvelope(row: {
   transcriptionError: string | null;
   createdAt: number;
   audioPeaks: number[] | null;
+  attachmentIds?: readonly string[];
 }) {
-  return {
+  const env: Record<string, unknown> = {
     id: row.id,
     role: "user" as const,
     content: row.content,
@@ -270,6 +337,10 @@ function buildMessageEnvelope(row: {
     createdAt: row.createdAt,
     audioPeaks: row.audioPeaks,
   };
+  if (row.attachmentIds && row.attachmentIds.length > 0) {
+    env["attachmentIds"] = [...row.attachmentIds];
+  }
+  return env;
 }
 
 // --------------------------------------------------------------------------
@@ -289,7 +360,7 @@ export async function registerVoiceMemoRoutes(
   app: FastifyInstance,
   deps: VoiceMemoRoutesDeps,
 ): Promise<void> {
-  const { db, requireAuth, wsPool, blobRoot, logger } = deps;
+  const { db, requireAuth, wsPool, attachmentBridge, blobRoot, logger } = deps;
 
   // ---------- Route A: POST /sessions/:id/messages/voice ----------
 
@@ -322,6 +393,7 @@ export async function registerVoiceMemoRoutes(
       let mime = "audio/m4a";
       let audioDurationMs: number | null = null;
       let clientPeaksRaw: string | null = null;
+      let attachmentIdsRaw: string | null = null;
       let truncated = false;
 
       try {
@@ -338,6 +410,10 @@ export async function registerVoiceMemoRoutes(
             }
           } else if (part.type === "field" && part.fieldname === "audioPeaks") {
             clientPeaksRaw = typeof part.value === "string" ? part.value : null;
+          } else if (part.type === "field" && part.fieldname === "attachmentIds") {
+            // JSON-stringified string[]. Parsed/validated below so a malformed
+            // value rejects with 400 rather than aborting the whole upload.
+            attachmentIdsRaw = typeof part.value === "string" ? part.value : null;
           }
         }
       } catch (err) {
@@ -347,6 +423,12 @@ export async function registerVoiceMemoRoutes(
         }
         logger.warn({ err, sessionId }, "voice-memo: multipart parse error");
         return reply.code(400).send({ error: "invalid_body" });
+      }
+
+      // Validate attachmentIds: at most 20 strings (mirrors chat.send).
+      const attachmentIds = parseAttachmentIds(attachmentIdsRaw);
+      if (attachmentIds === "invalid") {
+        return reply.code(400).send({ error: "invalid_attachment_ids" });
       }
 
       if (!buffer) {
@@ -380,13 +462,21 @@ export async function registerVoiceMemoRoutes(
       const peaks = await resolveAudioPeaks(absolutePath, clientPeaksRaw, sessionId, logger);
 
       // Insert chat_history row immediately so the blob + row survive STT failure.
+      // attachmentIds is persisted on the row from the start so the bubble
+      // shows image thumbnails before transcription completes; same dedup
+      // path as text+image bubbles uses (chat-store keys live messages off
+      // hist-u-${historyId}).
       const now = Math.floor(Date.now() / 1000);
+      const initialPayload: Record<string, unknown> = { text: "" };
+      if (attachmentIds.length > 0) {
+        initialPayload["attachmentIds"] = [...attachmentIds];
+      }
       const inserted = await db
         .insert(chatHistory)
         .values({
           appSessionId: sessionId,
           kind: "user.message",
-          payloadJson: JSON.stringify({ text: "" }),
+          payloadJson: JSON.stringify(initialPayload),
           searchText: "",
           createdAt: now,
           audioBlobPath: relKey,
@@ -431,17 +521,30 @@ export async function registerVoiceMemoRoutes(
 
       if (sttOk) {
         // SUCCESS: update row with transcript and forward to Hermes.
+        const completedPayload: Record<string, unknown> = { text: transcript };
+        if (attachmentIds.length > 0) {
+          completedPayload["attachmentIds"] = [...attachmentIds];
+        }
         await db
           .update(chatHistory)
           .set({
-            payloadJson: JSON.stringify({ text: transcript }),
+            payloadJson: JSON.stringify(completedPayload),
             searchText: transcript,
             transcriptionStatus: "completed",
             transcriptionError: null,
           })
           .where(eq(chatHistory.id, rowId));
 
-        void forwardTranscriptToHermes(db, wsPool, sessionId, transcript, logger);
+        void forwardTranscriptToHermes({
+          db,
+          wsPool,
+          attachmentBridge,
+          appSessionId: sessionId,
+          userId: user.id,
+          text: transcript,
+          attachmentIds,
+          logger,
+        });
 
         return reply.code(201).send({
           message: buildMessageEnvelope({
@@ -453,6 +556,7 @@ export async function registerVoiceMemoRoutes(
             transcriptionError: null,
             createdAt: now,
             audioPeaks: peaks,
+            attachmentIds,
           }),
         });
       } else {
@@ -475,6 +579,7 @@ export async function registerVoiceMemoRoutes(
             transcriptionError: sttError,
             createdAt: now,
             audioPeaks: peaks,
+            attachmentIds,
           }),
         });
       }
@@ -511,6 +616,7 @@ export async function registerVoiceMemoRoutes(
         .select({
           id: chatHistory.id,
           appSessionId: chatHistory.appSessionId,
+          payloadJson: chatHistory.payloadJson,
           audioBlobPath: chatHistory.audioBlobPath,
           audioDurationMs: chatHistory.audioDurationMs,
           transcriptionStatus: chatHistory.transcriptionStatus,
@@ -589,10 +695,18 @@ export async function registerVoiceMemoRoutes(
       }
 
       if (sttOk) {
+        // Read attachmentIds from the original payload (set at multipart-parse
+        // time on the initial /messages/voice POST) so the retry forwards
+        // the same images Hermes would have seen on the first try.
+        const existingAttachmentIds = readAttachmentIdsFromPayload(msg.payloadJson);
+        const completedPayload: Record<string, unknown> = { text: transcript };
+        if (existingAttachmentIds.length > 0) {
+          completedPayload["attachmentIds"] = existingAttachmentIds;
+        }
         await db
           .update(chatHistory)
           .set({
-            payloadJson: JSON.stringify({ text: transcript }),
+            payloadJson: JSON.stringify(completedPayload),
             searchText: transcript,
             transcriptionStatus: "completed",
             transcriptionError: null,
@@ -600,7 +714,16 @@ export async function registerVoiceMemoRoutes(
           .where(eq(chatHistory.id, msgId));
 
         // Forward to Hermes — agent never saw this message during the failed attempt.
-        void forwardTranscriptToHermes(db, wsPool, sessionId, transcript, logger);
+        void forwardTranscriptToHermes({
+          db,
+          wsPool,
+          attachmentBridge,
+          appSessionId: sessionId,
+          userId: user.id,
+          text: transcript,
+          attachmentIds: existingAttachmentIds,
+          logger,
+        });
 
         return reply.code(200).send({
           message: buildMessageEnvelope({
