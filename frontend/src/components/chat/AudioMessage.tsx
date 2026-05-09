@@ -79,6 +79,14 @@ export interface AudioMessageProps {
   transcriptionError?: string | null;
   /** Waveform peaks (80 floats 0..1). Null/empty → plain scrubber. */
   audioPeaks?: number[] | null;
+  /**
+   * When true, render only the inner controls (play/scrubber/transcript).
+   * Caller is responsible for the surrounding bubble chrome (alignment,
+   * background, border, padding, width). Used by user voice-memo bubbles
+   * that bundle attached images — both pieces share a single outer bubble
+   * instead of stacking two.
+   */
+  embedded?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -376,6 +384,7 @@ export function AudioMessage({
   transcriptionStatus,
   transcriptionError,
   audioPeaks,
+  embedded = false,
 }: AudioMessageProps) {
   // Source-of-truth URI for playback. Prefer the local file (instant +
   // works offline) — when the upload completes, the chat-store ID swaps
@@ -447,32 +456,10 @@ export function AudioMessage({
   // User variant: right-aligned ink bubble.
   const isAssistant = variant === "assistant";
 
-  return (
-    <View style={{ paddingHorizontal: 12, paddingVertical: 4, alignItems: isAssistant ? "flex-start" : "flex-end" }}>
-      <View
-        style={[
-          styles.bubble,
-          {
-            backgroundColor: isAssistant ? tokens.surface : tokens.ink,
-            borderWidth: isAssistant ? 1 : 0,
-            borderColor: isAssistant ? tokens.line : undefined,
-            // Fixed width regardless of accordion state. Calc:
-            //   bubble pad-x = 24 (12+12)
-            //   play button  = 34
-            //   gap          = 10
-            //   waveform     = 159 (80 bars × 1pt + 79 gaps × 1pt)
-            //   gap          = 10
-            //   duration     = ~50 (M:SS / M:SS)
-            //   total        = 287, round to 295 for a small visual buffer.
-            // Fits inside iPhone SE's 78% maxWidth chat-row constraint
-            // (375pt × 0.78 ≈ 292) — bubble itself sits at the cap.
-            // overflow:hidden so any sub-pixel rounding in the waveform
-            // can't paint outside the bubble.
-            width: 295,
-            overflow: "hidden",
-          },
-        ]}
-      >
+  // Body content — the play row + transcription accordion. Same in both
+  // standalone and embedded modes; only the surrounding chrome differs.
+  const body = (
+    <>
         {/* ── Playback row ── */}
         <Row gap={10} align="center">
           {/* Play / Pause / Loading button */}
@@ -650,6 +637,43 @@ export function AudioMessage({
             )}
           </Pressable>
         ) : null}
+    </>
+  );
+
+  // Embedded: caller owns the bubble chrome (alignment, bg, border,
+  // padding). Used for user voice memos that ship with attached images so
+  // both pieces fit under one bubble (instead of stacking two cards).
+  if (embedded) {
+    return body;
+  }
+
+  return (
+    <View style={{ paddingHorizontal: 12, paddingVertical: 4, alignItems: isAssistant ? "flex-start" : "flex-end" }}>
+      <View
+        style={[
+          styles.bubble,
+          {
+            backgroundColor: isAssistant ? tokens.surface : tokens.ink,
+            borderWidth: isAssistant ? 1 : 0,
+            borderColor: isAssistant ? tokens.line : undefined,
+            // Fixed width regardless of accordion state. Calc:
+            //   bubble pad-x = 24 (12+12)
+            //   play button  = 34
+            //   gap          = 10
+            //   waveform     = 159 (80 bars × 1pt + 79 gaps × 1pt)
+            //   gap          = 10
+            //   duration     = ~50 (M:SS / M:SS)
+            //   total        = 287, round to 295 for a small visual buffer.
+            // Fits inside iPhone SE's 78% maxWidth chat-row constraint
+            // (375pt × 0.78 ≈ 292) — bubble itself sits at the cap.
+            // overflow:hidden so any sub-pixel rounding in the waveform
+            // can't paint outside the bubble.
+            width: 295,
+            overflow: "hidden",
+          },
+        ]}
+      >
+        {body}
       </View>
     </View>
   );

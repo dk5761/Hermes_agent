@@ -176,6 +176,15 @@ async function resolveCachedUri(
   messageId: string,
   blobUrl: string,
 ): Promise<string> {
+  // Local file URI (just-recorded voice memo, before upload completes) —
+  // expo-audio's createAudioPlayer takes file:// URIs natively, no need to
+  // route through the HTTP cache. Without this guard, the function below
+  // builds `${API_URL}file:///…` and downloadFileAsync chokes on the
+  // malformed URL, leaving the bubble stuck in "loading" state.
+  if (blobUrl.startsWith("file://")) {
+    return blobUrl;
+  }
+
   const ext = extFromBlobUrl(blobUrl);
   const cached = cacheFileFor(messageId, ext);
   const filename = `${messageId}${ext}`;

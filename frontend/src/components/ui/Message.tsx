@@ -224,45 +224,71 @@ function UserRow({
     // Extract the numeric row id from the stable chat-store id "hist-u-<n>".
     // For optimistic local-<uuid> rows, the full id is passed through.
     const rawId = message.id.startsWith("hist-u-") ? message.id.slice(7) : message.id;
-    const audioBubble = (
-      <AudioMessage
-        messageId={rawId}
-        sessionId={sessionId ?? ""}
-        audioBlobUrl={message.audioBlobUrl}
-        localAudioUri={message.localAudioUri}
-        audioDurationMs={message.audioDurationMs ?? 0}
-        transcript={message.text}
-        transcriptionStatus={(message.transcriptionStatus ?? "completed") as TranscriptionStatus}
-        transcriptionError={message.transcriptionError}
-        audioPeaks={message.audioPeaks ?? null}
-      />
-    );
     const hasAttachments =
       (message.attachments && message.attachments.length > 0) ||
       (message.attachmentRefs && message.attachmentRefs.length > 0);
-    if (!hasAttachments) return audioBubble;
-    // Voice memo + image: show attachment thumbnails above the audio bubble.
-    // The thumbnails sit in their own bubble (matching the text+image
-    // layout) so the audio bubble keeps its native AudioMessage chrome.
+
+    // Voice-only: AudioMessage owns its own right-aligned ink bubble.
+    if (!hasAttachments) {
+      return (
+        <AudioMessage
+          messageId={rawId}
+          sessionId={sessionId ?? ""}
+          audioBlobUrl={message.audioBlobUrl}
+          localAudioUri={message.localAudioUri}
+          audioDurationMs={message.audioDurationMs ?? 0}
+          transcript={message.text}
+          transcriptionStatus={(message.transcriptionStatus ?? "completed") as TranscriptionStatus}
+          transcriptionError={message.transcriptionError}
+          audioPeaks={message.audioPeaks ?? null}
+        />
+      );
+    }
+
+    // Voice + attachments: merge into a single bubble. Image grid on top,
+    // thin divider, audio playback + transcription accordion below.
+    // AudioMessage runs in `embedded` mode so it skips its own chrome.
     return (
-      <View>
-        <View style={{ paddingHorizontal: 12, paddingTop: 4, alignItems: "flex-end" }}>
+      <View style={{ paddingHorizontal: 12, paddingVertical: 4, alignItems: "flex-end" }}>
+        <View
+          style={{
+            // Match AudioMessage's standalone bubble width so the
+            // play row + waveform aren't squeezed when an image grid
+            // forces the bubble wide.
+            width: 295,
+            paddingHorizontal: 12,
+            paddingVertical: 12,
+            borderRadius: 18,
+            backgroundColor: tokens.ink,
+            overflow: "hidden",
+          }}
+        >
+          <UserAttachments
+            attachments={message.attachments}
+            attachmentRefs={message.attachmentRefs}
+          />
+          {/* Hairline divider between attachments and audio controls. */}
           <View
             style={{
-              maxWidth: "78%",
-              paddingHorizontal: 14,
-              paddingVertical: 10,
-              borderRadius: 18,
-              backgroundColor: tokens.ink,
+              height: 1,
+              backgroundColor: tokens.lineSoft,
+              opacity: 0.5,
+              marginVertical: 10,
             }}
-          >
-            <UserAttachments
-              attachments={message.attachments}
-              attachmentRefs={message.attachmentRefs}
-            />
-          </View>
+          />
+          <AudioMessage
+            messageId={rawId}
+            sessionId={sessionId ?? ""}
+            audioBlobUrl={message.audioBlobUrl}
+            localAudioUri={message.localAudioUri}
+            audioDurationMs={message.audioDurationMs ?? 0}
+            transcript={message.text}
+            transcriptionStatus={(message.transcriptionStatus ?? "completed") as TranscriptionStatus}
+            transcriptionError={message.transcriptionError}
+            audioPeaks={message.audioPeaks ?? null}
+            embedded
+          />
         </View>
-        {audioBubble}
       </View>
     );
   }
