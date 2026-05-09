@@ -26,11 +26,48 @@
 #   ALLOW_LOCAL_URL=1 ./scripts/safe-eas-update.sh --channel development ...
 set -euo pipefail
 
-API_URL="${EXPO_PUBLIC_API_URL:-}"
-WS_URL="${EXPO_PUBLIC_WS_URL:-}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+ENV_FILE="$PROJECT_DIR/.env"
 
-# If unset locally, eas update will pull from EAS env vars on the server,
-# which is the desired path. Empty here is a non-issue.
+# Read a variable's value from a .env-style file. Strips surrounding quotes
+# and ignores commented lines. Returns empty if the file is missing or the
+# variable isn't defined.
+read_env_var() {
+  local file="$1" name="$2"
+  [[ -f "$file" ]] || return 0
+  awk -v n="$name" '
+    /^[[:space:]]*#/ { next }
+    {
+      sub(/^[[:space:]]*export[[:space:]]+/, "")
+      eq = index($0, "=")
+      if (eq == 0) next
+      key = substr($0, 1, eq - 1)
+      gsub(/[[:space:]]+$/, "", key)
+      if (key != n) next
+      val = substr($0, eq + 1)
+      gsub(/[[:space:]]+$/, "", val)
+      gsub(/^"|"$/, "", val)
+      gsub(/^'\''|'\''$/, "", val)
+      print val
+      exit
+    }
+  ' "$file"
+}
+
+# Resolve effective values. Shell process.env wins over .env (matches metro
+# behavior), but we check BOTH because metro reads .env at bundle time and
+# we want to fail fast if either source has a local URL.
+SHELL_API="${EXPO_PUBLIC_API_URL:-}"
+SHELL_WS="${EXPO_PUBLIC_WS_URL:-}"
+ENV_API="$(read_env_var "$ENV_FILE" EXPO_PUBLIC_API_URL)"
+ENV_WS="$(read_env_var "$ENV_FILE" EXPO_PUBLIC_WS_URL)"
+
+API_URL="${SHELL_API:-$ENV_API}"
+WS_URL="${SHELL_WS:-$ENV_WS}"
+
+# If both sources are empty, eas update will fall back entirely to EAS
+# server-side env vars (the desired path). Proceed.
 if [[ -z "$API_URL" && -z "$WS_URL" ]]; then
   exec eas update "$@"
 fi
@@ -39,22 +76,24 @@ fi
 LOCAL_RE='(localhost|127\.|192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[01])\.)'
 
 flag_local() {
-  local name="$1" value="$2"
-  if [[ -n "$value" && "$value" =~ $LOCAL_RE ]]; then
-    return 0
-  fi
-  return 1
+  local value="$1"
+  [[ -n "$value" && "$value" =~ $LOCAL_RE ]]
 }
 
 bad=0
-if flag_local "EXPO_PUBLIC_API_URL" "$API_URL"; then
-  echo "✗ EXPO_PUBLIC_API_URL points at a local address: $API_URL" >&2
-  bad=1
-fi
-if flag_local "EXPO_PUBLIC_WS_URL" "$WS_URL"; then
-  echo "✗ EXPO_PUBLIC_WS_URL points at a local address: $WS_URL" >&2
-  bad=1
-fi
+report() {
+  local name="$1" shell_v="$2" env_v="$3"
+  if flag_local "$shell_v"; then
+    echo "✗ $name (shell) points at a local address: $shell_v" >&2
+    bad=1
+  fi
+  if flag_local "$env_v"; then
+    echo "✗ $name (.env) points at a local address: $env_v" >&2
+    bad=1
+  fi
+}
+report "EXPO_PUBLIC_API_URL" "$SHELL_API" "$ENV_API"
+report "EXPO_PUBLIC_WS_URL" "$SHELL_WS" "$ENV_WS"
 
 if [[ "$bad" == "1" ]]; then
   if [[ "${ALLOW_LOCAL_URL:-}" == "1" ]]; then
