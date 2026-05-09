@@ -69,7 +69,6 @@ import { exportChat } from "@/util/export-chat";
 import { safeBack } from "@/util/nav";
 import { useChatStream } from "@/ws/use-chat-stream";
 import { useChatStore } from "@/state/chat-store";
-import { useTodosUi } from "@/state/todos";
 import { usePendingAttachments } from "@/state/pending-attachments";
 import { usePendingSends, type PendingFrame } from "@/state/pending-sends";
 import { pickDocument, pickImage, PickerError } from "@/attachments/picker";
@@ -777,19 +776,6 @@ export default function ChatScreen() {
     }, [sessionId]),
   );
 
-  // ─── pinned card lookup ──────────────────────────────────────────────────
-  const todosPinnedMap = useTodosUi((s) => s.pinnedByCard);
-  const pinnedToolId = useMemo<string | null>(() => {
-    if (!sessionId) return null;
-    const prefix = `${sessionId}:`;
-    for (const [k, v] of Object.entries(todosPinnedMap)) {
-      if (!v) continue;
-      if (!k.startsWith(prefix)) continue;
-      return k.slice(prefix.length);
-    }
-    return null;
-  }, [sessionId, todosPinnedMap]);
-
   const historyRows = useMemo<Row[]>(() => {
     if (!apiRows.length) return [];
     const out: Row[] = [];
@@ -859,6 +845,12 @@ export default function ChatScreen() {
         });
         pendingReasoning = null;
       }
+      // Todo tool calls render in the dedicated panel above the composer
+      // (a single live-updating card, not a per-update snapshot). Skip them
+      // in the inline list so older runs don't pile up as separate cards.
+      if (r.kind === "tool.call" && pickString(r.payload, "name") === "todo") {
+        continue;
+      }
       // Approval rows are resolved iff anything exists after them in history.
       const isLast = i === apiRows.length - 1;
       const resolvedApproval = !isLast;
@@ -888,7 +880,17 @@ export default function ChatScreen() {
   }, [apiRows]);
 
   const rows = useMemo<Row[]>(() => {
-    const live = buildRows(sessionState);
+    // Strip todo tool rows from both live messages and streaming entries —
+    // they render in the dedicated panel above the composer instead of
+    // inline. Without this filter the panel + inline TodoPlanCard double up.
+    const isTodoRow = (r: Row): boolean => {
+      if (r.rowKind === "msg" && r.data.kind === "tool" && r.data.name === "todo") {
+        return true;
+      }
+      if (r.rowKind === "stream-tool" && r.data.name === "todo") return true;
+      return false;
+    };
+    const live = buildRows(sessionState).filter((r) => !isTodoRow(r));
     // Live `pendingApprovals` is the source of truth for any approval still
     // open. If the same requestId also appears in history, drop the history
     // copy so we don't double-render the card.
@@ -943,59 +945,96 @@ export default function ChatScreen() {
   // the latest todos array post-update), fall back to history rows. The
   // tool_id we're matching is the upstream-stable id, persisted in
   // detail.tool_id for tool messages.
-  const pinnedTodoData = useMemo<{
+  // Auto-driven todo panel data: surfaces a SINGLE live-updating todo card
+  // above the composer (replaces the inline render). Resolution order:
+  //   1. In-flight todo from streaming.toolCalls (most recently updated).
+  //   2. Most recent completed todo from sessionState.messages.
+  //   3. Most recent todo from apiRows (cold-load).
+  // Returns the toolId so TodoPlanCard receives a stable cardKey for its
+  // collapse-state persistence.
+  const validateTodos = useCallback((raw: unknown): TodoItem[] | null => {
+    if (!Array.isArray(raw)) return null;
+    const allowed: ReadonlySet<TodoStatus> = new Set([
+      "pending",
+      "in_progress",
+      "completed",
+      "cancelled",
+    ]);
+    const out: TodoItem[] = [];
+    for (const v of raw) {
+      if (!v || typeof v !== "object") return null;
+      const r = v as Record<string, unknown>;
+      if (
+        typeof r.id !== "string" ||
+        typeof r.content !== "string" ||
+        typeof r.status !== "string" ||
+        !allowed.has(r.status as TodoStatus)
+      ) {
+        return null;
+      }
+      out.push({ id: r.id, content: r.content, status: r.status as TodoStatus });
+    }
+    return out;
+  }, []);
+
+  const panelTodoData = useMemo<{
+    toolId: string;
     todos: TodoItem[];
     status: "running" | "complete" | "error";
     createdAt: string;
   } | null>(() => {
-    if (!pinnedToolId) return null;
-    const validate = (raw: unknown): TodoItem[] | null => {
-      if (!Array.isArray(raw)) return null;
-      const allowed: ReadonlySet<TodoStatus> = new Set([
-        "pending",
-        "in_progress",
-        "completed",
-        "cancelled",
-      ]);
-      const out: TodoItem[] = [];
-      for (const v of raw) {
-        if (!v || typeof v !== "object") return null;
-        const r = v as Record<string, unknown>;
-        if (
-          typeof r.id !== "string" ||
-          typeof r.content !== "string" ||
-          typeof r.status !== "string" ||
-          !allowed.has(r.status as TodoStatus)
-        ) {
-          return null;
-        }
-        out.push({ id: r.id, content: r.content, status: r.status as TodoStatus });
+    // 1. Active streaming todo wins — gives live updates as tool.update fires.
+    const stream = sessionState?.streaming;
+    if (stream) {
+      let best: { tc: typeof stream.toolCalls extends Map<string, infer V> ? V : never; createdAt: string } | null = null;
+      for (const tc of stream.toolCalls.values()) {
+        if (tc.name !== "todo") continue;
+        if (!best || tc.createdAt > best.createdAt) best = { tc, createdAt: tc.createdAt };
       }
-      return out;
-    };
-    // Live messages — newest entry with matching tool_id wins.
+      if (best) {
+        const todos = validateTodos(best.tc.detail?.["todos"]);
+        if (todos) {
+          const detailToolId =
+            typeof best.tc.detail?.["tool_id"] === "string"
+              ? (best.tc.detail["tool_id"] as string)
+              : null;
+          return {
+            toolId: detailToolId ?? best.tc.id,
+            todos,
+            status: "running",
+            createdAt: best.tc.createdAt,
+          };
+        }
+      }
+    }
+    // 2. Last completed todo in live messages.
     const msgs = sessionState?.messages ?? [];
     for (let i = msgs.length - 1; i >= 0; i--) {
       const m = msgs[i];
       if (m.kind !== "tool" || m.name !== "todo") continue;
       const detailToolId =
         typeof m.detail?.tool_id === "string" ? (m.detail.tool_id as string) : null;
-      const ownId = detailToolId ?? m.id;
-      if (ownId !== pinnedToolId) continue;
-      const todos = validate(m.detail?.todos);
-      if (todos) return { todos, status: m.status, createdAt: m.createdAt };
+      const todos = validateTodos(m.detail?.todos);
+      if (todos) {
+        return {
+          toolId: detailToolId ?? m.id,
+          todos,
+          status: m.status,
+          createdAt: m.createdAt,
+        };
+      }
     }
-    // History rows fallback.
+    // 3. Cold-load fallback from history.
     for (let i = apiRows.length - 1; i >= 0; i--) {
       const r = apiRows[i];
       if (r.kind !== "tool.call") continue;
       const p = r.payload;
       if (p?.["name"] !== "todo") continue;
       const tid = typeof p["tool_id"] === "string" ? (p["tool_id"] as string) : null;
-      if (tid !== pinnedToolId) continue;
-      const todos = validate(p["todos"]);
+      const todos = validateTodos(p["todos"]);
       if (todos) {
         return {
+          toolId: tid ?? `hist-t-${r.id}`,
           todos,
           status: "complete",
           createdAt: new Date(r.createdAt * 1000).toISOString(),
@@ -1003,7 +1042,7 @@ export default function ChatScreen() {
       }
     }
     return null;
-  }, [pinnedToolId, sessionState, apiRows]);
+  }, [sessionState, apiRows, validateTodos]);
 
   // FlashList v2 with startRenderingFromBottom anchors the END of the data
   // array to the bottom of the viewport, so chronological order (oldest first,
@@ -2103,10 +2142,13 @@ export default function ChatScreen() {
           </Pressable>
         ) : null}
 
-        {/* Pinned plan card sits between the message list and the composer
-            (above the keyboard) so the active plan is always visible
-            without scrolling. */}
-        {pinnedToolId && pinnedTodoData && sessionId ? (
+        {/* Live todo panel — single auto-updating card above the composer.
+            Mirrors how Claude Code / Codex surface a running plan: out of
+            the message stream, pinned to the bottom of the viewport,
+            updates in place as tool.update events arrive. Inline todo
+            tool rows are filtered out of the chat list (see `rows` memo
+            and `renderItem`) so we never double-render. */}
+        {panelTodoData && sessionId ? (
           <View
             style={{
               paddingTop: 4,
@@ -2123,12 +2165,13 @@ export default function ChatScreen() {
             }}
           >
             <TodoPlanCard
-              toolCallId={pinnedToolId}
+              toolCallId={panelTodoData.toolId}
               sessionId={sessionId}
-              todos={pinnedTodoData.todos}
-              status={pinnedTodoData.status}
-              isLatest={latestTodoToolId === pinnedToolId}
-              createdAt={pinnedTodoData.createdAt}
+              todos={panelTodoData.todos}
+              status={panelTodoData.status}
+              isLatest
+              createdAt={panelTodoData.createdAt}
+              hidePinFooter
             />
           </View>
         ) : null}

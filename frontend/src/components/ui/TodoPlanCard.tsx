@@ -37,6 +37,12 @@ export interface TodoPlanCardProps {
   status: "running" | "complete" | "error";
   isLatest: boolean;
   createdAt: string;
+  /**
+   * When true, suppress the bottom Pin/Star action footer. Used by the
+   * sticky panel above the composer where the pin concept is moot — the
+   * panel always renders the latest todo automatically.
+   */
+  hidePinFooter?: boolean;
 }
 
 // ─── helpers ────────────────────────────────────────────────────────────────
@@ -147,6 +153,7 @@ export function TodoPlanCard({
   sessionId,
   todos,
   isLatest,
+  hidePinFooter,
 }: TodoPlanCardProps) {
   const tokens = useThemeTokens();
   const cardKey = `${sessionId}:${toolCallId}`;
@@ -244,7 +251,7 @@ export function TodoPlanCard({
         </>
       ) : null}
 
-      {!collapsed && isLatest ? (
+      {!collapsed && isLatest && !hidePinFooter ? (
         <>
           <View style={{ height: 1, backgroundColor: tokens.lineSoft }} />
           <Row
