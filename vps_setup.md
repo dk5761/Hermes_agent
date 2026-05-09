@@ -116,6 +116,22 @@ Snapshots of the Hermes side (not gateway DB) are taken via
 
 ## Deploy log
 
+### 2026-05-10 — voice-memo + image attachments
+
+- **Source:** `84d7aa9` (latest `main`).
+- **Previous:** `c7086c0` (Hermes vault re-scope to /opt/obsidian-vault/Hermes).
+- **Migrations applied:** none.
+- **Restarted:** `hermes-gateway` only.
+- **Backend changes:**
+  - `backend/src/ws/attach-and-submit.ts` (new) — shared `prepareImageAttach` + `submitPrompt` helpers extracted from `handleChatSend`. Encapsulates the bridge.build → image.attach loop → prompt.submit sequence with retry/recover.
+  - `backend/src/ws/gateway-ws.ts` — `handleChatSend` now consumes the helpers. Same control.error payloads as before, no protocol change.
+  - `backend/src/routes/voice-memo.ts` — POST /sessions/:id/messages/voice now accepts an optional `attachmentIds` multipart field (JSON-stringified string[], cap 20). Persists ids onto the user.message chat_history row at insert time so the audio bubble paints with image thumbnails before STT lands. After STT, `forwardTranscriptToHermes` runs the helpers (image.attach loop + prompt.submit) so Hermes sees the images alongside the transcript. Retry-transcription path reads attachmentIds back out of the persisted payload so retries forward the same image set.
+  - `backend/src/server.ts` — wires `attachmentBridge` into voice-memo deps.
+  - `backend/scripts/test-attach-and-submit.ts` (new) — 23 mocked-RPC assertions: happy path, no-attachments shortcut, all error throw classes, busy/recover retry branches.
+- **Backwards-compat:** `attachmentIds` is optional on the multipart body. Older mobile clients keep working unchanged.
+- **Verified:** `curl /health` → 200 + `/cron/outputs/by-job` → 401 + `/voice-blobs/voice/x.m4a` → 401 (route registered + auth-gated). Gateway uptime ticks from 0.
+- **Branch state on VPS after deploy:** `main` tracking `origin/main` at `84d7aa9`.
+
 ### 2026-05-10 — Obsidian vault re-scoped to /opt/obsidian-vault/Hermes
 
 - **Why:** Hermes was treating the entire Obsidian vault root (`/opt/obsidian-vault`) as its working area, so cron-generated folders (`raw/`, `wiki/`, `scripts/`, `graphify-out/`, `Daily Notes/`) plus `ME.md`/`AGENT.md` cluttered the user's Obsidian sidebar at root. The fix scopes Hermes to a `Hermes/` subfolder so the user's vault root stays clean (only `Hermes/` namespace and personal files like `Test note.md`).
@@ -376,6 +392,19 @@ eas update --channel production --message "<short summary> (<commit>)"
 
 Skipping this ships the developer's local LAN IP into production — see the
 2026-05-09 corrective entry below.
+
+### 2026-05-10 — voice-memo + image bubbles + iOS sim audio fix (production)
+
+- **Source commit:** `84d7aa9`. Covers the full voice + image feature plus a CAF/M4A audio sniff + rename so iOS-sim recordings actually play.
+- **Update group:** `b7191f3d-d5cd-48c2-9ba0-60f9a4fef750`.
+- **Channel:** `production`. Runtime: `0.1.0`. Native rebuild: none.
+- **What ships:**
+  - **Voice memo + image in one bubble.** Holding the mic with images queued in the composer now snapshots the uploaded attachments onto the new pending-memo, paints them on the optimistic bubble immediately, multipart-uploads them with the audio, and forwards both to Hermes (image.attach loop + prompt.submit with the transcript). Single ink bubble: image grid → divider → audio waveform + transcript accordion. Voice-only memos render as before.
+  - **Composer attachment chips stay visible during recording.** Users see what's queued while holding the mic; chips only clear on enqueue (mic-release), not on cancel.
+  - **iOS sim audio playback fix.** The simulator's expo-audio recorder produces CoreAudio Format files saved with `.m4a` extension. iOS expo-audio's createAudioPlayer refuses to play files whose bytes don't match the URI extension — silently. The bubble sat in "playing" with zero output. Now the playback controller sniffs the first 12 bytes after download (and on the local file:// path), and if the actual format doesn't match the declared extension it copies the file under a corrected extension (.caf for sim recordings, .mp3/.wav/.ogg for any future format drift). expo-audio plays cleanly. No-op on real iOS devices because the device recorder produces actual M4A.
+- **Backend pre-req:** `prepareImageAttach` + `submitPrompt` helpers + voice-memo route's `attachmentIds` parsing. Deployed to VPS at the same `84d7aa9` (see the matching VPS deploy log entry above).
+- **Env verification:** explicitly pinned `EXPO_PUBLIC_API_URL=https://hermes.drshnk.dev EXPO_PUBLIC_WS_URL=wss://hermes.drshnk.dev` on the publish command line. Bundle scan confirmed `hermes.drshnk.dev` present, no `192.168.x` LAN URL leaked.
+- **Dashboard:** https://expo.dev/accounts/nanatsuxiv/projects/hermes-app/updates/b7191f3d-d5cd-48c2-9ba0-60f9a4fef750
 
 ### 2026-05-09 — validate split-env release pipeline (production)
 
