@@ -525,20 +525,30 @@ class GatewayClientHandler {
     //   - ws_events: short-lived replay log used for mid-stream reconnect
     //   - chat_history: permanent narrative log used for cold-load history
     try {
-      const userPayload = {
+      const userPayloadBase = {
         text,
         finalText,
         attachmentIds: attachmentIds.length > 0 ? [...attachmentIds] : undefined,
         // Stored so the dedup query above can find this turn on replay.
         clientId,
       };
+      // History first so we can stamp `historyId` into the envelope payload —
+      // mobile uses it to reconcile live state against the chat_history row
+      // and avoid double-rendering the turn after a TanStack refetch (see
+      // chat-store.ts `gateway.user.message` handler).
+      const inserted = await appendHistory(
+        this.deps.db,
+        sid,
+        "user.message",
+        userPayloadBase,
+      );
+      const userPayload = { ...userPayloadBase, historyId: inserted.id };
       const env = await appendEvent(this.deps.db, {
         appSessionId: sid,
         type: "gateway.user.message",
         payload: userPayload,
       });
       this.sendJson(env);
-      await appendHistory(this.deps.db, sid, "user.message", userPayload);
     } catch (err) {
       this.log.warn({ err }, "failed to persist user message");
     }
@@ -1018,13 +1028,13 @@ async function handleUpstreamEvent(
             enriched["audio_duration_ms"] = relocated.durationMs;
             enriched["audio_peaks"] = relocated.peaks;
           }
-          const env = await appendEvent(db, {
-            appSessionId,
-            type: ev.type,
-            payload: enriched,
-          });
-          registry.emit(appSessionId, env);
-          await appendHistory(
+          // History first so the envelope payload can carry `historyId`.
+          // Mobile uses it (chat-store.ts message.complete reduce) to set the
+          // live assistant id to "hist-a-${historyId}", matching the same id
+          // history rows derive from chat_history.id — without this the
+          // turn duplicates after any session-messages refetch (e.g. on
+          // reconnect).
+          const inserted = await appendHistory(
             db,
             appSessionId,
             "assistant.message",
@@ -1040,6 +1050,13 @@ async function handleUpstreamEvent(
                 }
               : undefined,
           );
+          enriched["historyId"] = inserted.id;
+          const env = await appendEvent(db, {
+            appSessionId,
+            type: ev.type,
+            payload: enriched,
+          });
+          registry.emit(appSessionId, env);
           // Auto-title still runs on the first assistant turn — feed it the
           // enriched payload so the title is derived from the stripped text.
           void maybeReplaceFirstTurnTitle(
@@ -1086,21 +1103,22 @@ async function handleUpstreamEvent(
             enriched["audio_duration_ms"] = relocated.durationMs;
             enriched["audio_peaks"] = relocated.peaks;
 
-            const env = await appendEvent(db, {
-              appSessionId,
-              type: ev.type,
-              payload: enriched,
-            });
-            registry.emit(appSessionId, env);
-
-            // Persist chat_history row with audio columns populated.
-            await appendHistory(db, appSessionId, "tool.call", enriched, undefined, {
+            // History first so the envelope payload can carry `historyId`
+            // for mobile-side dedup (see chat-store.ts tool.complete reducer).
+            const inserted = await appendHistory(db, appSessionId, "tool.call", enriched, undefined, {
               audio: {
                 blobPath: relocated.relKey,
                 durationMs: relocated.durationMs,
                 peaks: relocated.peaks,
               },
             });
+            enriched["historyId"] = inserted.id;
+            const env = await appendEvent(db, {
+              appSessionId,
+              type: ev.type,
+              payload: enriched,
+            });
+            registry.emit(appSessionId, env);
 
             // Live Activity push (same as the default path below).
             if (liveActivityPusher) {
@@ -1123,13 +1141,36 @@ async function handleUpstreamEvent(
       }
     }
 
+    // Persist chat_history first so we can stamp `historyId` into the
+    // envelope payload — mobile uses it to reconcile live state against the
+    // chat_history row id and avoid double-rendering the turn after a
+    // session-messages refetch (see chat-store.ts message.complete /
+    // tool.complete reducers).
+    const persisted = await maybePersistHistory(
+      db,
+      appSessionId,
+      ev.type,
+      ev.payload,
+      log,
+    );
+    let envPayload = ev.payload ?? null;
+    if (
+      persisted &&
+      envPayload &&
+      typeof envPayload === "object" &&
+      !Array.isArray(envPayload)
+    ) {
+      envPayload = {
+        ...(envPayload as Record<string, unknown>),
+        historyId: persisted.historyId,
+      };
+    }
     const env = await appendEvent(db, {
       appSessionId,
       type: ev.type,
-      payload: ev.payload ?? null,
+      payload: envPayload,
     });
     registry.emit(appSessionId, env);
-    await maybePersistHistory(db, appSessionId, ev.type, ev.payload, log);
     // After the first assistant turn lands in chat_history, replace the
     // truncated-first-message title with a heuristic 4-6 word summary.
     if (ev.type === "message.complete") {
@@ -1284,13 +1325,15 @@ async function maybePersistHistory(
   upstreamType: string,
   payload: unknown,
   log: AppLogger,
-): Promise<void> {
+): Promise<{ historyId: number } | null> {
   const kind = HISTORY_KIND_BY_UPSTREAM.get(upstreamType);
-  if (!kind) return;
+  if (!kind) return null;
   try {
-    await appendHistory(db, appSessionId, kind, payload);
+    const inserted = await appendHistory(db, appSessionId, kind, payload);
+    return { historyId: inserted.id };
   } catch (err) {
     log.warn({ err, kind, upstreamType }, "failed to persist chat history row");
+    return null;
   }
 }
 

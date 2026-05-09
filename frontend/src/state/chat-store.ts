@@ -417,9 +417,16 @@ function reduce(state: ChatSessionState, env: GatewayEventEnvelope): ChatSession
         "tool";
       const errStr = getString(payload, "error");
       const existing = next.streaming?.toolCalls.get(id);
+      // Card id mirrors the chat_history row when historyId is on the
+      // payload — `hist-t-${id}` matches what historyRowToUiRow produces, so
+      // the dedup filter drops the history copy on next session-messages
+      // refetch. Falls back to the upstream tool_id for older gateways.
+      const historyIdRaw = payload && (payload["historyId"] as unknown);
+      const historyId = typeof historyIdRaw === "number" ? historyIdRaw : null;
+      const cardId = historyId !== null ? `hist-t-${historyId}` : id;
       const card: ToolCallCard = {
         kind: "tool",
-        id,
+        id: cardId,
         name: existing?.name ?? name,
         status: errStr ? "error" : "complete",
         detail: { ...(existing?.detail ?? {}), ...(payload ?? {}) },
@@ -477,9 +484,19 @@ function reduce(state: ChatSessionState, env: GatewayEventEnvelope): ChatSession
       const audioPeaks = Array.isArray(audioPeaksRaw)
         ? (audioPeaksRaw.filter((v): v is number => typeof v === "number") as number[])
         : undefined;
+      // Prefer the chat_history row id (`hist-a-${historyId}`) so this live
+      // message dedups against the eventual chat_history row when a
+      // session-messages refetch lands. Falls back to `assistant-${envId}`
+      // for older gateways that don't stamp historyId yet.
+      const historyIdRaw = payload && (payload["historyId"] as unknown);
+      const historyId = typeof historyIdRaw === "number" ? historyIdRaw : null;
+      const msgId =
+        historyId !== null
+          ? `hist-a-${historyId}`
+          : `assistant-${env.id > 0 ? env.id : genId("a")}`;
       const msg: AssistantMessage = {
         kind: "assistant",
-        id: `assistant-${env.id > 0 ? env.id : genId("a")}`,
+        id: msgId,
         text,
         reasoning: reasoning && reasoning.length > 0 ? reasoning : undefined,
         warning,
@@ -574,6 +591,32 @@ function reduce(state: ChatSessionState, env: GatewayEventEnvelope): ChatSession
     case "background.complete":
     case "subagent.tool":
       return next;
+    case "gateway.user.message": {
+      // Backend now stamps `historyId` (chat_history row id) onto this
+      // envelope's payload. Rewrite the matching live UserMessage's id from
+      // its random `genId("u")` to `hist-u-${historyId}`, which is exactly
+      // what historyRowToUiRow produces for the same row. Aligning the ids
+      // lets the dedup filter in chat/[id].tsx drop the history copy when
+      // a session-messages refetch lands during an active turn.
+      //
+      // We match on clientId — already on both the live UserMessage (set by
+      // pushUserMessage) and on this envelope's payload (set by the gateway
+      // when persisting the user turn).
+      const cid = getString(payload, "clientId");
+      const hidRaw = payload && (payload["historyId"] as unknown);
+      const hid = typeof hidRaw === "number" ? hidRaw : null;
+      if (!cid || hid === null) return next;
+      const targetId = `hist-u-${hid}`;
+      const idx = next.messages.findIndex(
+        (m) => m.kind === "user" && (m as UserMessage).clientId === cid,
+      );
+      if (idx === -1) return next;
+      const cur = next.messages[idx] as UserMessage;
+      if (cur.id === targetId) return next;
+      const renamed: UserMessage = { ...cur, id: targetId };
+      next.messages = next.messages.map((m, i) => (i === idx ? renamed : m));
+      return next;
+    }
     default:
       return next;
   }
