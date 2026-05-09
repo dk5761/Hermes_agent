@@ -349,6 +349,20 @@ eas update --channel production --message "<short summary> (<commit>)"
 Skipping this ships the developer's local LAN IP into production — see the
 2026-05-09 corrective entry below.
 
+### 2026-05-09 — verify hardened release pipeline (production)
+
+- **Source commit:** `2228abe`. No app code change vs the previous OTA — this run validates the new release infra.
+- **Update group:** `8ad23eab-a3b1-4836-82b7-a6532f7d4f83`.
+- **Channel:** `production`. Runtime: `0.1.0`. Native rebuild: none.
+- **What's different operationally:**
+  - EAS server-side env vars (`eas env:create --environment production`) hold the canonical prod URLs. Both `eas build --profile production` and `eas update --channel production` pull them automatically.
+  - `eas.json` build profiles now declare `"environment": "<name>"` explicitly so EAS resolves env vars by environment name (no implicit name-matching dance).
+  - Inline `env` blocks removed from `eas.json` — server-side is canonical. Inline blocks would have overridden server vars and re-introduced the divergence risk.
+  - `frontend/scripts/safe-eas-update.sh` wraps `eas update`, refuses to publish if the resolved `EXPO_PUBLIC_API_URL` / `EXPO_PUBLIC_WS_URL` (shell **or** `.env`) points at a LAN/private/loopback address. Bypass: `ALLOW_LOCAL_URL=1`.
+  - `pnpm update:prod -m "<msg>"` and `pnpm update:preview -m "<msg>"` route through the wrapper. Devs should never invoke raw `eas update` going forward.
+- **Procedure used for this ship:** stashed local `.env` (which holds dev LAN URL) → `pnpm update:prod -m "..."` → restored `.env`. EAS pulled the prod URLs from the server during expo export.
+- **Dashboard:** https://expo.dev/accounts/nanatsuxiv/projects/hermes-app/updates/8ad23eab-a3b1-4836-82b7-a6532f7d4f83
+
 ### 2026-05-09 — chat fixes: scroll jump + dup turn + single live todo panel (production)
 
 - **Source commit:** `4736577`. Covers `2d8de9a` (scroll), `b9be3e2` (historyId dedup), `4736577` (todo panel).
