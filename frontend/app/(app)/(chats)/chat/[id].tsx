@@ -473,6 +473,14 @@ export default function ChatScreen() {
   // per-frame re-render).
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
   const showJumpToLatestRef = useRef(false);
+  // Stick-to-bottom: tracks whether the user is sitting at (or very near) the
+  // bottom edge of the list. Updated by `handleScroll` on every scroll frame.
+  // We auto-scroll on new content only when this is true. Replaces FlashList's
+  // built-in `autoscrollToBottomThreshold`, which was firing on prepend
+  // (pagination) + stream events even when the user had scrolled up. Initial
+  // value is `true` because `startRenderingFromBottom` anchors at the bottom
+  // on first paint.
+  const isAtBottomRef = useRef(true);
 
   const sessionState = useChatStore((s) => (sessionId ? s.byId[sessionId] : undefined));
   const latestTodoToolId = useChatStore((s) =>
@@ -723,12 +731,19 @@ export default function ChatScreen() {
         showJumpToLatestRef.current = shouldShow;
         setShowJumpToLatest(shouldShow);
       }
+      // 80px is roughly two row heights — tight enough that "lifting a finger
+      // mid-scroll-up" reliably disables stick-to-bottom, loose enough to
+      // tolerate sub-pixel rounding when truly at the end.
+      isAtBottomRef.current = distanceFromBottom < 80;
     },
     [],
   );
 
   const onJumpToLatestPress = useCallback(() => {
     flatListRef.current?.scrollToEnd({ animated: true });
+    // Pressing the pill also re-arms stick-to-bottom: a stream event right
+    // after a manual jump should keep us anchored.
+    isAtBottomRef.current = true;
   }, []);
 
   // Cold-load: walk history backward, find the most recent tool.call with
@@ -894,6 +909,35 @@ export default function ChatScreen() {
     );
     return [...filteredHistory, ...live];
   }, [historyRows, sessionState]);
+
+  // Stick-to-bottom: replaces FlashList's built-in autoscrollToBottomThreshold,
+  // which was firing on every data change against a stale "near bottom" flag —
+  // snapping the user to the bottom mid-scroll-up and during pagination
+  // prepends. We auto-scroll only when:
+  //   (a) the user is at/near the bottom (tracked in `isAtBottomRef`), AND
+  //   (b) the change is "tail growth" — either a new tail row (matches a
+  //       fresh send / new turn / tool event) or an in-flight stream is
+  //       extending the existing tail row's text (`isStreaming` true).
+  // Pagination prepends grow length at the head only; both signals stay
+  // unchanged, so no auto-scroll fires.
+  const prevTailIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    const last = rows[rows.length - 1];
+    const tailId = last
+      ? last.rowKind === "msg"
+        ? `msg:${last.data.id}`
+        : last.rowKind === "approval"
+          ? `appr:${last.data.requestId}`
+          : `${last.rowKind}:${rows.length - 1}`
+      : null;
+    const prevTailId = prevTailIdRef.current;
+    prevTailIdRef.current = tailId;
+    if (!isAtBottomRef.current) return;
+    const tailChanged = !!tailId && tailId !== prevTailId;
+    const streaming = sessionState?.isStreaming ?? false;
+    if (!tailChanged && !streaming) return;
+    flatListRef.current?.scrollToEnd({ animated: !tailChanged });
+  }, [rows, sessionState?.isStreaming]);
 
   // Resolve the pinned card's payload — search live messages first (they hold
   // the latest todos array post-update), fall back to history rows. The
@@ -1984,18 +2028,19 @@ export default function ChatScreen() {
             keyExtractor={keyExtractor}
             renderItem={renderItem}
             getItemType={(item) => item.rowKind}
-            // Disable bottom-anchor when the chat was opened with a
-            // ?messageId deep-link: startRenderingFromBottom would override
-            // our scrollToIndex on initial paint, and autoscrollToBottomThreshold
-            // snaps back to bottom when content shifts within 20% of the end.
-            // The Phase 5 "Jump to latest" pill is the deliberate way to
-            // reach the bottom from a deep-link landing.
+            // Anchor at the bottom on initial paint, but DO NOT use the
+            // built-in `autoscrollToBottomThreshold` — it fires against a
+            // stale "near bottom" flag on every data change, snapping the
+            // user to the bottom mid-scroll-up and during pagination
+            // prepends. Stick-to-bottom for new content / streams is
+            // managed manually in the effect that watches `rows` +
+            // `sessionState.isStreaming` (see `isAtBottomRef`).
+            // Disable entirely when ?messageId deep-link is set; the Phase
+            // 5 "Jump to latest" pill is the deliberate way to reach the
+            // bottom from a deep-link landing.
             maintainVisibleContentPosition={
               targetMessageId == null
-                ? {
-                    startRenderingFromBottom: true,
-                    autoscrollToBottomThreshold: 0.2,
-                  }
+                ? { startRenderingFromBottom: true }
                 : undefined
             }
             onStartReached={handleStartReached}
