@@ -78,6 +78,7 @@ import { Directory, File, Paths } from "expo-file-system";
 import { VoiceMemoRecorder } from "./voice-memo-recorder";
 import { useChatStore } from "../state/chat-store";
 import { usePendingMemos } from "../state/pending-memos";
+import { usePendingAttachments } from "../state/pending-attachments";
 import { uploadPendingMemo } from "./voice-memo-uploader";
 import { LockHint } from "./LockHint";
 
@@ -449,11 +450,27 @@ export function MicButton({
       console.warn("[mic-button] could not copy audio to permanent path");
     }
 
+    // Snapshot the uploaded attachments queued in the composer at
+    // mic-release time. Filter to status === "uploaded" — pending /
+    // uploading / failed entries don't have a server-side AttachmentDTO
+    // yet so we can't pass their ids to the gateway. Kept on the memo so
+    // a kill+reopen retries with the same image set; the chat-store
+    // optimistic bubble also reads these to paint thumbnails. Cleared
+    // from the composer only on enqueue — cancelled recordings keep the
+    // queued images intact.
+    const pendingAttachments =
+      usePendingAttachments.getState().bySession[sessionId] ?? [];
+    const attachmentRefs = pendingAttachments
+      .filter((p) => p.status === "uploaded" && p.attachment !== null)
+      .map((p) => p.attachment!);
+    const hasAttachments = attachmentRefs.length > 0;
+
     const localId = usePendingMemos.getState().enqueue({
       sessionId,
       localAudioUri,
       durationMs: result.durationMs,
       peaks: result.peaks,
+      ...(hasAttachments ? { attachmentRefs } : {}),
     });
 
     useChatStore.getState().pushVoiceMemoMessage(sessionId, {
@@ -464,7 +481,12 @@ export function MicButton({
       transcriptionStatus: "transcribing",
       audioBlobUrl: undefined,
       localAudioUri,
+      ...(hasAttachments ? { attachmentRefs } : {}),
     });
+
+    if (hasAttachments) {
+      usePendingAttachments.getState().clearSession(sessionId);
+    }
 
     onRecordingEnd?.(true);
     void uploadPendingMemo(localId);

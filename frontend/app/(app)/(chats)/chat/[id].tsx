@@ -2176,7 +2176,11 @@ export default function ChatScreen() {
           </View>
         ) : null}
 
-        {!isRecording && sessionId ? <ComposerAttachments appSessionId={sessionId} /> : null}
+        {/* Keep attachment chips visible during recording — voice memos can
+            now bundle images/files (Phase 4 of voice + image plan), so the
+            user needs to see what's attached while they hold the mic. The
+            chips clear on enqueue (mic-release), not on cancel. */}
+        {sessionId ? <ComposerAttachments appSessionId={sessionId} /> : null}
         {!isRecording && sendHint ? (
           <View style={{ paddingHorizontal: 16, paddingTop: 4 }}>
             <Text kind="caption" color={tokens.ink3}>

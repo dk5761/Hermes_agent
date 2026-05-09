@@ -198,6 +198,12 @@ interface ChatStore {
       transcriptionStatus: "transcribing" | "completed" | "failed";
       audioBlobUrl: undefined;
       localAudioUri: string;
+      /**
+       * Image / file attachments queued in the composer when the user
+       * released the mic. Drives the thumbnail grid on the optimistic
+       * bubble; same shape Message.tsx UserRow renders for text + image.
+       */
+      attachmentRefs?: AttachmentDTO[];
     },
   ) => void;
   /**
@@ -732,6 +738,13 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           transcriptionStatus: msg.transcriptionStatus,
           audioPeaks: msg.audioPeaks,
           localAudioUri: msg.localAudioUri,
+          // Caller hands us full DTOs; UserMessage.attachments holds those
+          // directly (UserMessage.attachmentRefs is the id-only history
+          // shape). Keeping the DTOs in-memory means the bubble renders
+          // thumbnails without a network round-trip.
+          ...(msg.attachmentRefs && msg.attachmentRefs.length > 0
+            ? { attachments: msg.attachmentRefs }
+            : {}),
         };
         return {
           byId: {

@@ -224,7 +224,7 @@ function UserRow({
     // Extract the numeric row id from the stable chat-store id "hist-u-<n>".
     // For optimistic local-<uuid> rows, the full id is passed through.
     const rawId = message.id.startsWith("hist-u-") ? message.id.slice(7) : message.id;
-    return (
+    const audioBubble = (
       <AudioMessage
         messageId={rawId}
         sessionId={sessionId ?? ""}
@@ -236,6 +236,34 @@ function UserRow({
         transcriptionError={message.transcriptionError}
         audioPeaks={message.audioPeaks ?? null}
       />
+    );
+    const hasAttachments =
+      (message.attachments && message.attachments.length > 0) ||
+      (message.attachmentRefs && message.attachmentRefs.length > 0);
+    if (!hasAttachments) return audioBubble;
+    // Voice memo + image: show attachment thumbnails above the audio bubble.
+    // The thumbnails sit in their own bubble (matching the text+image
+    // layout) so the audio bubble keeps its native AudioMessage chrome.
+    return (
+      <View>
+        <View style={{ paddingHorizontal: 12, paddingTop: 4, alignItems: "flex-end" }}>
+          <View
+            style={{
+              maxWidth: "78%",
+              paddingHorizontal: 14,
+              paddingVertical: 10,
+              borderRadius: 18,
+              backgroundColor: tokens.ink,
+            }}
+          >
+            <UserAttachments
+              attachments={message.attachments}
+              attachmentRefs={message.attachmentRefs}
+            />
+          </View>
+        </View>
+        {audioBubble}
+      </View>
     );
   }
 
