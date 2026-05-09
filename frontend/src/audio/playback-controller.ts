@@ -181,21 +181,39 @@ async function resolveCachedUri(
   // route through the HTTP cache. Without this guard, the function below
   // builds `${API_URL}file:///…` and downloadFileAsync chokes on the
   // malformed URL, leaving the bubble stuck in "loading" state.
+  //
+  // Sniff the bytes here too — iOS sim's recorder produces CoreAudio
+  // Format files saved with a `.m4a` extension. If they don't match,
+  // copy the bytes into audio-cache under a corrected extension so
+  // expo-audio doesn't reject the source.
   if (blobUrl.startsWith("file://")) {
-    return blobUrl;
+    const localFile = new File(blobUrl);
+    if (!localFile.exists) return blobUrl;
+    const localExt = (() => {
+      const dot = blobUrl.lastIndexOf(".");
+      return dot >= 0 ? blobUrl.slice(dot).toLowerCase() : ".m4a";
+    })();
+    const corrected = await sniffAndRenameIfMismatched(localFile, localExt);
+    return corrected;
   }
 
   const ext = extFromBlobUrl(blobUrl);
   const cached = cacheFileFor(messageId, ext);
   const filename = `${messageId}${ext}`;
 
+  // Re-resolve the cached file's actual extension before returning. iOS
+  // expo-audio refuses to play a file whose extension contradicts the
+  // bytes ("ftyp"-prefixed M4A served as .caf, or "caff"-prefixed CAF
+  // served as .m4a, fail silently with no status events). The iOS sim's
+  // recorder degrades AAC → CoreAudio Format on simulator builds, so a
+  // memo recorded on the sim and uploaded as `.m4a` is actually CAF
+  // bytes. Sniff the bytes once and rename to a matching extension.
   if (cached.exists) {
-    // Guard against empty / corrupt cache entries.
     const sz = cached.size ?? 0;
     if (sz > 0) {
-      // Record access for LRU.
+      const correct = await sniffAndRenameIfMismatched(cached, ext);
       lastAccessAt.set(filename, Date.now());
-      return cached.uri;
+      return correct;
     }
     cached.delete();
   }
@@ -236,7 +254,87 @@ async function resolveCachedUri(
   lastAccessAt.set(filename, Date.now());
   void evictCacheIfNeeded();
 
-  return cached.uri;
+  // Sniff post-download too (server may have stored the file with a
+  // mismatched extension; see the comment above for the iOS sim case).
+  return sniffAndRenameIfMismatched(cached, ext);
+}
+
+/**
+ * Detect the actual container format of `cached` from its first bytes
+ * and, if the on-disk extension doesn't match, copy the file under a
+ * corrected name and return the corrected URI. The original is left in
+ * place for LRU cleanup to reap.
+ *
+ * Recognised formats:
+ *   - "caff"  (offset 0)        → CoreAudio Format → `.caf`
+ *   - "ftyp"  (offset 4)        → MP4/M4A          → `.m4a`
+ *   - "ID3"   (offset 0)        → MP3 (with tag)   → `.mp3`
+ *   - 0xFFFB/0xFFFA (offset 0)  → MP3 (no tag)     → `.mp3`
+ *   - "RIFF"  (offset 0)        → WAV              → `.wav`
+ *   - "OggS"  (offset 0)        → Ogg              → `.ogg`
+ * Anything else falls back to the original extension.
+ */
+async function sniffAndRenameIfMismatched(
+  cached: File,
+  declaredExt: string,
+): Promise<string> {
+  let bytes: Uint8Array;
+  try {
+    bytes = await cached.bytes();
+  } catch {
+    return cached.uri;
+  }
+  const detected = detectAudioExt(bytes);
+  if (!detected || detected === declaredExt) {
+    return cached.uri;
+  }
+  // Build a sibling path with the correct extension. Derive the basename
+  // from the URI (File.name isn't exposed in this expo-file-system API).
+  const uri = cached.uri;
+  const slash = uri.lastIndexOf("/");
+  const filename = slash >= 0 ? uri.slice(slash + 1) : uri;
+  const dot = filename.lastIndexOf(".");
+  const baseName = dot >= 0 ? filename.slice(0, dot) : filename;
+  const corrected = new File(audioCacheDir(), `${baseName}${detected}`);
+  if (!corrected.exists) {
+    try {
+      cached.copy(corrected);
+    } catch (copyErr) {
+      console.warn("[playback] sniff: copy failed", { detected, declaredExt, copyErr });
+      return cached.uri;
+    }
+  }
+  console.log("[playback] sniff renamed", { declaredExt, detected, uri: corrected.uri });
+  return corrected.uri;
+}
+
+function detectAudioExt(bytes: Uint8Array): string | null {
+  if (bytes.byteLength < 12) return null;
+  // CAF: "caff" at offset 0.
+  if (bytes[0] === 0x63 && bytes[1] === 0x61 && bytes[2] === 0x66 && bytes[3] === 0x66) {
+    return ".caf";
+  }
+  // M4A/MP4: "ftyp" at offset 4.
+  if (bytes[4] === 0x66 && bytes[5] === 0x74 && bytes[6] === 0x79 && bytes[7] === 0x70) {
+    return ".m4a";
+  }
+  // MP3 with ID3 tag: "ID3" at offset 0.
+  if (bytes[0] === 0x49 && bytes[1] === 0x44 && bytes[2] === 0x33) {
+    return ".mp3";
+  }
+  // MP3 without tag: 0xFFFB / 0xFFFA / 0xFFF3 / 0xFFF2 sync word at offset 0.
+  if (bytes[0] === 0xff && bytes[1] !== undefined && (bytes[1] & 0xf6) === 0xf2) {
+    return ".mp3";
+  }
+  // WAV: "RIFF" at offset 0.
+  if (bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46) {
+    return ".wav";
+  }
+  // Ogg: "OggS" at offset 0.
+  if (bytes[0] === 0x4f && bytes[1] === 0x67 && bytes[2] === 0x67 && bytes[3] === 0x53) {
+    return ".ogg";
+  }
+  return null;
 }
 
 /**
@@ -408,9 +506,11 @@ async function play(
 
     // 2. Resolve a local cached URI (downloads if needed).
     const localUri = await resolveCachedUri(messageId, blobUrl);
+    console.log("[playback] resolved", { messageId, blobUrl, localUri });
 
     // Guard: a different message may have been tapped while we were fetching.
     if (usePlaybackStore.getState().activeMessageId !== messageId) {
+      console.log("[playback] another message took over, aborting");
       return;
     }
 
@@ -420,10 +520,29 @@ async function play(
       { updateInterval: 200 },
     );
     activePlayer = player;
+    // Some expo-audio versions default `volume` to 0 on the simulator
+    // when the prior audio session was a recorder. Force to 1 so audible
+    // output is guaranteed once play() runs.
+    try {
+      player.volume = 1;
+      // expo-audio iOS sometimes routes through earpiece when the audio
+      // session was just used for recording; muted state reflects that.
+      // Explicit unmute is cheap insurance.
+      player.muted = false;
+    } catch (volErr) {
+      console.warn("[playback] volume/muted set failed", volErr);
+    }
+    console.log("[playback] player created", { uri: localUri, volume: player.volume });
 
     // 4. Subscribe to status updates.
     const sub = player.addListener("playbackStatusUpdate", (status) => {
       if (activePlayer !== player) return;
+      console.log("[playback] status", {
+        playing: status.playing,
+        currentTime: status.currentTime,
+        duration: status.duration,
+        didJustFinish: status.didJustFinish,
+      });
 
       if (status.didJustFinish) {
         teardownPlayer();
@@ -449,8 +568,10 @@ async function play(
 
     // 5. Start playback.
     player.play();
+    console.log("[playback] play() called");
     patchStore({ status: "playing" });
   } catch (err) {
+    console.warn("[playback] error", err);
     teardownPlayer();
     const msg = err instanceof Error ? err.message : "Playback failed";
     patchStore({
