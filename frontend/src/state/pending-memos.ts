@@ -27,6 +27,7 @@
 import { create } from "zustand";
 import { getDb } from "../db/sqlite";
 import { TABLES } from "../db/schema";
+import type { AttachmentDTO } from "../api/types";
 
 /**
  * Local UUID-ish — Hermes engine has no `crypto` global, so we generate a
@@ -52,6 +53,13 @@ export interface PendingMemo {
   durationMs: number;
   /** 80 normalized waveform values (0..1) captured live at record time. */
   peaks: number[];
+  /**
+   * Image / file attachments queued in the composer when the user released
+   * the mic. Snapshotted at enqueue time so a kill+reopen retries with the
+   * same set; the chat-store's optimistic bubble also reads from these to
+   * paint thumbnails before the upload returns.
+   */
+  attachmentRefs?: AttachmentDTO[];
   enqueuedAt: number;
   /** Number of attempted uploads (0 = not yet tried). Capped at MAX_RETRIES. */
   retries: number;
@@ -73,6 +81,8 @@ export interface PendingMemosState {
     localAudioUri: string;
     durationMs: number;
     peaks: number[];
+    /** Optional — image / file attachments queued in the composer. */
+    attachmentRefs?: AttachmentDTO[];
   }): string;
   markFailed(id: string, error: string): void;
   markUploading(id: string): void;
@@ -103,8 +113,8 @@ async function flush(memo: PendingMemo): Promise<void> {
   await db.runAsync(
     `INSERT INTO ${TABLES.pendingMemos}
        (id, session_id, local_audio_uri, duration_ms, peaks,
-        enqueued_at, retries, status, last_error)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        attachment_refs, enqueued_at, retries, status, last_error)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET
        retries    = excluded.retries,
        status     = excluded.status,
@@ -114,6 +124,9 @@ async function flush(memo: PendingMemo): Promise<void> {
     memo.localAudioUri,
     memo.durationMs,
     JSON.stringify(memo.peaks),
+    memo.attachmentRefs && memo.attachmentRefs.length > 0
+      ? JSON.stringify(memo.attachmentRefs)
+      : null,
     memo.enqueuedAt,
     memo.retries,
     memo.status,
@@ -138,6 +151,7 @@ export const usePendingMemos = create<PendingMemosState>((set, get) => ({
       local_audio_uri: string;
       duration_ms: number;
       peaks: string;
+      attachment_refs: string | null;
       enqueued_at: number;
       retries: number;
       status: string;
@@ -145,7 +159,7 @@ export const usePendingMemos = create<PendingMemosState>((set, get) => ({
     };
     const rows = await db.getAllAsync<Row>(
       `SELECT id, session_id, local_audio_uri, duration_ms, peaks,
-              enqueued_at, retries, status, last_error
+              attachment_refs, enqueued_at, retries, status, last_error
          FROM ${TABLES.pendingMemos}
         ORDER BY enqueued_at ASC`,
     );
@@ -158,6 +172,18 @@ export const usePendingMemos = create<PendingMemosState>((set, get) => ({
         continue; // skip malformed rows
       }
       if (!Array.isArray(peaks)) continue;
+      let attachmentRefs: AttachmentDTO[] | undefined;
+      if (row.attachment_refs) {
+        try {
+          const parsed = JSON.parse(row.attachment_refs);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            attachmentRefs = parsed as AttachmentDTO[];
+          }
+        } catch {
+          // Malformed JSON — drop the attachments column for this row but
+          // keep the memo so the audio still uploads.
+        }
+      }
       const status: MemoStatus = row.status === "failed" ? "failed" : "uploading";
       const memo: PendingMemo = {
         id: row.id,
@@ -168,6 +194,7 @@ export const usePendingMemos = create<PendingMemosState>((set, get) => ({
         enqueuedAt: row.enqueued_at,
         retries: row.retries,
         status,
+        ...(attachmentRefs ? { attachmentRefs } : {}),
         ...(row.last_error != null ? { lastError: row.last_error } : {}),
       };
       byId[memo.id] = memo;
@@ -175,7 +202,7 @@ export const usePendingMemos = create<PendingMemosState>((set, get) => ({
     set({ byId, hydrated: true });
   },
 
-  enqueue({ sessionId, localAudioUri, durationMs, peaks }) {
+  enqueue({ sessionId, localAudioUri, durationMs, peaks, attachmentRefs }) {
     const id = `local-${uuid()}`;
     const memo: PendingMemo = {
       id,
@@ -186,6 +213,7 @@ export const usePendingMemos = create<PendingMemosState>((set, get) => ({
       enqueuedAt: Date.now(),
       retries: 0,
       status: "uploading",
+      ...(attachmentRefs && attachmentRefs.length > 0 ? { attachmentRefs } : {}),
     };
     set((s) => ({ byId: { ...s.byId, [id]: memo } }));
     flush(memo).catch(console.warn);

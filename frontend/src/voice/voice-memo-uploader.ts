@@ -74,6 +74,7 @@ export async function uploadPendingMemo(memoId: string): Promise<void> {
       memo.localAudioUri,
       memo.durationMs,
       memo.peaks,
+      memo.attachmentRefs?.map((a) => a.id),
     );
   } catch (err) {
     // Determine if this is worth retrying.

@@ -72,6 +72,17 @@ CREATE TABLE pending_memos (
 CREATE INDEX pending_memos_session ON pending_memos(session_id, enqueued_at);
     `.trim(),
   },
+  {
+    // Voice memo + image attachments. attachment_refs holds a JSON-encoded
+    // AttachmentDTO[] (id + name + mime + size + thumb fields) snapshotted
+    // at record-time so the bubble can render thumbnails without a fresh
+    // attachment fetch, AND the upload can survive kill+reopen with the
+    // image set intact.
+    version: 3,
+    sql: `
+ALTER TABLE pending_memos ADD COLUMN attachment_refs TEXT;
+    `.trim(),
+  },
 ];
 
 /**

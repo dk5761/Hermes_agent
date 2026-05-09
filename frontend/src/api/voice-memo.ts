@@ -54,6 +54,13 @@ export interface VoiceMemoMessage {
   createdAt: number;
   /** Waveform data: 80 normalized floats (0..1). Null for old memos or failed extraction. */
   audioPeaks?: number[] | null;
+  /**
+   * Image / file attachment ids the user queued before recording. Echoed
+   * back in the response so the client can render thumbnails on the
+   * optimistic bubble immediately. Optional — voice-only memos don't
+   * include this field.
+   */
+  attachmentIds?: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -91,7 +98,12 @@ async function parseErrorMessage(res: Response): Promise<string> {
   }
 }
 
-function buildVoiceForm(fileUri: string, durationMs: number, peaks?: number[]): FormData {
+function buildVoiceForm(
+  fileUri: string,
+  durationMs: number,
+  peaks?: number[],
+  attachmentIds?: readonly string[],
+): FormData {
   const fd = new FormData();
   // React Native's FormData accepts {uri,name,type} for streaming file reads.
   // The standard TS typings omit this RN-specific overload, hence the cast.
@@ -104,6 +116,13 @@ function buildVoiceForm(fileUri: string, durationMs: number, peaks?: number[]): 
   // Server prefers client peaks over ffmpeg extraction when valid (Phase 3).
   if (peaks && peaks.length > 0) {
     fd.append("audioPeaks", JSON.stringify(peaks));
+  }
+  // Image / file attachments queued via the composer attachment store. The
+  // backend (routes/voice-memo.ts) parses this as a JSON-stringified
+  // string[], persists onto the chat_history row payload, and runs
+  // image.attach for each before forwarding the transcript.
+  if (attachmentIds && attachmentIds.length > 0) {
+    fd.append("attachmentIds", JSON.stringify([...attachmentIds]));
   }
   return fd;
 }
@@ -149,6 +168,7 @@ export async function postVoiceMemo(
   fileUri: string,
   durationMs: number,
   peaks?: number[],
+  attachmentIds?: readonly string[],
 ): Promise<VoiceMemoMessage> {
   const url = `${API_URL}/sessions/${encodeURIComponent(sessionId)}/messages/voice`;
   const controller = new AbortController();
@@ -156,7 +176,7 @@ export async function postVoiceMemo(
 
   try {
     let token = getAuthSnapshot().accessToken;
-    let form = buildVoiceForm(fileUri, durationMs, peaks);
+    let form = buildVoiceForm(fileUri, durationMs, peaks, attachmentIds);
     let res = await postOnce(url, form, token, controller.signal);
 
     if (res.status === 401) {
@@ -166,7 +186,7 @@ export async function postVoiceMemo(
         throw new VoiceMemoError(401, "Session expired");
       }
       // Rebuild form — some platforms can't re-read a consumed FormData.
-      form = buildVoiceForm(fileUri, durationMs, peaks);
+      form = buildVoiceForm(fileUri, durationMs, peaks, attachmentIds);
       res = await postOnce(url, form, refreshed, controller.signal);
     }
 
