@@ -116,6 +116,23 @@ Snapshots of the Hermes side (not gateway DB) are taken via
 
 ## Deploy log
 
+### 2026-05-09 — chat: historyId on envelopes for live↔history dedup
+
+- **Source:** `4736577` (latest `main`, includes b9be3e2 backend change).
+- **Previous:** `dc7afe3` (hermes v0.12.0 → v0.13.0 + patches, same day).
+- **Migrations applied:** none.
+- **Restarted:** `hermes-gateway` only.
+- **Backend changes (`backend/src/ws/gateway-ws.ts`):**
+  - `gateway.user.message`: reordered to call `appendHistory` first, capture the `chat_history.id`, then stamp it on the envelope payload as `historyId` before `appendEvent`.
+  - `message.complete`: same reorder. Both the TTS-bridge variant and the default path through `maybePersistHistory` now stamp `historyId`.
+  - `tool.complete`: same reorder. TTS-bridge variant + default path both stamp `historyId` for the persisted `tool.call` row.
+  - `maybePersistHistory` signature changed: now returns `{ historyId } | null` so the default emit path can inject the id.
+- **Why:** mobile chat-store reducers now key live message ids off `historyId` (`hist-u-${historyId}` / `hist-a-${historyId}` / `hist-t-${historyId}`) to match what `historyRowToUiRow` produces for the same row. Without aligned ids, the dedup filter in `chat/[id].tsx` couldn't drop history copies after a session-messages refetch, and the entire turn rendered twice. Closing/reopening the app "fixed" the duplication because cold start wipes the in-memory chat-store.
+- **Frontend (mobile, OTA, NOT in this VPS deploy):** chat-store gains a `gateway.user.message` reducer case (rename live UserMessage by clientId) plus updated `message.complete` / `tool.complete` reducers that prefer the history-id-derived id when present. Older clients that don't read `historyId` still work — they just see live ids unchanged.
+- **Compatibility:** older clients (no `historyId` reader) ignore the extra payload field. No breaking change.
+- **Verified:** `curl /health` → 200 + `/cron/outputs/by-job` → 401 + `/ws` → 404 (route is upgrade-only). Gateway uptime ticks from 0 post-restart.
+- **Branch state on VPS after deploy:** `main` tracking `origin/main` at `4736577`.
+
 ### 2026-05-09 — hermes-agent system bump v0.12.0 → v0.13.0 + patches re-applied
 
 - **System hermes:** `v0.12.0 (2026.4.30)` → `v0.13.0 (2026.5.7)` via `hermes update`. 643 commits applied. `hermes-agent` Python package version `0.11.0 → 0.13.0` upstream; `croniter` is now a core dep.
@@ -331,6 +348,18 @@ eas update --channel production --message "<short summary> (<commit>)"
 
 Skipping this ships the developer's local LAN IP into production — see the
 2026-05-09 corrective entry below.
+
+### 2026-05-09 — chat fixes: scroll jump + dup turn + single live todo panel (production)
+
+- **Source commit:** `4736577`. Covers `2d8de9a` (scroll), `b9be3e2` (historyId dedup), `4736577` (todo panel).
+- **Update group:** `1a5af219-5f15-4480-bbd7-3c513e21b4f2`.
+- **Channel:** `production`. Runtime: `0.1.0`. Native rebuild: none.
+- **What ships:**
+  - **Scroll-up no longer jumps to bottom.** Replaced FlashList's `autoscrollToBottomThreshold: 0.2` with a manual stick-to-bottom effect. The library variant fired against a stale "near bottom" flag on every data change, so pagination prepends + WS stream events were snapping the user back. The new effect tracks `isAtBottomRef` from `handleScroll` and only scrolls when (at-bottom) AND (tail row changed OR active stream).
+  - **Message trains no longer duplicate after a refetch.** Live message ids now match history row ids (`hist-u-${historyId}` / `hist-a-${historyId}` / `hist-t-${historyId}`). Backend stamps `historyId` on each envelope; frontend reads it. Existing dedup at chat/[id].tsx now matches all three kinds, so a session-messages refetch during an active turn no longer renders a second copy.
+  - **Single live todo panel** above the composer — replaces inline TodoPlanCard rows. Each agent step that updates the todo tool no longer piles up as a new card; the panel auto-resolves the latest in-flight (or completed) todo and updates in place. Inline todo rows are filtered out of the chat list.
+- **Backend pre-req:** the historyId stamping requires gateway commit `4736577` deployed on VPS (see VPS deploy log entry above). Older gateways → frontend gracefully falls back to the prior id scheme; dedup just doesn't fire (matches pre-fix behavior, no regression).
+- **Dashboard:** https://expo.dev/accounts/nanatsuxiv/projects/hermes-app/updates/1a5af219-5f15-4480-bbd7-3c513e21b4f2
 
 ### 2026-05-09 — fix: prod API URL revert (production)
 
