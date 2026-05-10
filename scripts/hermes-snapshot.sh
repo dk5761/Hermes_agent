@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
-# hermes-snapshot.sh — encrypted daily backup of Hermes state +
-# gateway secrets + obsidian auth, pushed to the private hermes-snapshots
-# GitHub repo. Restored via scripts/restore-from-snapshot.sh.
+# hermes-snapshot.sh — encrypted snapshot of Hermes state + gateway secrets
+# + obsidian auth, pushed to a Cloudflare R2 bucket via rclone.
+#
+# Counterpart to scripts/restore-from-snapshot.sh. One-time setup is in
+# scripts/setup-r2-backup.sh (configures the rclone remote + writes
+# /root/.r2-bucket).
 #
 # This is the canonical version. The live copy at /root/hermes-snapshot.sh
 # may be out of date — re-deploy with:
@@ -24,18 +27,37 @@
 
 set -euo pipefail
 
-REPO=/root/hermes-snapshots
-PASSFILE=/root/.hermes-snapshot.pass
-KEEP_DAYS=14
+LOCAL_DIR="${LOCAL_DIR:-/root/hermes-snapshots}"
+PASSFILE="${PASSFILE:-/root/.hermes-snapshot.pass}"
+RCLONE_REMOTE="${RCLONE_REMOTE:-hermesr2}"
+KEEP_DAYS="${KEEP_DAYS:-14}"
 
-cd "$REPO"
-git pull --rebase --quiet || true
+# Bucket name written by setup-r2-backup.sh.
+if [[ ! -f /root/.r2-bucket ]]; then
+  echo "✗ /root/.r2-bucket not found — run scripts/setup-r2-backup.sh first" >&2
+  exit 2
+fi
+BUCKET="$(cat /root/.r2-bucket)"
+if [[ -z "${BUCKET}" ]]; then
+  echo "✗ /root/.r2-bucket is empty" >&2
+  exit 2
+fi
+
+if [[ ! -f "${PASSFILE}" ]]; then
+  echo "✗ ${PASSFILE} not found — set the GPG passphrase first:" >&2
+  echo "    echo 'YOUR-PASSPHRASE' > ${PASSFILE} && chmod 600 ${PASSFILE}" >&2
+  exit 2
+fi
+
+mkdir -p "${LOCAL_DIR}"
+cd "${LOCAL_DIR}"
 
 DATE=$(date -u +%Y-%m-%dT%H-%M-%SZ)
-SNAP="snapshot-$DATE.tar.gz.gpg"
+SNAP="snapshot-${DATE}.tar.gz.gpg"
 
-# --ignore-failed-read so a missing path (e.g. backend/.env on a partial install)
-# doesn't kill the snapshot. The restore script verifies key files exist.
+# Build encrypted tarball. --ignore-failed-read so a missing path
+# (e.g. backend/.env on a partial install) doesn't kill the snapshot;
+# the restore script verifies key files exist before extracting.
 tar czf - \
   --ignore-failed-read \
   --exclude='audio_cache' \
@@ -48,19 +70,28 @@ tar czf - \
     root/repos/Hermes_agent/backend/.env \
     root/repos/Hermes_agent/backend/data \
 | gpg --batch --yes --symmetric --cipher-algo AES256 \
-      --passphrase-file "$PASSFILE" \
-      -o "$SNAP"
+      --passphrase-file "${PASSFILE}" \
+      -o "${SNAP}"
 
-find . -maxdepth 1 -name 'snapshot-*.tar.gz.gpg' -mtime +$KEEP_DAYS -delete
+SIZE_HUMAN="$(du -h "${SNAP}" | cut -f1)"
+echo "[$(date -u +%FT%TZ)] built ${SNAP} (${SIZE_HUMAN})"
 
-git add -A
-if ! git diff --cached --quiet; then
-  git commit -m "snapshot $DATE ($(du -h "$SNAP" | cut -f1))"
-  git push --quiet
-fi
+# Local retention — drop snapshots older than KEEP_DAYS so the VPS disk
+# doesn't keep growing. We still ship every snapshot to R2.
+find . -maxdepth 1 -name 'snapshot-*.tar.gz.gpg' -mtime +"${KEEP_DAYS}" -delete
 
-# Weekly maintenance — gc + force-push to keep repo size sane.
-if [ "$(date -u +%u)" = "7" ]; then
-  git gc --prune=now --aggressive --quiet
-  git push --force-with-lease --quiet || true
-fi
+# Push to R2. `rclone copy` is idempotent — same source twice is a no-op.
+rclone copy "${SNAP}" "${RCLONE_REMOTE}:${BUCKET}/" \
+  --quiet \
+  --s3-no-check-bucket
+echo "[$(date -u +%FT%TZ)] pushed to ${RCLONE_REMOTE}:${BUCKET}/${SNAP}"
+
+# R2-side retention — purge snapshots older than KEEP_DAYS in the bucket.
+# Matches the local retention so the bucket footprint stays bounded.
+# Free tier is 10 GB; ~350 MB/snapshot × 14 days = ~4.9 GB, well under.
+rclone delete "${RCLONE_REMOTE}:${BUCKET}/" \
+  --include 'snapshot-*.tar.gz.gpg' \
+  --min-age "${KEEP_DAYS}d" \
+  --quiet \
+  --s3-no-check-bucket || true
+echo "[$(date -u +%FT%TZ)] purged R2 snapshots older than ${KEEP_DAYS}d"

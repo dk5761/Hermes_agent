@@ -98,8 +98,110 @@ migration, the gateway runs a one-time backfill of the FTS5 `search_text`
 column over `chat_history` (logged as
 `search index backfilled: N rows in Xms`). Subsequent boots: no-op.
 
-Snapshots of the Hermes side (not gateway DB) are taken via
-`scripts/hermes-snapshot.sh`.
+## Backups (Cloudflare R2)
+
+Daily encrypted snapshots of the VPS state pushed to a Cloudflare R2 bucket
+via rclone. R2 free tier (10 GB storage, zero egress) handles 14 days of
+~350 MB snapshots comfortably.
+
+**What's in a snapshot** (encrypted with AES256, passphrase in `/root/.hermes-snapshot.pass`):
+
+| Path | Contents |
+|---|---|
+| `/root/.hermes/` | memories, cron jobs, sessions, skills, auth.json, config.yaml |
+| `/root/.config/obsidian-headless/` | ob login token (skips MFA on restore) |
+| `/root/repos/Hermes_agent/backend/.env` | gateway secrets (JWT, APNS, BOOTSTRAP, EXPO) |
+| `/root/repos/Hermes_agent/backend/data/` | gateway DB + uploaded blobs |
+
+**What's NOT backed up** (intentional, refills on rebuild):
+- `/opt/obsidian-vault/` — refills from Obsidian Sync after `ob sync`
+- `/etc/letsencrypt/` — certbot re-issues
+- `/etc/nginx/`, `/etc/systemd/system/hermes-*.service` — re-rendered by `install-vps.sh`
+
+### One-time setup (per VM)
+
+1. **Cloudflare dashboard** → R2 → create bucket (any region, "Auto" recommended).
+   Recommended name: `hermes-snapshots-<your-handle>` (R2 buckets are per-account, not global).
+2. **R2 → Manage R2 API Tokens** → create a token scoped to that bucket:
+   - Permission: **Object Read & Write**
+   - Specify bucket: your bucket
+   - TTL: never (or rotate by re-running setup)
+3. Copy: Access Key ID + Secret Access Key (from the success screen) + Account ID (R2 overview).
+4. On the VPS:
+   ```bash
+   sudo bash /root/repos/Hermes_agent/scripts/setup-r2-backup.sh
+   # (prompts for the four values; or pre-set them in env)
+   ```
+   The script installs rclone (if missing), writes `/root/.config/rclone/rclone.conf`, stores the bucket name in `/root/.r2-bucket`, and verifies access with a list call.
+5. Set the GPG passphrase used to encrypt snapshots:
+   ```bash
+   echo 'YOUR-PASSPHRASE' > /root/.hermes-snapshot.pass
+   chmod 600 /root/.hermes-snapshot.pass
+   ```
+   (Same passphrase across the lifetime of this VPS — losing it makes existing snapshots unreadable.)
+6. Wire daily cron:
+   ```bash
+   sudo cp /root/repos/Hermes_agent/scripts/hermes-snapshot.sh /root/hermes-snapshot.sh
+   sudo chmod +x /root/hermes-snapshot.sh
+   # crontab -e (root):
+   #   0 4 * * * /root/hermes-snapshot.sh >> /var/log/hermes-snapshot.log 2>&1
+   ```
+
+### Manual snapshot
+
+```bash
+sudo /root/hermes-snapshot.sh
+```
+
+### Restore — disaster recovery on a fresh VM
+
+1. Provision a new VM (Ubuntu 24+).
+2. `git clone https://github.com/dk5761/Hermes_agent.git /root/repos/Hermes_agent`
+3. **Setup R2 access** (same credentials as the original):
+   ```bash
+   sudo bash /root/repos/Hermes_agent/scripts/setup-r2-backup.sh
+   ```
+4. **Restore the GPG passphrase**:
+   ```bash
+   echo 'THE-SAME-PASSPHRASE' > /root/.hermes-snapshot.pass
+   chmod 600 /root/.hermes-snapshot.pass
+   ```
+5. **Bootstrap the system** (installs Hermes, gateway, services):
+   ```bash
+   sudo bash /root/repos/Hermes_agent/scripts/install-vps.sh
+   ```
+6. **Restore from latest snapshot**:
+   ```bash
+   sudo bash /root/repos/Hermes_agent/scripts/restore-from-snapshot.sh
+   # or --list to see available snapshots
+   # or --snapshot=snapshot-2026-05-09T04-00-00Z.tar.gz.gpg for a specific one
+   ```
+7. **Restart services** so they pick up the restored state:
+   ```bash
+   systemctl restart hermes-dashboard hermes-gateway hermes-cron
+   ```
+8. **Bring the Obsidian vault back from cloud** (skips `ob login` if the token was restored):
+   ```bash
+   sudo bash /root/repos/Hermes_agent/scripts/install-obsidian-sync.sh
+   ```
+9. **Re-issue TLS** (one-shot, then auto-renews):
+   ```bash
+   certbot --nginx -d <your-domain>
+   ```
+10. Verify:
+    ```bash
+    curl -s http://127.0.0.1:8080/health
+    curl -s https://<your-domain>/health
+    hermes --version
+    ```
+
+### Rotating R2 credentials
+
+Re-run `setup-r2-backup.sh` with new env values; it overwrites the existing remote in `rclone.conf`.
+
+### Why R2 (not GitHub) for snapshots
+
+Initially we pushed snapshots to a private GitHub repo. GitHub blocks files >100 MB at the pre-receive hook — a 354 MB encrypted snapshot bounces. R2 has no per-object size cap (under the 10 GB account total) and zero egress, so restores from anywhere are free.
 
 ## Common pitfalls
 
