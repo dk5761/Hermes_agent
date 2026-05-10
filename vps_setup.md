@@ -218,6 +218,24 @@ Initially we pushed snapshots to a private GitHub repo. GitHub blocks files >100
 
 ## Deploy log
 
+### 2026-05-10 — backup transport: GitHub repo → Cloudflare R2
+
+- **Source:** `8c0c3b0` (`feat/r2-backups`).
+- **Migrations applied:** none.
+- **Restarted:** none (script-only change).
+- **Why:** the previous snapshot script pushed encrypted tarballs to a private GitHub repo (`dk5761/hermes-snapshots`). GitHub's pre-receive hook blocks files >100 MB, and snapshots had grown past 350 MB — pushes silently failed for days. Replaced the GitHub leg with rclone → Cloudflare R2 (free tier 10 GB, zero egress).
+- **Setup on VPS:**
+  - `bash scripts/setup-r2-backup.sh` with the Cloudflare credentials supplied → installed rclone v1.74.1, wrote `/root/.config/rclone/rclone.conf` with the `hermesr2` remote, stored bucket name in `/root/.r2-bucket`.
+  - Reused existing `/root/.hermes-snapshot.pass` (same GPG passphrase as before — backwards-compat with any prior snapshots that were successfully pushed).
+  - `cp scripts/hermes-snapshot.sh /root/hermes-snapshot.sh` to deploy the new script. Existing daily cron entry (`0 4 * * * /root/hermes-snapshot.sh ...`) was untouched.
+- **First snapshot:**
+  - Built `snapshot-2026-05-10T06-36-33Z.tar.gz.gpg` (367 MB).
+  - Pushed to `hermesr2:hermes-snapshots-drshnk/` in ~17 s.
+  - R2-side retention purge ran (no-op on fresh bucket).
+- **Round-trip verified:** `rclone ls hermesr2:hermes-snapshots-drshnk` shows the tarball; `restore-from-snapshot.sh --list` displays it.
+- **Bucket:** `hermes-snapshots-drshnk` (account `307c30d0…`).
+- **Branch state on VPS after deploy:** `feat/r2-backups` checked out at `8c0c3b0`. Pulled to `main` shortly after via `git pull` once merged.
+
 ### 2026-05-10 — voice-memo + image attachments
 
 - **Source:** `84d7aa9` (latest `main`).
